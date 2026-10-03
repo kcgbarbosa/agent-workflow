@@ -1,0 +1,6 @@
+{
+  "name": "calm",
+  "version": "0.1.0",
+  "description": "Calm mode: hides built-in tool rows and replaces the spinner with a conductor-themed animation.",
+  "types": "./types/index.d.ts"
+}
