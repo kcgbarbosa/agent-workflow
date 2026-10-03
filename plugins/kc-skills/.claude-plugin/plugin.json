@@ -1,0 +1,9 @@
+{
+  "name": "kc-skills",
+  "description": "KC's agent skills: planning, grilling, specs, tickets, implementation, review, and writing",
+  "author": {
+    "name": "KC Giraldo-Barbosa",
+    "url": "https://github.com/kcgbarbosa"
+  },
+  "repository": "https://github.com/kcgbarbosa/agent-workflow"
+}
