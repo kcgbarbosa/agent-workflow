@@ -1,31 +1,24 @@
 # agent-workflow
 
-KC's Claude Code skills and global `CLAUDE.md`. This repo is the only copy.
-`~/.claude` on each computer, and in each cloud session, links into a clone of it.
+Skills and global `CLAUDE.md`. `~/.claude` links into a clone of this repo.
 
 ```
-skills/<name>/           one folder for each skill (SKILL.md) or mod (.claude-plugin/plugin.json)
-CLAUDE.md                the global instructions, linked to ~/.claude/CLAUDE.md
-install.sh               makes the links. Safe to run again
-licenses/                the upstream licenses
+skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
+CLAUDE.md        linked to ~/.claude/CLAUDE.md
+install.sh       makes the links. Safe to run again
+licenses/        upstream licenses. Keep
 ```
 
-## On a computer
+`install.sh` skips a real folder or file at a link target and names it. It leaves other entries in `~/.claude/skills` alone.
 
-Clone the repo to `~/dev/agent-workflow`, then run `./install.sh`.
+## Computer
 
-| To                            | Do                                                      |
-| ----------------------------- | ------------------------------------------------------- |
-| Change a skill or `CLAUDE.md` | Edit it here, then commit and push                      |
-| Get the changes on a computer | `git pull`. The links point here, so the change is live |
-| Add or remove a skill         | Add or remove its folder, then run `./install.sh` again |
+Clone to `~/dev/agent-workflow`, run `./install.sh`.
 
-`install.sh` does not replace a real folder or file. It names each one it skips.
-It does not touch the other entries in `~/.claude/skills`.
+- Change a skill or `CLAUDE.md`: edit here, commit, push. Other computers `git pull`; the links make it live.
+- Add or remove a skill: add or remove its folder, run `./install.sh` again.
 
-## In a cloud session
-
-Paste this block into the setup script of the cloud environment on claude.ai/code:
+## Cloud environment setup script
 
 ```bash
 git clone --depth 1 https://github.com/kcgbarbosa/agent-workflow.git "$HOME/agent-workflow" \
@@ -33,14 +26,5 @@ git clone --depth 1 https://github.com/kcgbarbosa/agent-workflow.git "$HOME/agen
   || echo "agent-workflow: clone failed, the session has no personal skills"
 ```
 
-The block clones the repo with no token, so it works only while the repo is public.
-A new session gets the last pushed version. A session that is open does not get later pushes.
-
-## Where the skills came from
-
-`calm` is KC's own mod. Claude Code loads it as `calm@skills-dir`, and `/calm` turns it on.
-`find-skills` is from [vercel-labs/skills](https://github.com/vercel-labs/skills). `unslop` is KC's own.
-Every other skill is from [mattpocock/skills](https://github.com/mattpocock/skills), under `skills/engineering/` or `skills/productivity/`.
-These are now KC's own versions. To take a later upstream change, compare the upstream file with the file here and copy what you want.
-
-`licenses/` holds the MIT license of each upstream repo.
+- Clones with no token, so the repo must stay public.
+- A session gets the version pushed before it started, not later pushes.
