@@ -4,7 +4,7 @@ KC's Claude Code skills and global `CLAUDE.md`. This repo is the only copy.
 `~/.claude` on each computer, and in each cloud session, links into a clone of it.
 
 ```
-skills/<name>/SKILL.md   one folder for each skill
+skills/<name>/           one folder for each skill (SKILL.md) or mod (.claude-plugin/plugin.json)
 CLAUDE.md                the global instructions, linked to ~/.claude/CLAUDE.md
 install.sh               makes the links. Safe to run again
 licenses/                the upstream licenses
@@ -38,6 +38,7 @@ A new session gets the last pushed version. A session that is open does not get 
 
 ## Where the skills came from
 
+`calm` is KC's own mod. Claude Code loads it as `calm@skills-dir`, and `/calm` turns it on.
 `find-skills` is from [vercel-labs/skills](https://github.com/vercel-labs/skills). `unslop` is KC's own.
 Every other skill is from [mattpocock/skills](https://github.com/mattpocock/skills), under `skills/engineering/` or `skills/productivity/`.
 These are now KC's own versions. To take a later upstream change, compare the upstream file with the file here and copy what you want.
