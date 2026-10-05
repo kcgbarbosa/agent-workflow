@@ -7,7 +7,7 @@ A script builds one Epic unattended. It reads the ticket graph from the tracker,
 Every repo keeps these rules. Change one on purpose and record why.
 
 1. **Frontier.** A ticket is on the frontier when it is open, not stuck, and each of its blockers is done in the tracker or landed on the Epic branch. A ticket has landed when `git log <epic-branch> --grep "(<KEY>)"` finds its merge. The tracker and git hold all state, so the script keeps no state file.
-2. **Worktree.** Each ticket gets a worktree and a branch off the Epic branch, its own stack, and its ticket text in a file outside the repo. The script pushes the ticket branch after every agent run.
+2. **Worktree.** Each ticket gets a worktree and a branch off the Epic branch, its own stack, and its ticket text in a file outside the repo. When a remote branch already carries the key, the script uses that branch, and the ticket starts as a restart (rule 9). The script pushes the ticket branch after every agent run.
 3. **Agent run.** `timeout <limit> claude -p "/implement <ticket file>" --permission-mode auto --permission-prompts none --output-format json --json-schema <schema> -n <KEY>`. The schema returns `status` (`done` or `blocked`) and `reason`. A `blocked` status makes the ticket stuck.
 4. **Ticket gate.** The script runs the ticket gate in the worktree. When it fails, the script resumes the session with the tail of the log, up to the fix attempt limit. Still failing, the ticket is stuck.
 5. **UI gate.** When the diff against the Epic branch touches a UI path, the ticket lands only with UI review screenshots in its run folder. Without them, the script resumes the session and asks for the UI review. The script attaches the screenshots to the ticket.
@@ -42,7 +42,7 @@ Pitchridge: the loop sets In Progress when a ticket starts and In Review when it
 ### Human steps
 
 Settles what only a person can do, and how tickets carry it.
-Pitchridge: production configuration, admin controls on third-party services, and approvals by KC. Auto mode holds changes to sensitive admin controls, such as WorkOS roles, for approval, so an unattended agent stops there. Each human step is its own ticket, created Flagged, blocking the work that needs it.
+Pitchridge: an agent does every step it can, including host setup and tracker automation. A ticket is Flagged for KC only when an attempt failed on a blocker that needs KC, or when the step is dangerous and KC has not consented to it. Auto mode holds changes to sensitive admin controls, such as WorkOS roles, for approval, so an unattended agent stops there and the ticket is stuck.
 
 ### Branches and commits
 
@@ -77,7 +77,7 @@ Pitchridge: an ntfy topic, kept secret. The events are a stuck ticket, the Epic 
 ### Secrets
 
 Settles which secrets the loop needs and how they reach each host.
-Pitchridge: the Jira email and API token, the WorkOS staging keys, the test user passwords, and the ntfy topic. chezmoi syncs them to both machines with age encryption.
+Pitchridge: the Jira email and API token, the WorkOS staging keys, the test user passwords, and the ntfy topic. They live in Bitwarden only. The script reads them with the `bw` CLI when KC starts a run and unlocks the vault.
 
 ### Hosts
 
