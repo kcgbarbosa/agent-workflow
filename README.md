@@ -1,10 +1,10 @@
 # agent-workflow
 
-Skills and global `CLAUDE.md`. `~/.claude` links into a clone of this repo.
+Skills and global `AGENTS.md`. `~/.claude` links into a clone of this repo.
 
 ```
 skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
-CLAUDE.md        linked to ~/.claude/CLAUDE.md
+AGENTS.md        linked to ~/.claude/CLAUDE.md, the name Claude Code reads
 install.sh       makes the links. Safe to run again
 licenses/        upstream licenses. Keep
 ```
@@ -15,8 +15,9 @@ licenses/        upstream licenses. Keep
 
 Clone to `~/dev/agent-workflow`, run `./install.sh`.
 
-- Change a skill or `CLAUDE.md`: edit here, commit, push. Other computers `git pull`; the links make it live.
+- Change a skill or `AGENTS.md`: edit here, commit, push. Other computers `git pull`; the links make it live.
 - Add or remove a skill: add or remove its folder, run `./install.sh` again.
+- After a rename or move of a linked file, run `./install.sh` again on every computer.
 
 ## Cloud environment setup script
 
