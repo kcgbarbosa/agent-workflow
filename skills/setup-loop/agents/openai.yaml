@@ -1,0 +1,5 @@
+interface:
+  display_name: "Setup Loop"
+  short_description: "Set up the deterministic loop that builds an Epic's tickets with agents."
+policy:
+  allow_implicit_invocation: false
