@@ -13,10 +13,6 @@ These are common instructions for KC's agents across all scenarios.
 
 ## Commit message conventions
 
-- Title format: `<lowercase conventional-commit prefix>: <lowercase summary, no period>`, for example `feat: update app name to Sylvius`.
-  Prefixes: `feat`, `fix`, `refactor`, `chore`, `docs`, `style`, `test`.
-  Avoid clinical or self-congratulatory verbs like "satisfy", "dedupe", or "consolidate"; say what happened in plain words.
-  For example "fix: eslint errors", not "fix: satisfy eslint prefer-const and hook dependency rules".
 - When the repo's `docs/agents/issue-tracker.md` gives an issue key format, the key is the scope: `feat(PITCH-5): add login`.
   The key keeps its own case.
 - These rules apply in full to the commit that reaches the default branch. In a repo that squash-merges, that commit is the pull request title.
