@@ -285,7 +285,7 @@ def test_a_done_ticket_whose_work_never_landed_is_reported(world: World) -> None
 
     assert "DEMO-3 done-not-landed" in world.jira.notifications
     body = world.records("gh")[-1]["body"]
-    assert "| DEMO-3 | Done in Jira, not landed |" in body
+    assert "| DEMO-3 | Done in the tracker, not landed |" in body
     assert "| DEMO-4 | Done before this run |" in body
 
 
