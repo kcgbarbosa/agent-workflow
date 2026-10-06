@@ -23,8 +23,7 @@ Find the facts behind every settings section of loop.md yourself. Look at:
 - the auth flow, for how a headless browser can sign in as each role
 - seed scripts and the workflow doc
 - `claude mcp list`, for the connectors an agent gets
-- reachable hosts (`tailscale status`, `~/.ssh/config`) and what each has installed
-- chezmoi, for how secrets reach each host
+- the machine README, `~/.local/share/chezmoi/README.md`, for the hosts, what each has installed, and how secrets reach them
 
 An existing `docs/agents/loop.md` means a re-run. Start from its values.
 
@@ -32,13 +31,13 @@ Done when each settings section has a found value or a named decision for the us
 
 ### 2. Settle
 
-Invoke the `grilling` skill to settle the open decisions, with the settings sections as the design tree. Recommend the pitchridge value from loop.md when it fits this repo, and say why when it does not.
+Invoke the `grilling` skill to settle the open decisions, with the settings sections as the design tree. Recommend the value from `~/dev/pitchridge/docs/agents/loop.md`, the worked example, when it fits this repo, and say why when it does not.
 
 Done when every settings section holds a value, or "not used" with the reason.
 
 ### 3. Write
 
-Draft `docs/agents/loop.md` from loop.md: the fixed design as it stands, then each settings section with only this repo's value. Draft these edits with it:
+Draft `docs/agents/loop.md`: a pointer to the fixed design at `~/.claude/skills/setup-loop/loop.md`, then each settings section with only this repo's value. The repo doc links to the fixed design and to the machine README and restates neither. Draft these edits with it:
 
 - the issue tracker doc: the rule from the Human steps section, so `to-tickets` follows it
 - the workflow doc: the loop builds an Epic, and `implement` stays for a single ticket
@@ -54,7 +53,7 @@ Done when the user has approved each file and it is written.
 List the tickets that build the loop in this repo. Each setting the repo does not support yet becomes a ticket:
 
 - prefactors: per-worktree ports, the same test database as production, seed data, per-role sign-in, the UI review skill, the browser MCP config
-- the loop script, written from the fixed design in `docs/agents/loop.md`. When this skill folder has a `reference/` folder, the ticket adapts that code instead.
+- the loop script, written from the fixed design in loop.md. When this skill folder has a `reference/` folder, the ticket adapts that code instead.
 - human tickets: host prerequisites, tracker automation, test accounts, secrets
 - doc tickets for anything step 3 did not cover
 
