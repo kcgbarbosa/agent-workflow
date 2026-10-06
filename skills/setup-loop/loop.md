@@ -47,7 +47,7 @@ Pitchridge: an agent does every step it can, including host setup and tracker au
 ### Branches and commits
 
 Settles the branch names for the Epic and each ticket, and where the key goes.
-Pitchridge: the format in `docs/stack.md` section 7. The key is the commit scope, as in `feat(PITCH-30): read the role from workos`.
+Pitchridge: `<type>/PITCH-<n>-<slug>`. The key is the commit scope, as in `feat(PITCH-30): read the role from workos`.
 
 ### Gates
 
