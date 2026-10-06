@@ -18,7 +18,7 @@ Clone to `~/dev/agent-workflow`, run `./install.sh`.
 
 - Change a skill or `AGENTS.md`: edit here, commit, push. Other computers `git pull`; the links make it live.
 - Add or remove a skill: add or remove its folder, run `./install.sh` again.
-- Change the loop: edit `loop/`, then run `uv run pytest` there on a Linux host or with GNU `timeout` on PATH. CI runs it too.
+- Change the loop: edit `loop/`. `loop/CLAUDE.md` gives the rules. `loop start` fast-forwards each computer's clone, so a merged change reaches every host on its next run.
 - After a rename or move of a linked file, run `./install.sh` again on every computer.
 
 ## Cloud environment setup script

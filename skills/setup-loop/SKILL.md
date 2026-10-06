@@ -42,7 +42,7 @@ Draft `loop.toml` at the repo root with every key a settings section names, then
 - the issue tracker doc: the rule from the Human steps section, so `to-tickets` follows it
 - the workflow doc: the loop builds an Epic, and `implement` stays for a single ticket
 - the go-live checklist, if the repo has one: an item to undo each development-only setting, such as full connector access
-- the `## Agent skills` block of the repo's `AGENTS.md` or `CLAUDE.md`: one line pointing to `docs/agents/loop.md`
+- the `## Agent skills` block of the repo's `AGENTS.md` or `CLAUDE.md`: one line pointing to `docs/agents/loop.md`, and one line routing a loop failure: a wrong value is fixed in this repo's `loop.toml` or `docs/agents/loop.md`; anything else is a loop bug, fixed in `~/dev/agent-workflow`, where `loop/` and `skills/setup-loop/loop.md` change in one pull request
 
 Show the drafts, take edits, then write.
 

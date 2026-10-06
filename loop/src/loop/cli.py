@@ -23,6 +23,7 @@ from . import config as config_file
 from .config import Config, ConfigError
 from .run import run
 from .tracker import TrackerError
+from .update import Stale, source_checkout, update
 
 TOOLS = ("git", "claude", "gh", "bw", "timeout")
 START_POLLS = 60
@@ -46,13 +47,16 @@ def main(argv: list[str] | None = None) -> int:
         repo = args.repo.resolve() if args.repo else main_checkout()
         config = config_file.load(repo)
         if args.command == "start":
+            checkout = source_checkout()
+            if checkout is not None:
+                print(update(checkout))
             return start(args.epic, config)
         check_tools(config)
         secrets = read_secrets(config)
         check_services(config, secrets)
         with one_run(config.state_dir), awake(config.name, args.epic):
             return run(args.epic, config, secrets)
-    except (Refused, ConfigError) as error:
+    except (Refused, ConfigError, Stale) as error:
         print(f"The loop refuses to run. {error}", file=sys.stderr)
         return 2
 
