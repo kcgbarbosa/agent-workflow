@@ -4,8 +4,9 @@ Skills and global `AGENTS.md`. `~/.claude` links into a clone of this repo.
 
 ```
 skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
+loop/            the loop command, which builds an Epic unattended. Its design is skills/setup-loop/loop.md
 AGENTS.md        linked to ~/.claude/CLAUDE.md, the name Claude Code reads
-install.sh       makes the links. Safe to run again
+install.sh       makes the links and installs the loop command. Safe to run again
 licenses/        upstream licenses. Keep
 ```
 
@@ -17,6 +18,7 @@ Clone to `~/dev/agent-workflow`, run `./install.sh`.
 
 - Change a skill or `AGENTS.md`: edit here, commit, push. Other computers `git pull`; the links make it live.
 - Add or remove a skill: add or remove its folder, run `./install.sh` again.
+- Change the loop: edit `loop/`, then run `uv run pytest` there on a Linux host or with GNU `timeout` on PATH. CI runs it too.
 - After a rename or move of a linked file, run `./install.sh` again on every computer.
 
 ## Cloud environment setup script

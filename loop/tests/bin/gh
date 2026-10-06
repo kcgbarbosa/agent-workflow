@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""A fake GitHub CLI for the loop tests. It records each call and opens no pull request.
+
+A file `pr-exists` in FAKE_CLAUDE_DIR makes `gh pr list` find an open Epic PR.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with Path(os.environ["FAKE_CLAUDE_DIR"], "gh.jsonl").open("a") as calls:
+    body = Path(args[args.index("--body-file") + 1]).read_text() if "--body-file" in args else None
+    calls.write(json.dumps({"args": args, "body": body}) + "\n")
+
+if args[:2] == ["pr", "list"] and Path(os.environ["FAKE_CLAUDE_DIR"], "pr-exists").exists():
+    print("https://github.com/kcgbarbosa/demo/pull/98")
+if args[:2] == ["pr", "create"]:
+    print("https://github.com/kcgbarbosa/demo/pull/99")

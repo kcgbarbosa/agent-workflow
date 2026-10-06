@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Links each skill in this repo, and AGENTS.md as CLAUDE.md, into ~/.claude. Safe to run again.
+# Links each skill in this repo, and AGENTS.md as CLAUDE.md, into ~/.claude, and installs the loop command.
+# Safe to run again.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")" && pwd)"
@@ -28,4 +29,11 @@ if [ -e "$dest/CLAUDE.md" ] && [ ! -L "$dest/CLAUDE.md" ]; then
   echo "agent-workflow: skipped CLAUDE.md, $dest/CLAUDE.md is a real file. Remove it, then run this again" >&2
 else
   ln -sfn "$repo/AGENTS.md" "$dest/CLAUDE.md"
+fi
+
+# An editable install, so a git pull updates the loop command too.
+if command -v uv >/dev/null 2>&1; then
+  uv tool install --quiet --editable "$repo/loop" || echo "agent-workflow: the loop command did not install" >&2
+else
+  echo "agent-workflow: skipped the loop command, uv is missing" >&2
 fi

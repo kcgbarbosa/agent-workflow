@@ -2,7 +2,7 @@
 
 A script builds one Epic unattended. It reads the ticket graph from the tracker, starts an agent for each ticket on the frontier, runs the gates itself, and lands each green ticket on the Epic branch. No model decides what runs next or whether a ticket passed. KC merges the Epic PR into `main`.
 
-This file is the one home of the fixed design. A repo's `docs/agents/loop.md` links here and holds only that repo's settings.
+This file is the one home of the fixed design. The `loop` command, from `loop/` in the agent-workflow repo, is the script for every repo. A repo's `loop.toml` holds the values the script reads, and its `docs/agents/loop.md` links here and holds the rest of its settings.
 
 ## Fixed design
 
@@ -19,26 +19,26 @@ Every repo keeps these rules. Change a rule here, on purpose, and give the reaso
 9. **Restart.** The script keeps each in-progress ticket's branch and starts a fresh agent with "A previous run was interrupted. Check the diff against the ticket and continue." The restart counts as a fix attempt.
 10. **Finish.** When the frontier is empty and nothing runs, the script runs `/code-review` on the Epic branch and one fix run through the same gates, pushes, and opens the Epic PR. An agent writes the PR body with the `pr` skill. Without a body from it, the body is the ticket table. If a gate still fails, the PR is a draft with the failing gate at the top. Then it notifies.
 11. **Log.** One JSONL line per decision, with the ticket, step, result, commit, and session id, in the log folder outside the repo.
-12. **Host.** The script checks every prerequisite before it starts and refuses to run when one is missing. It holds off sleep for the run, with `systemd-inhibit` on Linux and `caffeinate` on macOS. A run starts in its own tmux session, so it outlives the agent or shell that starts it. An agent starts a run only through that tmux command, because the Bash tool stops a command after 10 minutes.
+12. **Host.** The script checks every prerequisite before it starts and refuses to run when one is missing. It holds off sleep for the run, with `systemd-inhibit` on Linux and `caffeinate` on macOS. `loop start` runs the loop in its own tmux session, so the run outlives the agent or shell that starts it. An agent starts a run only with `loop start`, because the Bash tool stops a command after 10 minutes.
 13. **Main.** The loop lands work only on the Epic branch. KC merges the Epic PR.
 
 ## Settings
 
-Each section names what it settles. A repo's `docs/agents/loop.md` keeps these headings and holds only that repo's values.
+Each section names what it settles, and its `loop.toml` key when the script reads one. A repo's `docs/agents/loop.md` keeps these headings. A value with a key lives in `loop.toml` only, and the repo doc points there; the doc holds the values the script cannot read.
 
 The machine README, `~/.local/share/chezmoi/README.md`, holds how to reach each machine and how secrets get onto it. Secrets and Hosts link to it.
 
 ### Run
 
-Settles the command that starts a run, and where.
+Settles who starts a run, and where. The command is `loop start <Epic key>` in the main checkout.
 
 ### Tracker
 
-Settles how the script lists an Epic's children, reads the blocking edges, fetches a ticket's text, and comments.
+Settles the tracker and how the Epic's children and blocking edges are stored. `[tracker]` gives `kind` and `url`. Jira is the only adapter.
 
 ### Status and stuck marker
 
-Settles which status changes the loop makes, which the tracker's automation makes, and how a stuck ticket shows.
+Settles which status changes the loop makes, which the tracker's automation makes, and how a stuck ticket shows. `tracker.in_progress` and `tracker.landed` name the loop's statuses.
 
 ### Human steps
 
@@ -46,19 +46,19 @@ Settles what only a person can do, and how tickets carry it.
 
 ### Branches and commits
 
-Settles the branch names for the Epic and each ticket, and where the key goes.
+Settles where the key goes in commits. The script names each branch `feat/<KEY>-<slug>`, or `fix/` for a Bug. `main_branch` names the branch the Epic PR targets.
 
 ### Gates
 
-Settles the ticket gate, the merge gate, and what CI runs.
+Settles the ticket gate, the merge gate, and what CI runs. `[gates]` gives `ticket`, `merge`, and `timeout_minutes`. `agent_hint` adds a line to each ticket file, such as how to run the tests.
 
 ### Stack per worktree
 
-Settles how two tickets run full stacks side by side.
+Settles how two tickets run full stacks side by side. `[stack]` gives the base `ports` and the `port_step` per slot, and the script sets `COMPOSE_PROJECT_NAME` to `<name>-<key>`. A repo with no stack leaves it out.
 
 ### UI review
 
-Settles the UI paths, the review skill, the browser, sign-in, and what the review checks.
+Settles the UI paths, the review skill, the browser, sign-in, and what the review checks. `[ui]` gives `path` and `skill`. A repo with no UI leaves it out, and the UI gate never fires.
 
 ### Connectors
 
@@ -66,20 +66,20 @@ Settles which MCP servers the agent gets.
 
 ### Notifications
 
-Settles the channel, the events, and what a message may contain.
+Settles the channel, the events, and what a message may contain. `notify.url` is the ntfy server, and the `NTFY_TOPIC` secret is the topic.
 
 ### Secrets
 
-Settles which secrets the loop needs and where each one lives.
+Settles which secrets the loop needs and where each one lives. `[secrets]` maps each env var to its Bitwarden `item` and `field`. The script needs `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `NTFY_TOPIC`, and passes every secret to each agent.
 
 ### Hosts
 
-Settles which machines can run the loop and what each needs.
+Settles which machines can run the loop and what each needs. `tools` lists the commands the repo needs beyond the script's own.
 
 ### Limits
 
-Settles the numbers in rule 8.
+Settles the numbers in rule 8. `[limits]` gives `parallel`, `agent_timeout_minutes`, `fix_attempts`, and `circuit_breaker`.
 
-### Code and logs
+### Logs
 
-Settles where the script lives and where it logs.
+The worktrees, the run folders, and the logs go to `~/.local/state/<name>-loop/<Epic key>/`. The `name` in `loop.toml` also names the tmux session and prefixes the Compose projects.

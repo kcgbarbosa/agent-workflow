@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""A fake `claude -p` for the loop tests. It never calls a model.
+
+FAKE_CLAUDE_DIR/plan.json maps a session name (`-n`) to a list of steps. Each call takes the next step.
+A step can write and delete files and commit them, save a screenshot or a PR body in LOOP_RUN_DIR, return a
+status, or fail with a usage limit or a crash after its commit. A step with `late_turn` adds a second
+result with no status, as when a background subagent wakes the session after its status. With no
+step left, the call returns done and changes nothing.
+
+The output is stream-json: one event per line, with one result event per turn.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+args = sys.argv[1:]
+prompt = args[args.index("-p") + 1]
+name = args[args.index("-n") + 1]
+resume = args[args.index("--resume") + 1] if "--resume" in args else None
+home = Path(os.environ["FAKE_CLAUDE_DIR"])
+
+with (home / "calls.jsonl").open("a") as calls:
+    record = {
+        "name": name,
+        "prompt": prompt,
+        "resume": resume,
+        "cwd": os.getcwd(),
+        "secret": os.environ.get("JIRA_API_TOKEN"),
+        "bw_session": os.environ.get("BW_SESSION"),
+        "db_port": os.environ.get("DB_PORT"),
+        "run_dir": os.environ.get("LOOP_RUN_DIR"),
+        "schema": json.loads(args[args.index("--json-schema") + 1]),
+        "mcp_config": args[args.index("--mcp-config") + 1] if "--mcp-config" in args else None,
+    }
+    calls.write(json.dumps(record) + "\n")
+
+plan = json.loads((home / "plan.json").read_text()).get(name, [])
+counter = home / f"count-{name}"
+number = int(counter.read_text()) if counter.exists() else 0
+counter.write_text(str(number + 1))
+step = plan[number] if number < len(plan) else {}
+session = resume or str(uuid.uuid4())
+
+for path, content in step.get("write", {}).items():
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(content)
+for path in step.get("delete", []):
+    Path(path).unlink()
+if step.get("write") or step.get("delete"):
+    subprocess.run(["git", "add", "-A"], check=True)
+    message = step.get("commit", f"feat({name}): change")
+    subprocess.run(["git", "commit", "-q", "-m", message], check=True)
+if step.get("pr_body"):
+    Path(os.environ["LOOP_RUN_DIR"], "pr-body.md").write_text(step["pr_body"])
+if step.get("screenshot"):
+    Path(os.environ["LOOP_RUN_DIR"], "home-360-chromium-en.png").write_bytes(b"\x89PNG fake")
+
+print(json.dumps({"type": "system", "subtype": "init", "session_id": session}))
+if step.get("error") == "usage":
+    print(json.dumps({"type": "result", "is_error": True, "result": "Claude usage limit reached", "session_id": session}))
+    sys.exit(1)
+if step.get("error") == "crash":
+    print("Segmentation fault", file=sys.stderr)
+    sys.exit(139)
+
+output = {"status": step.get("status", "done"), "reason": step.get("reason", ""), "decisions": step.get("decisions", [])}
+print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output}))
+if step.get("late_turn"):
+    print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied."}))

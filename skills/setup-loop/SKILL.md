@@ -37,7 +37,7 @@ Done when every settings section holds a value, or "not used" with the reason.
 
 ### 3. Write
 
-Draft `docs/agents/loop.md`: a pointer to the fixed design at `~/.claude/skills/setup-loop/loop.md`, then each settings section with only this repo's value. The repo doc links to the fixed design and to the machine README and restates neither. Draft these edits with it:
+Draft `loop.toml` at the repo root with every key a settings section names, then `docs/agents/loop.md`: a pointer to the fixed design at `~/.claude/skills/setup-loop/loop.md`, then each settings section. A value with a `loop.toml` key lives in `loop.toml` only. The repo doc links to the fixed design, to `loop.toml`, and to the machine README, and restates none of them. Draft these edits with them:
 
 - the issue tracker doc: the rule from the Human steps section, so `to-tickets` follows it
 - the workflow doc: the loop builds an Epic, and `implement` stays for a single ticket
@@ -53,7 +53,7 @@ Done when the user has approved each file and it is written.
 List the tickets that build the loop in this repo. Each setting the repo does not support yet becomes a ticket:
 
 - prefactors: per-worktree ports, the same test database as production, seed data, per-role sign-in, the UI review skill, the browser MCP config
-- the loop script, written from the fixed design in loop.md. When this skill folder has a `reference/` folder, the ticket adapts that code instead.
+- a `make loop` target, or the repo's equivalent, that runs `loop start`
 - human tickets: host prerequisites, tracker automation, test accounts, secrets
 - doc tickets for anything step 3 did not cover
 
