@@ -1,0 +1,81 @@
+"""`loop start` brings the loop's own checkout up to date first."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from conftest import sh
+
+from loop.update import Stale, update
+
+
+@pytest.fixture
+def checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    """A clone of agent-workflow, and a second clone that pushes new commits to the same origin."""
+    gitconfig = tmp_path / "gitconfig"
+    gitconfig.write_text(
+        "[user]\n\tname = Loop Test\n\temail = loop@example.com\n[init]\n\tdefaultBranch = main\n"
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    origin = tmp_path / "origin.git"
+    sh(tmp_path, "git", "init", "-q", "--bare", str(origin))
+    local = tmp_path / "local"
+    sh(tmp_path, "git", "clone", "-q", str(origin), str(local))
+    commit(local, "run.py", "one")
+    sh(local, "git", "push", "-q", "origin", "main")
+    other = tmp_path / "other"
+    sh(tmp_path, "git", "clone", "-q", str(origin), str(other))
+    return local, other
+
+
+def commit(repo: Path, name: str, text: str) -> None:
+    (repo / name).write_text(text)
+    sh(repo, "git", "add", "-A")
+    sh(repo, "git", "commit", "-q", "-m", f"change {name}")
+
+
+def test_a_clean_checkout_that_is_behind_takes_the_new_commits(checkout: tuple[Path, Path]) -> None:
+    local, other = checkout
+    commit(other, "run.py", "two")
+    sh(other, "git", "push", "-q", "origin", "main")
+
+    assert update(local) == "The loop took 1 new commit from origin."
+    assert (local / "run.py").read_text() == "two"
+
+
+def test_a_current_checkout_stays_as_it_is(checkout: tuple[Path, Path]) -> None:
+    local, _ = checkout
+    assert update(local) == "The loop is current."
+
+
+def test_a_checkout_with_changes_is_not_overwritten(checkout: tuple[Path, Path]) -> None:
+    local, other = checkout
+    commit(other, "run.py", "two")
+    sh(other, "git", "push", "-q", "origin", "main")
+    (local / "run.py").write_text("a local edit")
+
+    with pytest.raises(Stale, match="not committed"):
+        update(local)
+    assert (local / "run.py").read_text() == "a local edit"
+
+
+def test_a_checkout_that_diverged_from_origin_refuses(checkout: tuple[Path, Path]) -> None:
+    local, other = checkout
+    commit(other, "run.py", "two")
+    sh(other, "git", "push", "-q", "origin", "main")
+    commit(local, "notes.md", "local")
+
+    with pytest.raises(Stale, match="both have new commits"):
+        update(local)
+
+
+def test_a_checkout_on_another_branch_runs_as_it_is(checkout: tuple[Path, Path]) -> None:
+    local, other = checkout
+    commit(other, "run.py", "two")
+    sh(other, "git", "push", "-q", "origin", "main")
+    sh(local, "git", "switch", "-q", "-c", "feat/try-a-fix")
+
+    assert "branch feat/try-a-fix" in update(local)
+    assert (local / "run.py").read_text() == "one"

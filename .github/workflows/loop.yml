@@ -2,10 +2,10 @@ name: loop
 
 on:
   pull_request:
-    paths: ["loop/**", ".github/workflows/loop.yml"]
+    paths: ["loop/**", "skills/setup-loop/loop.md", ".github/workflows/loop.yml"]
   push:
     branches: [main]
-    paths: ["loop/**", ".github/workflows/loop.yml"]
+    paths: ["loop/**", "skills/setup-loop/loop.md", ".github/workflows/loop.yml"]
 
 jobs:
   check:
