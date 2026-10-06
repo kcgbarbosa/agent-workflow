@@ -10,6 +10,8 @@ These are common instructions for KC's agents across all scenarios.
 - Never manually modify CHANGELOG.md files or any files that are marked as auto-generated.
 - Be straightforward. Do not dress up writing with counts and tallies for effect, such as "14 screens in nine Epics" or "twelve themed components".
   Nobody cares. Say what the thing is, and give a number only when the reader needs it to act.
+- Give each fact one home doc, and link to it from everywhere else.
+  A restated fact drifts from its home.
 - Auto mode holds changes to sensitive admin controls, such as WorkOS roles and settings, until KC approves them, so plan each one as a human step when the work runs unattended.
 
 ## Commit message conventions
