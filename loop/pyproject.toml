@@ -1,0 +1,35 @@
+[project]
+name = "loop"
+version = "0.1.0"
+description = "Builds one Epic unattended. The fixed design is skills/setup-loop/loop.md."
+requires-python = ">=3.14"
+dependencies = []
+
+[project.scripts]
+loop = "loop.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.9",
+]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]

@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""A fake Docker CLI for the loop tests. It records each call and starts no container."""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+with Path(os.environ["FAKE_CLAUDE_DIR"], "docker.jsonl").open("a") as calls:
+    record = {"args": sys.argv[1:], "project": os.environ.get("COMPOSE_PROJECT_NAME")}
+    calls.write(json.dumps(record) + "\n")
