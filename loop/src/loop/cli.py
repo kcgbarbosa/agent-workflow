@@ -173,16 +173,18 @@ def start(epic_key: str, config: Config) -> int:
     _tmux(["respawn-pane", "-k", "-t", target, "-c", repo, "-e", f"BW_SESSION={bw_session}", command])
 
     # The run prints "<time> <Epic key> start ok" once its checks pass. A refusal ends the pane first.
+    # A short run can also end before the first look, so the line counts before the dead pane does.
     for _ in range(START_POLLS):
         time.sleep(START_POLL_SECONDS)
-        pane = _tmux(["capture-pane", "-p", "-t", target])
-        if _tmux(["display-message", "-p", "-t", target, "#{pane_dead}"]) == "1":
-            print("\n".join(line for line in pane.splitlines() if line), file=sys.stderr)
-            print("The loop did not start.", file=sys.stderr)
-            return 1
+        dead = _tmux(["display-message", "-p", "-t", target, "#{pane_dead}"]) == "1"
+        pane = _tmux(["capture-pane", "-p", "-S", "-", "-t", target])
         if f" {epic_key} start ok" in pane:
             print(f"The loop is building {epic_key}. See it with `tmux attach -t {session}`.")
             return 0
+        if dead:
+            print("\n".join(line for line in pane.splitlines() if line), file=sys.stderr)
+            print("The loop did not start.", file=sys.stderr)
+            return 1
     print(
         f"The loop has not started after 2 minutes. See it with `tmux attach -t {session}`.", file=sys.stderr
     )
