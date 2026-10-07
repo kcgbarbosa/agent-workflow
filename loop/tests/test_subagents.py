@@ -16,7 +16,7 @@ def test_each_tier_has_a_description_a_prompt_a_model_an_effort_and_its_tools() 
     assert tiers
     for name, tier in tiers.items():
         assert tier["description"] and tier["prompt"], name
-        # A full model ID, because an alias moves with the CLI version: `haiku` gave Haiku 4.5 on 2.1.288.
+        # A full model ID, because what an alias names moves with the CLI version.
         assert tier["model"].startswith("claude-"), name
         assert tier["effort"] in EFFORTS, name
         assert tier["tools"] and all(isinstance(tool, str) for tool in tier["tools"]), name

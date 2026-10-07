@@ -485,6 +485,11 @@ def test_each_agent_line_logs_the_cost_from_the_last_result(world: World) -> Non
         "subagents": {"runner": 1},
         "models": {
             "claude-opus-5-5": {"inputTokens": 10, "outputTokens": 20, "costUSD": 0.74},
-            "claude-haiku-5-5": {"inputTokens": 30, "outputTokens": 40, "costUSD": 0.01, "costBasis": "list"},
+            "claude-sonnet-5-5": {
+                "inputTokens": 30,
+                "outputTokens": 40,
+                "costUSD": 0.01,
+                "costBasis": "list",
+            },
         },
     }
