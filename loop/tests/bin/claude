@@ -8,7 +8,8 @@ result with no status, as when a background subagent wakes the session after its
 `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to FAKE_CLAUDE_DIR/peek.json. With no
 step left, the call returns done and changes nothing.
 
-The output is stream-json: one event per line, with one result event per turn.
+The output is stream-json: one event per line, with one result event per turn. Each result event reports a
+cost, and the late turn reports a higher one, as the session's cost grows.
 """
 
 import json
@@ -36,6 +37,8 @@ with (home / "calls.jsonl").open("a") as calls:
         "run_dir": os.environ.get("LOOP_RUN_DIR"),
         "schema": json.loads(args[args.index("--json-schema") + 1]),
         "mcp_config": args[args.index("--mcp-config") + 1] if "--mcp-config" in args else None,
+        "agents": args[args.index("--agents") + 1] if "--agents" in args else None,
+        "system_prompt": args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else None,
     }
     calls.write(json.dumps(record) + "\n")
 
@@ -72,7 +75,17 @@ if step.get("error") == "crash":
     print("Segmentation fault", file=sys.stderr)
     sys.exit(139)
 
+
+def cost(dollars: float, turns: int) -> dict[str, object]:
+    models = {
+        "claude-opus-5-5": {"inputTokens": 10, "outputTokens": 20, "costUSD": round(dollars - 0.01, 2), "contextWindow": 1000000},
+        "claude-sonnet-5-5": {"inputTokens": 30, "outputTokens": 40, "costUSD": 0.01, "costBasis": "list"},
+    }
+    stats = {"spawned": 1, "by_type": {"runner": 1}}
+    return {"total_cost_usd": dollars, "num_turns": turns, "duration_ms": 1000 * turns, "modelUsage": models, "subagent_stats": stats}
+
+
 output = {"status": step.get("status", "done"), "reason": step.get("reason", ""), "decisions": step.get("decisions", [])}
-print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output}))
+print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output, **cost(0.5, 3)}))
 if step.get("late_turn"):
-    print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied."}))
+    print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied.", **cost(0.75, 4)}))

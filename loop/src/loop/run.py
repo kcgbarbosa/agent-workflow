@@ -49,6 +49,13 @@ PR_PROMPT = (
 NOT_LANDED = "Done in the tracker, not landed"
 USAGE_LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit", re.IGNORECASE)
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+# The subagent tiers of every agent run, and the rule for when the head agent hands work to them.
+AGENTS = Path(__file__).with_name("agents.json")
+DISPATCH = Path(__file__).with_name("dispatch.md")
+# The usage fields the log keeps per model. A `costBasis` of "unknown" marks a cost the CLI guessed.
+MODEL_USAGE = (
+    "inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD", "costBasis",
+)  # fmt: skip
 TIMED_OUT = 124
 LOG_TAIL_LINES = 80
 
@@ -135,6 +142,23 @@ def agent_status(result: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(output, dict) or output.get("status") not in ("done", "blocked"):
         return None
     return output
+
+
+def agent_usage(result: dict[str, Any]) -> dict[str, Any]:
+    """The cost, turns, duration, subagents, and per-model usage of one result event (loop.md rule 11)."""
+    models = result.get("modelUsage")
+    return {
+        "total_cost_usd": result.get("total_cost_usd"),
+        "num_turns": result.get("num_turns"),
+        "duration_ms": result.get("duration_ms"),
+        "subagents": (result.get("subagent_stats") or {}).get("by_type"),
+        "models": {
+            model: {field: value for field, value in fields.items() if field in MODEL_USAGE}
+            for model, fields in models.items()
+        }
+        if isinstance(models, dict)
+        else None,
+    }
 
 
 class EpicRun:
@@ -601,6 +625,7 @@ class EpicRun:
         command += [
             "--permission-mode", "auto", "--permission-prompts", "none",
             "--output-format", "stream-json", "--verbose", "--json-schema", AGENT_SCHEMA, "-n", name,
+            "--agents", str(AGENTS), "--append-system-prompt", DISPATCH.read_text(),
         ]  # fmt: skip
         env = {
             **self.child_env(),
@@ -613,20 +638,20 @@ class EpicRun:
         # The output streams to the logs, so a run can be followed while it lasts.
         with run.agent_log.open("w") as stdout, errors_log.open("w") as stderr:
             result = subprocess.run(command, cwd=run.worktree, env=env, stdout=stdout, stderr=stderr)
-        stream = run.agent_log.read_text()
         errors = errors_log.read_text()
-        if result.returncode == TIMED_OUT:
-            self.log(name, "agent", "timeout", session=session)
-            raise AgentFailed(f"The agent ran past {self.config.agent_timeout_minutes} minutes.")
         # Each turn ends with a result event. A background subagent that finishes after the status
         # wakes the session for one more turn, and that turn's result can have no status.
-        results = [event for event in json_lines(stream) if event.get("type") == "result"]
+        results = [event for event in json_lines(run.agent_log.read_text()) if event.get("type") == "result"]
         data = results[-1] if results else {}
+        cost = agent_usage(data)
+        if result.returncode == TIMED_OUT:
+            self.log(name, "agent", "timeout", session=session, usage=cost)
+            raise AgentFailed(f"The agent ran past {self.config.agent_timeout_minutes} minutes.")
         message = f"{data.get('result', '')}\n{errors}"
         if data.get("is_error") or not data:
             if data.get("api_error_status") in (429, "429") or USAGE_LIMIT.search(message):
                 raise UsageLimit(f"{name}: {message.strip()[:200]}")
-            self.log(name, "agent", "error", session=data.get("session_id"))
+            self.log(name, "agent", "error", session=data.get("session_id"), usage=cost)
             raise AgentFailed(f"The agent exited with code {result.returncode}: {message.strip()[:300]}")
         output = next(filter(None, map(agent_status, reversed(results))), None)
         if output is None:
@@ -635,7 +660,7 @@ class EpicRun:
         reason = str(output.get("reason", ""))
         session_id = str(data.get("session_id") or session or "")
         commit = out(run.worktree, "rev-parse", "HEAD")
-        self.log(name, "agent", status, commit=commit, session=session_id, detail=reason)
+        self.log(name, "agent", status, commit=commit, session=session_id, detail=reason, usage=cost)
         decisions = [str(item) for item in output.get("decisions", [])]
         if decisions:
             key = run.ticket.key
@@ -727,8 +752,9 @@ class EpicRun:
         commit: str | None = None,
         session: str | None = None,
         detail: str = "",
+        usage: dict[str, Any] | None = None,
     ) -> None:
-        line = {
+        line: dict[str, Any] = {
             "time": datetime.now(UTC).isoformat(timespec="seconds"),
             "epic": self.epic_key,
             "ticket": ticket,
@@ -738,6 +764,8 @@ class EpicRun:
             "session": session,
             "detail": detail,
         }
+        if usage is not None:
+            line["usage"] = usage
         with self._log_lock, self.log_path.open("a") as file:
             file.write(json.dumps(line) + "\n")
         print(f"{line['time']} {ticket} {step} {result} {detail}".rstrip(), flush=True)
