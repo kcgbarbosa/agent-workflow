@@ -5,15 +5,22 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+import time
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from .tracker import Blocker, Ticket, TrackerError
 
 FIELDS = ["summary", "status", "issuetype", "description", "issuelinks"]
+SEARCH = "/rest/api/3/search/jql"
+# A read that meets a network error or a busy Jira is sent again, with a backoff that doubles.
+ATTEMPTS = 4
+BACKOFF_SECONDS = 5.0
+MAX_WAIT_SECONDS = 120.0
 
 
 class JiraError(TrackerError):
@@ -21,11 +28,14 @@ class JiraError(TrackerError):
 
 
 class Jira:
-    def __init__(self, base_url: str, email: str, token: str) -> None:
+    def __init__(
+        self, base_url: str, email: str, token: str, sleep: Callable[[float], None] = time.sleep
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         credentials = base64.b64encode(f"{email}:{token}".encode()).decode()
         self._auth = f"Basic {credentials}"
         self._flagged_field: str | None = None
+        self._sleep = sleep
 
     def check_access(self) -> None:
         self._request("GET", "/rest/api/3/myself")
@@ -45,7 +55,7 @@ class Jira:
             }
             if token:
                 body["nextPageToken"] = token
-            data = self._request("POST", "/rest/api/3/search/jql", body)
+            data = self._request("POST", SEARCH, body)
             tickets += [self._ticket(issue) for issue in data.get("issues", [])]
             token = data.get("nextPageToken")
             if data.get("isLast", True) or not token:
@@ -135,16 +145,40 @@ class Jira:
             data = json.dumps(body).encode()
             all_headers["Content-Type"] = "application/json"
         all_headers.update(headers or {})
-        request = urllib.request.Request(self.base_url + path, data=data, headers=all_headers, method=method)
-        try:
-            with urllib.request.urlopen(request, timeout=60) as response:
-                raw = response.read()
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode(errors="replace")[:300]
-            raise JiraError(f"{method} {path}: HTTP {error.code} {detail}") from error
-        except urllib.error.URLError as error:
-            raise JiraError(f"{method} {path}: {error.reason}") from error
-        return json.loads(raw) if raw else None
+        # A write is sent once, so a retry never adds a second comment. The search is a POST that only reads.
+        retry = method == "GET" or path == SEARCH
+        attempt = 1
+        while True:
+            request = urllib.request.Request(
+                self.base_url + path, data=data, headers=all_headers, method=method
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    raw = response.read()
+            except urllib.error.HTTPError as error:
+                busy = error.code == 429 or error.code >= 500
+                if not (retry and busy) or attempt == ATTEMPTS:
+                    detail = error.read().decode(errors="replace")[:300]
+                    raise JiraError(f"{method} {path}: HTTP {error.code} {detail}") from error
+                wait = _retry_after(error.headers.get("Retry-After"))
+            except OSError as error:
+                # A URLError, or a timeout or a reset while the response is read.
+                if not retry or attempt == ATTEMPTS:
+                    raise JiraError(f"{method} {path}: {getattr(error, 'reason', error)}") from error
+                wait = None
+            else:
+                return json.loads(raw) if raw else None
+            backoff = BACKOFF_SECONDS * 2 ** (attempt - 1)
+            self._sleep(min(backoff if wait is None else wait, MAX_WAIT_SECONDS))
+            attempt += 1
+
+
+def _retry_after(value: str | None) -> float | None:
+    """The seconds that a busy Jira asks for. A date in the header falls back to the backoff."""
+    try:
+        return max(0.0, float(value)) if value else None
+    except ValueError:
+        return None
 
 
 def _is_done(status: dict[str, Any]) -> bool:

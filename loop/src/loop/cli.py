@@ -39,17 +39,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=("start", "run"))
     parser.add_argument("epic", metavar="<Epic key>")
     parser.add_argument("--repo", type=Path, help="the main checkout. Defaults to the one around this folder")
-    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    arguments = sys.argv[1:] if argv is None else argv
+    args = parser.parse_args(arguments)
     if not re.fullmatch(r"[A-Z]+-\d+", args.epic):
         print("Usage: loop start <Epic key>, for example loop start PITCH-42", file=sys.stderr)
         return 2
     try:
         repo = args.repo.resolve() if args.repo else main_checkout()
+        if args.command == "start" and (checkout := source_checkout()) is not None:
+            updated = update(checkout)
+            print(updated.message, flush=True)
+            if updated.new_code:
+                # This process still runs the old code, which can refuse a loop.toml key that is new.
+                os.execv(sys.executable, [sys.executable, "-m", "loop", *arguments])
         config = config_file.load(repo)
         if args.command == "start":
-            checkout = source_checkout()
-            if checkout is not None:
-                print(update(checkout))
             return start(args.epic, config)
         check_tools(config)
         secrets = read_secrets(config)

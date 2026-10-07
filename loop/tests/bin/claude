@@ -4,7 +4,8 @@
 FAKE_CLAUDE_DIR/plan.json maps a session name (`-n`) to a list of steps. Each call takes the next step.
 A step can write and delete files and commit them, save a screenshot or a PR body in LOOP_RUN_DIR, return a
 status, or fail with a usage limit or a crash after its commit. A step with `late_turn` adds a second
-result with no status, as when a background subagent wakes the session after its status. With no
+result with no status, as when a background subagent wakes the session after its status. A step with
+`peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to FAKE_CLAUDE_DIR/peek.json. With no
 step left, the call returns done and changes nothing.
 
 The output is stream-json: one event per line, with one result event per turn.
@@ -59,7 +60,11 @@ if step.get("pr_body"):
 if step.get("screenshot"):
     Path(os.environ["LOOP_RUN_DIR"], "home-360-chromium-en.png").write_bytes(b"\x89PNG fake")
 
-print(json.dumps({"type": "system", "subtype": "init", "session_id": session}))
+print(json.dumps({"type": "system", "subtype": "init", "session_id": session}), flush=True)
+if step.get("peek"):
+    print("Starting the MCP servers", file=sys.stderr, flush=True)
+    logs = {log.name: log.read_text() for log in Path(os.environ["LOOP_RUN_DIR"]).glob("agent-*")}
+    (home / "peek.json").write_text(json.dumps(logs))
 if step.get("error") == "usage":
     print(json.dumps({"type": "result", "is_error": True, "result": "Claude usage limit reached", "session_id": session}))
     sys.exit(1)
