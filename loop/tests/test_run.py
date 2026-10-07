@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from conftest import EPIC, World, sh
 
 from loop.run import RESTART_PROMPT
@@ -35,7 +37,9 @@ def test_each_agent_gets_the_ticket_file_the_secrets_and_its_own_stack(world: Wo
 
     call = world.calls("DEMO-2")[0]
     ticket_file = call["prompt"].removeprefix("/implement ")
-    assert "Add the first part" in open(ticket_file).read()
+    ticket = open(ticket_file).read()
+    assert "Add the first part" in ticket
+    assert "`make lint test`. Make it pass before you return done." in ticket
     assert call["secret"] == "secret-token"
     assert call["bw_session"] is None
     assert call["db_port"] != "55432"
@@ -136,9 +140,63 @@ def test_a_failed_merge_gate_undoes_the_merge(world: World) -> None:
 
     world.run()
 
+    assert len(world.calls("DEMO-2")) == 3
     assert world.jira.issues["DEMO-2"].flagged
     assert not any(subject.startswith("merge(DEMO-2)") for subject in world.epic_log())
     assert not world.epic_file("MERGE_FAIL").exists()
+
+
+def test_a_failed_merge_gate_goes_back_to_the_session_with_the_epic_branch_merged_in(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.jira.add("DEMO-3", "Break the end to end tests", parent=EPIC)
+    # A branch from before DEMO-2 lands, so the Epic branch moves on after it.
+    sh(world.repo, "git", "branch", "feat/DEMO-3-early-work")
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}}],
+            "DEMO-3": [{"write": {"b.txt": "b", "MERGE_FAIL": "x"}}, {"delete": ["MERGE_FAIL"]}],
+        }
+    )
+
+    assert world.run(parallel=1) == 0
+
+    _, fix = world.calls("DEMO-3")
+    assert fix["resume"] is not None
+    assert "FAILED e2e/home.spec.ts" in fix["prompt"]
+    assert not world.jira.issues["DEMO-3"].flagged
+    assert "merge(DEMO-3): Break the end to end tests" in world.epic_log()
+    assert "a.txt" in sh(world.repo, "git", "ls-tree", "--name-only", "feat/DEMO-3-early-work").split()
+
+
+def test_each_land_pushes_the_epic_branch(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.jira.add("DEMO-3", "Add the second part", parent=EPIC, blockers=["DEMO-2"])
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}], "DEMO-3": [{"error": "usage"}]})
+
+    assert world.run() == 1
+
+    branch = f"feat/{EPIC}-the-loop"
+    remote = sh(world.repo, "git", "ls-remote", "--heads", "origin", branch)
+    assert remote.split()[0] == sh(world.repo, "git", "rev-parse", branch)
+    assert world.epic_log()[0] == "merge(DEMO-2): Add the first part"
+
+
+def test_a_rejected_push_of_the_epic_branch_does_not_stop_the_loop(world: World) -> None:
+    hook = world.origin / "hooks" / "pre-receive"
+    hook.write_text(
+        "#!/bin/sh\nwhile read old new ref; do\n"
+        f'  case "$ref" in refs/heads/feat/{EPIC}-*) echo "rejected"; exit 1;; esac\ndone\n'
+    )
+    hook.chmod(0o755)
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run() == 0
+
+    assert "merge(DEMO-2): Add the first part" in world.epic_log()
+    assert world.jira.issues["DEMO-2"].status == "In Review"
+    steps = [(line["ticket"], line["step"], line["result"]) for line in world.decisions()]
+    assert ("DEMO-2", "push", "fail") in steps
 
 
 def test_the_circuit_breaker_stops_the_loop(world: World) -> None:
@@ -228,7 +286,9 @@ def test_the_finish_reviews_the_epic_and_opens_the_epic_pr(world: World) -> None
 
     review, fix, _ = world.calls(f"{EPIC}-review")
     assert review["prompt"].startswith("/code-review ")
-    assert str(world.state / EPIC / "runs" / EPIC / "ticket.md") in review["prompt"]
+    epic_ticket = world.state / EPIC / "runs" / EPIC / "ticket.md"
+    assert str(epic_ticket) in review["prompt"]
+    assert "`make check`. Make it pass before you return done." in epic_ticket.read_text()
     assert fix["resume"] is not None
     create = world.records("gh")[-1]
     assert create["args"][:2] == ["pr", "create"] and "--draft" not in create["args"]
@@ -333,6 +393,17 @@ def test_a_failed_agent_run_still_pushes_its_commits_and_the_comment_names_the_l
     branch = "feat/DEMO-2-add-the-first-part"
     pushed = sh(world.repo, "git", "ls-remote", "--heads", "origin", branch)
     assert pushed.split()[0] == sh(world.repo, "git", "rev-parse", branch)
+
+
+def test_the_agent_logs_fill_while_the_agent_runs(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "peek": True}]})
+
+    assert world.run() == 0
+
+    seen = json.loads((world.fakes / "peek.json").read_text())
+    assert '"subtype": "init"' in seen["agent-1.jsonl"]
+    assert "Starting the MCP servers" in seen["agent-1.err"]
 
 
 def test_a_status_before_a_later_turn_with_none_still_counts(world: World) -> None:

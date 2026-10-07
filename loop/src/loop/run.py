@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import threading
 import traceback
@@ -77,7 +78,8 @@ class GateFailure:
     reason: str
     prompt: str
     log: Path
-    conflict: bool = False
+    # The failure is on the Epic branch, so the ticket branch takes the Epic branch before the fix.
+    on_epic: bool = False
 
 
 @dataclass
@@ -275,7 +277,7 @@ class EpicRun:
         # Screenshots from an earlier run do not show the code of this run.
         for shot in screenshots(run_dir):
             shot.unlink()
-        self.write_ticket_file(run)
+        self.write_ticket_file(run, self.config.ticket_gate)
         if ticket.status != self.config.in_progress:
             self.track(
                 ticket.key, "status", lambda: self.tracker.transition(ticket.key, self.config.in_progress)
@@ -303,7 +305,7 @@ class EpicRun:
                 failure = landed
             if attempts >= self.config.fix_attempts:
                 return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
-            if failure.conflict:
+            if failure.on_epic:
                 failure = self.merge_epic(run, failure)
             attempts += 1
             result = self.ticket_agent(run, failure.prompt, session=result.session)
@@ -365,9 +367,9 @@ class EpicRun:
         return ui_path is not None and path.startswith(ui_path) and not is_test
 
     def land(self, run: TicketRun) -> Outcome | GateFailure:
-        """Merges one ticket at a time, then runs the merge gate on the Epic branch.
+        """Merges one ticket at a time, runs the merge gate on the Epic branch, and pushes it.
 
-        A conflict returns a failure, so that the agent resolves it on the ticket branch.
+        A conflict or a failed merge gate returns a failure, so that the agent fixes it on the ticket branch.
         """
         key = run.ticket.key
         epic = self.epic_worktree
@@ -384,17 +386,28 @@ class EpicRun:
                     git(epic, "merge", "--abort", check=False)
                     self.log(key, "land", "conflict", detail=str(log_file))
                     reason = "The merge into the Epic branch has a conflict."
-                    return GateFailure(reason, "", log_file, conflict=True)
-                log_file = run.run_dir / "merge-gate.log"
+                    prompt = (
+                        f"Another ticket landed on the Epic branch `{self.epic_branch}`, "
+                        "and this branch no longer merges into it."
+                    )
+                    return GateFailure(reason, prompt, log_file, on_epic=True)
+                log_file = next_log(run.run_dir, "merge-gate", ".log")
                 command = self.config.merge_gate
                 if not self.gate(
                     command, epic, self.config.stack_env(EPIC_SLOT, self.epic_key), log_file, key
                 ):
                     reason = f"The merge gate `{' '.join(command)}` failed on the Epic branch."
-                    return self.stuck(run.ticket, reason, log_file, run.slot)
+                    prompt = (
+                        f"The merge gate `{' '.join(command)}` failed on the Epic branch with this branch "
+                        "merged in. Fix the cause and commit the fix.\n"
+                        f"The end of the log:\n\n{tail(log_file.read_text())}"
+                    )
+                    return GateFailure(reason, prompt, log_file, on_epic=True)
                 commit = out(epic, "rev-parse", "HEAD")
                 git(epic, "branch", "--force", self.epic_branch, commit)
                 self.log(key, "land", "landed", commit=commit)
+                # On origin, the landed work outlives this host. A failed push is logged, and the run goes on.
+                self.push(epic, self.epic_branch, key)
             finally:
                 git(epic, "reset", "--hard", "--quiet")
                 git(epic, "switch", "--quiet", self.epic_branch)
@@ -408,17 +421,22 @@ class EpicRun:
         return "landed"
 
     def merge_epic(self, run: TicketRun, failure: GateFailure) -> GateFailure:
-        """Merges the Epic branch into the ticket branch and leaves the conflicts for the agent."""
+        """Merges the Epic branch into the ticket branch, so the agent fixes the code the Epic branch gets.
+
+        A conflict is left for the agent to resolve.
+        """
         git(run.worktree, "merge", "--no-ff", "--no-edit", self.epic_branch, check=False)
         conflicts = out(run.worktree, "diff", "--name-only", "--diff-filter=U")
-        self.log(run.ticket.key, "merge-epic", "conflict", detail=conflicts.replace("\n", " "))
-        prompt = (
-            f"Another ticket landed on the Epic branch `{self.epic_branch}`, and this branch no longer "
-            "merges into it. The loop started a merge of the Epic branch into this branch. "
-            "Resolve the conflicts in these files, keep the changes of both sides, and commit the merge:\n"
-            f"{conflicts}"
-        )
-        return GateFailure(failure.reason, prompt, failure.log)
+        result = "conflict" if conflicts else "ok"
+        self.log(run.ticket.key, "merge-epic", result, detail=conflicts.replace("\n", " "))
+        if conflicts:
+            merged = (
+                "The loop started a merge of the Epic branch into this branch. Resolve the conflicts "
+                f"in these files, keep the changes of both sides, and commit the merge:\n{conflicts}"
+            )
+        else:
+            merged = "The loop merged the Epic branch into this branch."
+        return GateFailure(failure.reason, f"{failure.prompt}\n\n{merged}", failure.log)
 
     def stuck(self, ticket: Ticket, reason: str, log: Path, slot: int) -> Outcome:
         """Flags the ticket, comments the reason and the log path, and notifies.
@@ -453,7 +471,7 @@ class EpicRun:
         notes: list[str] = []
         for shot in screenshots(run_dir):
             shot.unlink()
-        self.write_ticket_file(run)
+        self.write_ticket_file(run, self.config.merge_gate)
         before_fix = out(self.epic_worktree, "rev-parse", "HEAD")
         merge_base = out(self.epic_worktree, "merge-base", base, "HEAD")
         session: str | None = None
@@ -590,18 +608,21 @@ class EpicRun:
             **self.secrets,
             "LOOP_RUN_DIR": str(run.run_dir),
         }
-        result = subprocess.run(command, cwd=run.worktree, env=env, capture_output=True, text=True)
         run.agent_log = next_log(run.run_dir, "agent", ".jsonl")
-        run.agent_log.write_text(result.stdout)
-        run.agent_log.with_suffix(".err").write_text(result.stderr)
+        errors_log = run.agent_log.with_suffix(".err")
+        # The output streams to the logs, so a run can be followed while it lasts.
+        with run.agent_log.open("w") as stdout, errors_log.open("w") as stderr:
+            result = subprocess.run(command, cwd=run.worktree, env=env, stdout=stdout, stderr=stderr)
+        stream = run.agent_log.read_text()
+        errors = errors_log.read_text()
         if result.returncode == TIMED_OUT:
             self.log(name, "agent", "timeout", session=session)
             raise AgentFailed(f"The agent ran past {self.config.agent_timeout_minutes} minutes.")
         # Each turn ends with a result event. A background subagent that finishes after the status
         # wakes the session for one more turn, and that turn's result can have no status.
-        results = [event for event in json_lines(result.stdout) if event.get("type") == "result"]
+        results = [event for event in json_lines(stream) if event.get("type") == "result"]
         data = results[-1] if results else {}
-        message = f"{data.get('result', '')}\n{result.stderr}"
+        message = f"{data.get('result', '')}\n{errors}"
         if data.get("is_error") or not data:
             if data.get("api_error_status") in (429, "429") or USAGE_LIMIT.search(message):
                 raise UsageLimit(f"{name}: {message.strip()[:200]}")
@@ -664,7 +685,8 @@ class EpicRun:
 
     # --- Records ---
 
-    def write_ticket_file(self, run: TicketRun) -> None:
+    def write_ticket_file(self, run: TicketRun, gate: tuple[str, ...]) -> None:
+        """The ticket text and how the loop runs it. The gate is the one the loop checks this work with."""
         ticket = run.ticket
         text = (
             f"# {ticket.key}: {ticket.summary}\n\n{ticket.text.strip()}\n\n"
@@ -673,6 +695,7 @@ class EpicRun:
             f"- Commit on the branch `{run.branch}` with {ticket.key} as the commit scope. "
             "Do not push, and do not open a pull request.\n"
             f"- The run folder is `{run.run_dir}`. A UI review saves its screenshots there.\n"
+            f"- The loop checks this work with `{shlex.join(gate)}`. Make it pass before you return done.\n"
         )
         if self.config.agent_hint:
             text += f"- {self.config.agent_hint}\n"

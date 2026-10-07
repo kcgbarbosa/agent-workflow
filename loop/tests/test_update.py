@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import pytest
-from conftest import sh
+from conftest import sh, write_config
 
+from loop import cli
 from loop.update import Stale, update
 
 
@@ -41,13 +44,13 @@ def test_a_clean_checkout_that_is_behind_takes_the_new_commits(checkout: tuple[P
     commit(other, "run.py", "two")
     sh(other, "git", "push", "-q", "origin", "main")
 
-    assert update(local) == "The loop took 1 new commit from origin."
+    assert update(local) == ("The loop took 1 new commit from origin.", True)
     assert (local / "run.py").read_text() == "two"
 
 
 def test_a_current_checkout_stays_as_it_is(checkout: tuple[Path, Path]) -> None:
     local, _ = checkout
-    assert update(local) == "The loop is current."
+    assert update(local) == ("The loop is current.", False)
 
 
 def test_a_checkout_with_changes_is_not_overwritten(checkout: tuple[Path, Path]) -> None:
@@ -77,5 +80,34 @@ def test_a_checkout_on_another_branch_runs_as_it_is(checkout: tuple[Path, Path])
     sh(other, "git", "push", "-q", "origin", "main")
     sh(local, "git", "switch", "-q", "-c", "feat/try-a-fix")
 
-    assert "branch feat/try-a-fix" in update(local)
+    updated = update(local)
+    assert "branch feat/try-a-fix" in updated.message and not updated.new_code
     assert (local / "run.py").read_text() == "one"
+
+
+def test_start_takes_the_new_loop_before_it_reads_loop_toml(
+    checkout: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local, other = checkout
+    commit(other, "run.py", "two")
+    sh(other, "git", "push", "-q", "origin", "main")
+    repo = tmp_path / "demo"
+    repo.mkdir()
+    write_config(repo)
+    # A key that only the new loop knows. The old code refuses it.
+    toml = repo / "loop.toml"
+    toml.write_text('new_key = "x"\n' + toml.read_text())
+    monkeypatch.setattr(cli, "source_checkout", lambda: local)
+    restarts: list[list[str]] = []
+
+    def execv(path: str, args: list[str]) -> None:
+        restarts.append(args)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(os, "execv", execv)
+
+    with pytest.raises(SystemExit):
+        cli.main(["start", "DEMO-1", "--repo", str(repo)])
+
+    assert (local / "run.py").read_text() == "two"
+    assert restarts == [[sys.executable, "-m", "loop", "start", "DEMO-1", "--repo", str(repo)]]

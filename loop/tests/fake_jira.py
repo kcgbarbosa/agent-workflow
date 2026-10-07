@@ -31,6 +31,8 @@ class FakeJira:
     def __init__(self) -> None:
         self.issues: dict[str, Issue] = {}
         self.notifications: list[str] = []
+        # The HTTP codes that the next requests get, one each, as from a busy Jira. A 429 asks for 7 seconds.
+        self.errors: list[int] = []
         self.lock = threading.Lock()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -90,13 +92,24 @@ class FakeJira:
             def _send(self, data: Any, code: int = 200) -> None:
                 raw = json.dumps(data).encode() if data is not None else b""
                 self.send_response(code)
+                if code == 429:
+                    self.send_header("Retry-After", "7")
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
                 self.wfile.write(raw)
 
+            def _busy(self) -> bool:
+                with fake.lock:
+                    code = fake.errors.pop(0) if fake.errors else None
+                if code is not None:
+                    self._send({"errorMessages": ["busy"]}, code)
+                return code is not None
+
             def do_GET(self) -> None:
                 path = self.path.split("?")[0]
+                if self._busy():
+                    return
                 with fake.lock:
                     if path == "/rest/api/3/myself":
                         return self._send({"accountId": "fake"})
@@ -116,6 +129,8 @@ class FakeJira:
             def do_POST(self) -> None:
                 body = self._body()
                 path = self.path
+                if self._busy():
+                    return
                 with fake.lock:
                     if path.startswith("/ntfy/"):
                         fake.notifications.append(body.decode())
@@ -144,6 +159,8 @@ class FakeJira:
 
             def do_PUT(self) -> None:
                 body = json.loads(self._body())
+                if self._busy():
+                    return
                 with fake.lock:
                     match = re.fullmatch(r"/rest/api/3/issue/([A-Z]+-\d+)", self.path)
                     if match and FLAGGED in body["fields"]:
