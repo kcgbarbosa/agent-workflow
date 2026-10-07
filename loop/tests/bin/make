@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """A fake `make` for the loop tests. A marker file in the checked out tree makes a gate fail.
 
-TICKET_FAIL fails every gate. MERGE_FAIL fails `make check` only.
+TICKET_FAIL fails every gate. MERGE_FAIL fails `make check` only. GATE_HANG starts a child process and
+hangs. The child touches FAKE_CLAUDE_DIR/gate-child-survived if it still runs two seconds later.
 """
 
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 targets = sys.argv[1:]
@@ -14,6 +17,12 @@ with Path(os.environ["FAKE_CLAUDE_DIR"], "make.jsonl").open("a") as calls:
     record = {"targets": targets, "cwd": os.getcwd(), "project": os.environ.get("COMPOSE_PROJECT_NAME")}
     calls.write(json.dumps(record) + "\n")
 
+if Path("GATE_HANG").exists():
+    survived = Path(os.environ["FAKE_CLAUDE_DIR"], "gate-child-survived")
+    child = f"import pathlib, time; time.sleep(2); pathlib.Path({str(survived)!r}).touch()"
+    subprocess.Popen([sys.executable, "-c", child])
+    time.sleep(10)
+    sys.exit(2)
 if Path("TICKET_FAIL").exists():
     print("FAILED tests/test_ticket.py::test_it - the ticket gate fails")
     sys.exit(2)

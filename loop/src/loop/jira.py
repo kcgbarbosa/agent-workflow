@@ -61,6 +61,16 @@ class Jira:
             if data.get("isLast", True) or not token:
                 return tickets
 
+    def comments(self, key: str) -> list[str]:
+        texts: list[str] = []
+        while True:
+            path = f"/rest/api/3/issue/{key}/comment?orderBy=created&startAt={len(texts)}"
+            data = self._request("GET", path)
+            page = data.get("comments", [])
+            texts += [adf_to_text(comment.get("body")).strip() for comment in page]
+            if not page or len(texts) >= data.get("total", 0):
+                return texts
+
     def transition(self, key: str, status: str) -> bool:
         data = self._request("GET", f"/rest/api/3/issue/{key}/transitions")
         for transition in data.get("transitions", []):
