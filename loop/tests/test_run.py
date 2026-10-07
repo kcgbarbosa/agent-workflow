@@ -6,7 +6,7 @@ import json
 
 from conftest import EPIC, World, sh
 
-from loop.run import RESTART_PROMPT
+from loop.run import AGENTS, DISPATCH, RESTART_PROMPT
 
 
 def test_the_frontier_runs_blockers_first_and_lands_each_ticket(world: World) -> None:
@@ -454,3 +454,37 @@ def test_each_agent_gets_the_project_mcp_servers(world: World) -> None:
 
     call = world.calls("DEMO-2")[0]
     assert call["mcp_config"] == f"{call['cwd']}/.mcp.json"
+
+
+def test_every_agent_run_gets_the_subagent_tiers_and_the_dispatch_rule(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}, {"delete": ["TICKET_FAIL"]}]})
+
+    assert world.run() == 0
+
+    calls = world.calls()
+    # The ticket run, its fix run, and the review, fix, and PR body runs of the finish.
+    assert [call["name"] for call in calls] == ["DEMO-2", "DEMO-2", *[f"{EPIC}-review"] * 3]
+    assert {call["agents"] for call in calls} == {str(AGENTS)}
+    assert {call["system_prompt"] for call in calls} == {DISPATCH.read_text()}
+
+
+def test_each_agent_line_logs_the_cost_from_the_last_result(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "late_turn": True}]})
+
+    assert world.run() == 0
+
+    agent_lines = [line for line in world.decisions() if line["step"] == "agent"]
+    assert agent_lines and all(line["usage"]["total_cost_usd"] for line in agent_lines)
+    ticket = next(line for line in agent_lines if line["ticket"] == "DEMO-2")
+    assert ticket["usage"] == {
+        "total_cost_usd": 0.75,
+        "num_turns": 4,
+        "duration_ms": 4000,
+        "subagents": {"runner": 1},
+        "models": {
+            "claude-opus-5-5": {"inputTokens": 10, "outputTokens": 20, "costUSD": 0.74},
+            "claude-haiku-5-5": {"inputTokens": 30, "outputTokens": 40, "costUSD": 0.01, "costBasis": "list"},
+        },
+    }
