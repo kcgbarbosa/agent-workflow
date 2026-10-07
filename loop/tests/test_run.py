@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import time
+from pathlib import Path
 
+import pytest
 from conftest import EPIC, World, sh
 
 from loop.run import AGENTS, DISPATCH, RESTART_PROMPT
@@ -73,6 +78,33 @@ def test_a_gate_that_still_fails_after_the_fix_attempts_makes_the_ticket_stuck(w
     assert len(world.calls("DEMO-2")) == 3
     assert world.jira.issues["DEMO-2"].flagged
     assert "ticket gate `make lint test` failed" in world.jira.issues["DEMO-2"].comments[0]
+
+
+def test_a_gate_past_its_limit_fails_and_its_child_processes_stop(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The gates get one second in place of the minutes in loop.toml.
+    real = shutil.which("timeout")
+    assert real
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "timeout").write_text(
+        f'#!/bin/sh\nkill_after=$1 limit=$2\nshift 2\n[ "$1" = make ] && limit=1s\n'
+        f'exec {real} "$kill_after" "$limit" "$@"\n'
+    )
+    (shim / "timeout").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a", "GATE_HANG": "x"}}, {"delete": ["GATE_HANG"]}]})
+
+    assert world.run() == 0
+
+    _, fix = world.calls("DEMO-2")
+    assert "The gate ran past 60 minutes." in fix["prompt"]
+    assert "merge(DEMO-2): Add the first part" in world.epic_log()
+    # The gate's child process would mark that it survived two seconds after it started.
+    time.sleep(2)
+    assert not (world.fakes / "gate-child-survived").exists()
 
 
 def test_a_stuck_ticket_is_flagged_and_the_tickets_downstream_wait(world: World) -> None:
@@ -258,6 +290,36 @@ def test_a_restart_counts_as_a_fix_attempt(world: World) -> None:
     assert world.jira.issues["DEMO-2"].flagged
 
 
+def test_the_comments_on_a_stuck_ticket_reach_the_restarted_agent(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    blocked = {"status": "blocked", "reason": "Which endpoint?", "decisions": ["Kept the old client."]}
+    world.plan({"DEMO-2": [blocked, {"write": {"a.txt": "a"}}]})
+    world.run()
+    stuck = world.jira.issues["DEMO-2"]
+    stuck.comments += ["Use the v2 endpoint.", "Keep the old client too."]
+    stuck.flagged = False
+
+    assert world.run() == 0
+
+    ticket = (world.state / EPIC / "runs" / "DEMO-2" / "ticket.md").read_text()
+    comments = ticket.split("## Comments\n")[1].split("## Loop\n")[0]
+    assert comments.index("Use the v2 endpoint.") < comments.index("Keep the old client too.")
+    assert "The loop stopped" not in comments and "decisions for KC" not in comments
+
+
+def test_a_ticket_whose_comments_cannot_be_read_still_lands(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC, comments=["Use the v2 endpoint."])
+    world.jira.refuse_comments = True
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run() == 0
+
+    assert "merge(DEMO-2): Add the first part" in world.epic_log()
+    assert "## Comments" not in (world.state / EPIC / "runs" / "DEMO-2" / "ticket.md").read_text()
+    steps = [(line["ticket"], line["step"], line["result"]) for line in world.decisions()]
+    assert ("DEMO-2", "tracker-comments", "fail") in steps
+
+
 def test_a_ui_change_lands_only_with_screenshots_and_they_reach_the_ticket(world: World) -> None:
     world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}, {"screenshot": True}]})
@@ -371,6 +433,21 @@ def test_the_epic_pr_is_a_draft_when_a_gate_still_fails(world: World) -> None:
     assert "--draft" in create["args"]
     assert create["body"].startswith("**Failing gate:** `make check`")
     assert world.jira.notifications == [f"{EPIC} pr-draft"]
+
+
+def test_changes_the_review_fix_leaves_uncommitted_make_the_epic_pr_a_draft(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan(
+        {"DEMO-2": [{"write": {"a.txt": "a"}}], f"{EPIC}-review": [{}, {"uncommitted": {"fix.txt": "fix"}}]}
+    )
+
+    assert world.run() == 0
+
+    create = world.records("gh")[-1]
+    assert "--draft" in create["args"]
+    assert create["body"].startswith("**Failing gate:** `git status --porcelain`")
+    assert world.jira.notifications == [f"{EPIC} pr-draft"]
+    assert world.epic_file("fix.txt").read_text() == "fix"
 
 
 def test_an_epic_with_nothing_landed_opens_no_pr(world: World) -> None:

@@ -47,6 +47,9 @@ PR_PROMPT = (
     "table as it is:\n\n{tickets}"
 )
 NOT_LANDED = "Done in the tracker, not landed"
+# The loop's own comments start with these lines, so the ticket file leaves them out.
+STUCK_COMMENT = "The loop stopped this ticket."
+DECISIONS_COMMENT = "The agent made these decisions for KC to check:"
 USAGE_LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit", re.IGNORECASE)
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 # The subagent tiers of every agent run, and the rule for when the head agent hands work to them.
@@ -470,7 +473,7 @@ class EpicRun:
         key = ticket.key
         self.log(key, "stuck", "stuck", detail=f"{reason} {log}")
         self.track(key, "flag", lambda: self.tracker.flag(key))
-        comment = f"The loop stopped this ticket.\n{reason}\nThe log is {log} on {os.uname().nodename}."
+        comment = f"{STUCK_COMMENT}\n{reason}\nThe log is {log} on {os.uname().nodename}."
         self.track(key, "comment", lambda: self.tracker.comment(key, comment))
         self.notify(f"{key} stuck")
         # The containers stop so that the slot ports are free. The volume stays for KC.
@@ -514,13 +517,21 @@ class EpicRun:
             notes.append(f"The review run failed: {error}")
 
         dirty = out(self.epic_worktree, "status", "--porcelain")
-        if dirty:
-            notes.append("The review fix run left changes that are not committed. The PR does not hold them.")
         # The merge gate runs every check of the ticket gate, so it is the only test gate here.
         failing: tuple[str, Path] | None = None
         log_file = run_dir / "finish-merge-gate.log"
         command = self.config.merge_gate
-        if not self.gate(command, self.epic_worktree, self.config.stack_env(EPIC_SLOT, key), log_file, key):
+        if dirty:
+            # The gates would check changes the PR does not hold. The changes stay for KC.
+            log_file = run_dir / "finish-status.log"
+            log_file.write_text(dirty + "\n")
+            failing = ("git status --porcelain", log_file)
+            notes.append(
+                f"The review fix run left changes that are not committed in `{self.epic_worktree}`. "
+                "The PR does not hold them."
+            )
+            self.log(key, "clean-tree", "fail", detail=str(log_file))
+        elif not self.gate(command, self.epic_worktree, self.config.stack_env(EPIC_SLOT, key), log_file, key):
             failing = (" ".join(command), log_file)
         else:
             fixed = out(self.epic_worktree, "diff", "--name-only", f"{before_fix}..HEAD").splitlines()
@@ -666,24 +677,25 @@ class EpicRun:
             key = run.ticket.key
             self.decisions += [f"{key}: {item}" for item in decisions]
             bullets = "\n".join(f"- {item}" for item in decisions)
-            text = f"The agent made these decisions for KC to check:\n{bullets}"
+            text = f"{DECISIONS_COMMENT}\n{bullets}"
             self.track(key, "comment", lambda: self.tracker.comment(key, text))
         return AgentResult(status, reason, session_id)
 
     def gate(
         self, command: tuple[str, ...], cwd: Path, stack: dict[str, str], log_file: Path, key: str
     ) -> bool:
+        """Runs a gate under `timeout`, as the agent runs, so that a gate past its limit stops with its child
+        processes. The output goes to the log file, so the run waits on no pipe that a child holds open.
+        """
         env = {**self.child_env(), **stack}
-        try:
-            result = subprocess.run(
-                command, cwd=cwd, env=env, capture_output=True, text=True,
-                timeout=self.config.gate_timeout_minutes * 60,
-            )  # fmt: skip
-            log_file.write_text(result.stdout + result.stderr)
-            passed = result.returncode == 0
-        except subprocess.TimeoutExpired:
-            log_file.write_text(f"The gate ran past {self.config.gate_timeout_minutes} minutes.\n")
-            passed = False
+        limit = f"{self.config.gate_timeout_minutes}m"
+        with log_file.open("w") as log:
+            wrapped = ["timeout", "--kill-after=60", limit, *command]
+            result = subprocess.run(wrapped, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT)
+        if result.returncode == TIMED_OUT:
+            with log_file.open("a") as log:
+                log.write(f"The gate ran past {self.config.gate_timeout_minutes} minutes.\n")
+        passed = result.returncode == 0
         commit = out(cwd, "rev-parse", "HEAD")
         self.log(key, " ".join(command), "pass" if passed else "fail", commit=commit, detail=str(log_file))
         return passed
@@ -711,10 +723,16 @@ class EpicRun:
     # --- Records ---
 
     def write_ticket_file(self, run: TicketRun, gate: tuple[str, ...]) -> None:
-        """The ticket text and how the loop runs it. The gate is the one the loop checks this work with."""
+        """The ticket text, its comments, and how the loop runs it. The gate is the one the loop checks this
+        work with.
+        """
         ticket = run.ticket
-        text = (
-            f"# {ticket.key}: {ticket.summary}\n\n{ticket.text.strip()}\n\n"
+        text = f"# {ticket.key}: {ticket.summary}\n\n{ticket.text.strip()}\n\n"
+        comments = self.comments(ticket.key)
+        if comments:
+            text += "## Comments\n\nThe comments on the ticket, oldest first, without the loop's own.\n\n"
+            text += "\n\n---\n\n".join(comments) + "\n\n"
+        text += (
             "## Loop\n\n"
             f"- The Epic is {self.epic_key}. The Epic branch is `{self.epic_branch}`.\n"
             f"- Commit on the branch `{run.branch}` with {ticket.key} as the commit scope. "
@@ -725,6 +743,15 @@ class EpicRun:
         if self.config.agent_hint:
             text += f"- {self.config.agent_hint}\n"
         (run.run_dir / "ticket.md").write_text(text)
+
+    def comments(self, key: str) -> list[str]:
+        """The comments on the ticket other than the loop's own. A failed read is logged and gives none."""
+        try:
+            comments = self.tracker.comments(key)
+        except Exception as error:  # noqa: BLE001 - a failed read never makes the ticket stuck.
+            self.log(key, "tracker-comments", "fail", detail=str(error))
+            return []
+        return [text for text in comments if text and not text.startswith((STUCK_COMMENT, DECISIONS_COMMENT))]
 
     def track(self, key: str, step: str, call: Callable[[], object]) -> None:
         """A tracker call that fails is logged. It does not stop the ticket."""

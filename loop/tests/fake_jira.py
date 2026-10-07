@@ -10,6 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 FLAGGED = "customfield_10021"
+# A read of the comments gets them two at a time, so a ticket with more comments takes more than one page.
+COMMENT_PAGE = 2
 CATEGORY = {"To Do": "new", "In Progress": "indeterminate", "In Review": "indeterminate", "Done": "done"}
 
 
@@ -33,6 +35,8 @@ class FakeJira:
         self.notifications: list[str] = []
         # The HTTP codes that the next requests get, one each, as from a busy Jira. A 429 asks for 7 seconds.
         self.errors: list[int] = []
+        # When True, a read of the comments gets HTTP 403, as for a token that may not see them.
+        self.refuse_comments = False
         self.lock = threading.Lock()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -57,12 +61,7 @@ class FakeJira:
             }
             for key in issue.blockers
         ]
-        description = {
-            "type": "doc",
-            "content": [
-                {"type": "paragraph", "content": [{"type": "text", "text": f"Build {issue.summary}."}]}
-            ],
-        }
+        description = {"type": "doc", "content": [_paragraph(f"Build {issue.summary}.")]}
         return {
             "key": issue.key,
             "fields": {
@@ -74,6 +73,16 @@ class FakeJira:
                 FLAGGED: [{"value": "Impediment"}] if issue.flagged else None,
             },
         }
+
+    @staticmethod
+    def _comments(issue: Issue, path: str) -> dict[str, Any]:
+        found = re.search(r"startAt=(\d+)", path)
+        start = int(found[1]) if found else 0
+        page = [
+            {"body": {"type": "doc", "content": [_paragraph(line) for line in text.splitlines()]}}
+            for text in issue.comments[start : start + COMMENT_PAGE]
+        ]
+        return {"startAt": start, "maxResults": COMMENT_PAGE, "total": len(issue.comments), "comments": page}
 
     @staticmethod
     def _status(name: str) -> dict[str, Any]:
@@ -122,6 +131,10 @@ class FakeJira:
                         targets = [name for name in CATEGORY if name != issue.status]
                         transitions = [{"id": name, "name": name, "to": {"name": name}} for name in targets]
                         return self._send({"transitions": transitions})
+                    if match := re.fullmatch(r"/rest/api/3/issue/([A-Z]+-\d+)/comment", path):
+                        if fake.refuse_comments:
+                            return self._send({"errorMessages": ["no permission"]}, 403)
+                        return self._send(fake._comments(fake.issues[match[1]], self.path))
                     if match := re.fullmatch(r"/rest/api/3/issue/([A-Z]+-\d+)", path):
                         return self._send(fake._json(fake.issues[match[1]]))
                 self._send({"errorMessages": ["not found"]}, 404)
@@ -169,3 +182,7 @@ class FakeJira:
                 self._send({"errorMessages": ["not found"]}, 404)
 
         return Handler
+
+
+def _paragraph(text: str) -> dict[str, Any]:
+    return {"type": "paragraph", "content": [{"type": "text", "text": text}]}

@@ -2,11 +2,11 @@
 """A fake `claude -p` for the loop tests. It never calls a model.
 
 FAKE_CLAUDE_DIR/plan.json maps a session name (`-n`) to a list of steps. Each call takes the next step.
-A step can write and delete files and commit them, save a screenshot or a PR body in LOOP_RUN_DIR, return a
-status, or fail with a usage limit or a crash after its commit. A step with `late_turn` adds a second
-result with no status, as when a background subagent wakes the session after its status. A step with
-`peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to FAKE_CLAUDE_DIR/peek.json. With no
-step left, the call returns done and changes nothing.
+A step can write and delete files and commit them, write files with `uncommitted` and not commit them, save
+a screenshot or a PR body in LOOP_RUN_DIR, return a status, or fail with a usage limit or a crash after its
+commit. A step with `late_turn` adds a second result with no status, as when a background subagent wakes the
+session after its status. A step with `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to
+FAKE_CLAUDE_DIR/peek.json. With no step left, the call returns done and changes nothing.
 
 The output is stream-json: one event per line, with one result event per turn. Each result event reports a
 cost, and the late turn reports a higher one, as the session's cost grows.
@@ -58,6 +58,8 @@ if step.get("write") or step.get("delete"):
     subprocess.run(["git", "add", "-A"], check=True)
     message = step.get("commit", f"feat({name}): change")
     subprocess.run(["git", "commit", "-q", "-m", message], check=True)
+for path, content in step.get("uncommitted", {}).items():
+    Path(path).write_text(content)
 if step.get("pr_body"):
     Path(os.environ["LOOP_RUN_DIR"], "pr-body.md").write_text(step["pr_body"])
 if step.get("screenshot"):

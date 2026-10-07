@@ -36,6 +36,10 @@ class Tracker(Protocol):
 
     def children(self, epic_key: str) -> list[Ticket]: ...
 
+    def comments(self, key: str) -> list[str]:
+        """The text of each comment on the ticket, oldest first."""
+        ...
+
     def transition(self, key: str, status: str) -> bool:
         """Moves the ticket to the status. Returns False when no transition leads there."""
         ...
