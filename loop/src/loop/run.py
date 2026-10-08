@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import threading
+import time
 import traceback
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -37,7 +38,37 @@ AGENT_SCHEMA = json.dumps(
         "additionalProperties": False,
     }
 )
+# A review returns each finding that needs a change, and the head agent fixes them in its own session.
+REVIEW_SCHEMA = json.dumps(
+    {
+        **json.loads(AGENT_SCHEMA),
+        "properties": {
+            **json.loads(AGENT_SCHEMA)["properties"],
+            "findings": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Each problem that needs a change, with its file and line or its screenshot.",
+            },
+        },
+        "required": ["status", "reason", "decisions", "findings"],
+    }
+)
+# The reviews run in their own sessions on this model, so the head agent's context stays small.
+REVIEW_MODEL = "claude-sonnet-5-5"
+REVIEW_RULES = (
+    "Change no file, and do not commit or push. Return each problem that needs a change in `findings`. "
+    "Leave out a judgement call that you would not change."
+)
+CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. " + REVIEW_RULES
+UI_REVIEW_PROMPT = "/{skill} The run folder is {run_dir}. The base is `{base}`. " + REVIEW_RULES
+REVIEW_FIX_PROMPT = (
+    "The {review} found these problems:\n\n{findings}\n\nFix each one that is a real problem, and commit the "
+    "fixes with {key} as the commit scope. Give each one you leave as it is in `decisions`, with the reason."
+)
 RESTART_PROMPT = "A previous run was interrupted. Check the diff against the ticket and continue."
+USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work."
+# A limit that resets later than this, such as the weekly one, stops the loop.
+MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60
 FIX_PROMPT = (
     "Fix each finding of the review above that is a real problem. Commit the fixes with "
     "{key} as the commit scope. Return blocked with the reason when a finding needs KC."
@@ -55,6 +86,8 @@ STUCK_COMMENT = "The loop stopped this ticket."
 DECISIONS_COMMENT = "The agent made these decisions for KC to check:"
 USAGE_LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit", re.IGNORECASE)
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+# The commit that the screenshots in a run folder show.
+UI_COMMIT_FILE = "ui-review.commit"
 # The subagent tiers of every agent run, and the rule for when the head agent hands work to them.
 AGENTS = Path(__file__).with_name("agents.json")
 DISPATCH = Path(__file__).with_name("dispatch.md")
@@ -74,7 +107,10 @@ Outcome = Literal["landed", "stuck", "usage-limit"]
 
 
 class UsageLimit(Exception):
-    pass
+    def __init__(self, message: str, reset: float | None = None, session: str | None = None) -> None:
+        super().__init__(message)
+        self.reset = reset
+        self.session = session
 
 
 class AgentFailed(Exception):
@@ -86,6 +122,7 @@ class AgentResult:
     status: Literal["done", "blocked"]
     reason: str
     session: str
+    findings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -95,6 +132,8 @@ class GateFailure:
     log: Path
     # The failure is on the Epic branch, so the ticket branch takes the Epic branch before the fix.
     on_epic: bool = False
+    # The fix of a code review finding is part of the build, not a fix attempt.
+    attempt: bool = True
 
 
 @dataclass
@@ -120,6 +159,10 @@ def next_log(run_dir: Path, stem: str, suffix: str) -> Path:
     """The next numbered log in the run folder, so that a restart keeps the logs of earlier runs."""
     number = len(list(run_dir.glob(f"{stem}-*{suffix}"))) + 1
     return run_dir / f"{stem}-{number}{suffix}"
+
+
+def pause(seconds: float) -> None:
+    time.sleep(seconds)
 
 
 def tail(text: str, lines: int = LOG_TAIL_LINES) -> str:
@@ -150,6 +193,15 @@ def agent_status(result: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(output, dict) or output.get("status") not in ("done", "blocked"):
         return None
     return output
+
+
+def usage_reset(events: list[dict[str, Any]]) -> float | None:
+    """The time, in epoch seconds, when the usage limit that stopped a run resets."""
+    for event in reversed(events):
+        info = event.get("rate_limit_info") if event.get("type") == "rate_limit_event" else None
+        if isinstance(info, dict) and info.get("status") == "rejected" and info.get("resetsAt"):
+            return float(info["resetsAt"])
+    return None
 
 
 def agent_usage(result: dict[str, Any]) -> dict[str, Any]:
@@ -227,6 +279,8 @@ class EpicRun:
         self.epic_summary = ""
         self.decisions: list[tuple[Ticket, str]] = []
         self.settings = agent_settings(config)
+        self._pause_lock = threading.Lock()
+        self.paused_until = 0.0
 
     # --- Run ---
 
@@ -352,10 +406,7 @@ class EpicRun:
         with self._repo_lock:
             repo.add_worktree(self.repo, worktree, branch, self.epic_branch)
         run = TicketRun(ticket, slot, branch, worktree, run_dir, restart=existing is not None)
-        # Screenshots from an earlier run do not show the code of this run.
-        for shot in screenshots(run_dir):
-            shot.unlink()
-        self.write_ticket_file(run, self.config.ticket_gate)
+        self.write_ticket_file(run, self.config.ticket_gate, reviews=True)
         if ticket.status != self.config.in_progress:
             self.track(
                 ticket.key, "status", lambda: self.tracker.transition(ticket.key, self.config.in_progress)
@@ -371,21 +422,27 @@ class EpicRun:
             prompt += f"\n\n{RESTART_PROMPT}"
             attempts = 1
         result = self.ticket_agent(run, prompt, session=None)
+        reviewed = False
         while True:
             if result.status == "blocked":
                 reason = f"The agent is blocked: {result.reason}"
                 return self.stuck(run.ticket, reason, run.agent_log or run.run_dir, run.slot)
-            failure = self.ticket_gate(run) or self.ui_gate(run)
+            failure = self.ticket_gate(run)
+            if failure is None and not reviewed:
+                reviewed = True
+                failure = self.code_review(run)
+            failure = failure or self.ui_gate(run)
             if failure is None:
                 landed = self.land(run)
                 if not isinstance(landed, GateFailure):
                     return landed
                 failure = landed
-            if attempts >= self.config.fix_attempts:
-                return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
+            if failure.attempt:
+                if attempts >= self.config.fix_attempts:
+                    return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
+                attempts += 1
             if failure.on_epic:
                 failure = self.merge_epic(run, failure)
-            attempts += 1
             result = self.ticket_agent(run, failure.prompt, session=result.session)
 
     def ticket_agent(self, run: TicketRun, prompt: str, session: str | None) -> AgentResult:
@@ -421,22 +478,58 @@ class EpicRun:
         )
         return GateFailure(reason, prompt, log_file)
 
+    def code_review(self, run: TicketRun) -> GateFailure | None:
+        """`/code-review` in its own session. Its findings go back to the head agent's session."""
+        key = run.ticket.key
+        prompt = CODE_REVIEW_PROMPT.format(base=self.epic_branch, ticket=run.run_dir / "ticket.md")
+        review = self.review_agent(run, prompt, f"{key}-review")
+        if not review.findings:
+            self.log(key, "code-review", "pass")
+            return None
+        self.log(key, "code-review", "findings", detail=f"{len(review.findings)} findings")
+        reason = "The code review found problems."
+        fix = self.fix_prompt("code review", review.findings, key)
+        return GateFailure(reason, fix, run.agent_log or run.run_dir, attempt=False)
+
     def ui_gate(self, run: TicketRun) -> GateFailure | None:
-        """A diff that touches a UI path lands only with screenshots in the run folder."""
+        """A diff that touches a UI path lands only after a UI review of its last commit, with screenshots."""
+        key = run.ticket.key
         changed = out(run.worktree, "diff", "--name-only", f"{self.epic_branch}...HEAD").splitlines()
         run.ui_touched = any(self.is_ui_path(path) for path in changed)
         if not run.ui_touched:
             return None
-        if screenshots(run.run_dir):
-            self.log(run.ticket.key, "ui-gate", "pass")
+        head = out(run.worktree, "rev-parse", "HEAD")
+        reviewed = run.run_dir / UI_COMMIT_FILE
+        if screenshots(run.run_dir) and reviewed.exists() and reviewed.read_text().strip() == head:
+            self.log(key, "ui-gate", "pass", commit=head, detail="The screenshots show this commit.")
             return None
-        reason = f"The change touches a UI path and the run folder {run.run_dir} has no screenshots."
-        self.log(run.ticket.key, "ui-gate", "fail", detail=reason)
-        prompt = (
-            f"This change touches a UI path. Run the `{self.config.ui_skill}` skill, "
-            f"and save the screenshots in the run folder {run.run_dir}."
-        )
-        return GateFailure(reason, prompt, run.run_dir)
+        # Screenshots of an earlier commit do not show this code.
+        reviewed.unlink(missing_ok=True)
+        for shot in screenshots(run.run_dir):
+            shot.unlink()
+        skill = self.config.ui_skill
+        prompt = UI_REVIEW_PROMPT.format(skill=skill, run_dir=run.run_dir, base=self.epic_branch)
+        review = self.review_agent(run, prompt, f"{key}-ui")
+        if review.findings:
+            self.log(key, "ui-gate", "fail", detail=f"{len(review.findings)} faults")
+            fix = self.fix_prompt("UI review", review.findings, key)
+            return GateFailure("The UI review found faults.", fix, run.agent_log or run.run_dir)
+        if not screenshots(run.run_dir):
+            raise AgentFailed(f"The UI review saved no screenshots in {run.run_dir}.")
+        reviewed.write_text(head + "\n")
+        self.log(key, "ui-gate", "pass", commit=head)
+        return None
+
+    def review_agent(self, run: TicketRun, prompt: str, name: str) -> AgentResult:
+        """A review session with an empty context. A blocked review makes the ticket stuck."""
+        review = self.agent(run, prompt, None, name=name, schema=REVIEW_SCHEMA, model=REVIEW_MODEL)
+        if review.status == "blocked":
+            raise AgentFailed(f"The review {name} is blocked: {review.reason}")
+        return review
+
+    def fix_prompt(self, review: str, findings: list[str], key: str) -> str:
+        listed = "\n".join(f"- {finding}" for finding in findings)
+        return REVIEW_FIX_PROMPT.format(review=review, findings=listed, key=key)
 
     def is_ui_path(self, path: str) -> bool:
         name = path.rsplit("/", 1)[-1]
@@ -690,20 +783,57 @@ class EpicRun:
 
     # --- Commands ---
 
-    def agent(self, run: TicketRun, prompt: str, session: str | None, name: str | None = None) -> AgentResult:
-        """Runs `claude -p` with an empty context, or resumes a session."""
+    def agent(
+        self,
+        run: TicketRun,
+        prompt: str,
+        session: str | None,
+        name: str | None = None,
+        schema: str = AGENT_SCHEMA,
+        model: str | None = None,
+    ) -> AgentResult:
+        """Runs `claude -p` with an empty context, or resumes a session.
+
+        A usage limit that resets soon pauses the run, and the session then resumes where it stopped.
+        """
         name = name or run.ticket.key
+        while True:
+            try:
+                return self.agent_run(run, prompt, session, name, schema, model)
+            except UsageLimit as error:
+                if error.reset is None or error.reset - time.time() > MAX_USAGE_WAIT_SECONDS:
+                    raise
+                self.pause_until(error.reset, name)
+                if error.session:
+                    prompt, session = USAGE_RESUME_PROMPT, error.session
+
+    def pause_until(self, reset: float, name: str) -> None:
+        """Waits for the usage limit to reset. Parallel runs that hit the same limit notify once."""
+        until = datetime.fromtimestamp(reset, UTC).isoformat(timespec="seconds")
+        self.log(name, "agent", "usage-pause", detail=f"The usage limit resets at {until}.")
+        with self._pause_lock:
+            if reset > self.paused_until:
+                self.paused_until = reset
+                self.notify(f"{self.epic_key} paused")
+        # A minute past the reset, so the limit is surely clear.
+        pause(max(0.0, reset - time.time()) + 60)
+
+    def agent_run(
+        self, run: TicketRun, prompt: str, session: str | None, name: str, schema: str, model: str | None
+    ) -> AgentResult:
         limit = f"{self.config.agent_timeout_minutes}m"
         command = ["timeout", "--kill-after=60", limit, "claude", "-p", prompt]
         if session:
             command += ["--resume", session]
+        if model:
+            command += ["--model", model]
         # Each worktree is a new folder, where nobody approved the project `.mcp.json`. With the flag,
         # the loop does not depend on how `claude -p` treats a server that waits for approval.
         if (run.worktree / ".mcp.json").exists():
             command += ["--mcp-config", str(run.worktree / ".mcp.json")]
         command += [
             "--permission-mode", "auto", "--permission-prompts", "none",
-            "--output-format", "stream-json", "--verbose", "--json-schema", AGENT_SCHEMA, "-n", name,
+            "--output-format", "stream-json", "--verbose", "--json-schema", schema, "-n", name,
             "--agents", str(AGENTS), "--append-system-prompt", DISPATCH.read_text(),
             "--settings", self.settings,
         ]  # fmt: skip
@@ -721,7 +851,8 @@ class EpicRun:
         errors = errors_log.read_text()
         # Each turn ends with a result event. A background subagent that finishes after the status
         # wakes the session for one more turn, and that turn's result can have no status.
-        results = [event for event in json_lines(run.agent_log.read_text()) if event.get("type") == "result"]
+        events = json_lines(run.agent_log.read_text())
+        results = [event for event in events if event.get("type") == "result"]
         data = results[-1] if results else {}
         cost = agent_usage(data)
         if result.returncode == TIMED_OUT:
@@ -730,7 +861,9 @@ class EpicRun:
         message = f"{data.get('result', '')}\n{errors}"
         if data.get("is_error") or not data:
             if data.get("api_error_status") in (429, "429") or USAGE_LIMIT.search(message):
-                raise UsageLimit(f"{name}: {message.strip()[:200]}")
+                started = next((event.get("session_id") for event in events if event.get("session_id")), None)
+                stopped = data.get("session_id") or started or session
+                raise UsageLimit(f"{name}: {message.strip()[:200]}", usage_reset(events), stopped)
             self.log(name, "agent", "error", session=data.get("session_id"), usage=cost)
             raise AgentFailed(f"The agent exited with code {result.returncode}: {message.strip()[:300]}")
         output = next(filter(None, map(agent_status, reversed(results))), None)
@@ -748,7 +881,8 @@ class EpicRun:
             bullets = "\n".join(f"- {item}" for item in decisions)
             text = f"{DECISIONS_COMMENT}\n{bullets}"
             self.track(key, "comment", lambda: self.tracker.comment(key, text))
-        return AgentResult(status, reason, session_id)
+        findings = [str(item) for item in output.get("findings", [])]
+        return AgentResult(status, reason, session_id, findings)
 
     def gate(
         self, command: tuple[str, ...], cwd: Path, stack: dict[str, str], log_file: Path, key: str
@@ -813,9 +947,9 @@ class EpicRun:
 
     # --- Records ---
 
-    def write_ticket_file(self, run: TicketRun, gate: tuple[str, ...]) -> None:
+    def write_ticket_file(self, run: TicketRun, gate: tuple[str, ...], reviews: bool = False) -> None:
         """The ticket text, its comments, and how the loop runs it. The gate is the one the loop checks this
-        work with.
+        work with. With `reviews`, the loop runs the reviews after the agent, in their own sessions.
         """
         ticket = run.ticket
         text = f"# {ticket.key}: {ticket.summary}\n\n{ticket.text.strip()}\n\n"
@@ -828,9 +962,16 @@ class EpicRun:
             f"- The Epic is {self.epic_key}. The Epic branch is `{self.epic_branch}`.\n"
             f"- Commit on the branch `{run.branch}` with {ticket.key} as the commit scope. "
             "Do not push, and do not open a pull request.\n"
-            f"- The run folder is `{run.run_dir}`. A UI review saves its screenshots there.\n"
-            f"- The loop checks this work with `{shlex.join(gate)}`. Make it pass before you return done.\n"
+            f"- The run folder is `{run.run_dir}`."
+            + ("\n" if reviews else " A UI review saves its screenshots there.\n")
+            + f"- The loop checks this work with `{shlex.join(gate)}`. Make it pass before you return done.\n"
         )
+        if reviews:
+            text += (
+                "- When the gate passes, the loop runs the code review, and the UI review for a UI change, "
+                "in their own sessions, and sends you what they find. Return done when the work is committed "
+                "and the gate passes.\n"
+            )
         if self.config.agent_hint:
             text += f"- {self.config.agent_hint}\n"
         (run.run_dir / "ticket.md").write_text(text)

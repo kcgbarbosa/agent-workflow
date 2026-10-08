@@ -3,8 +3,8 @@
 
 FAKE_CLAUDE_DIR/plan.json maps a session name (`-n`) to a list of steps. Each call takes the next step.
 A step can write and delete files and commit them, write files with `uncommitted` and not commit them, save
-a screenshot or a PR body in LOOP_RUN_DIR, return a status, or fail with a usage limit or a crash after its
-commit. A step with `late_turn` adds a second result with no status, as when a background subagent wakes the
+a screenshot or a PR body in LOOP_RUN_DIR, return a status and review findings, or fail with a usage limit
+or a crash after its commit. A usage limit with `resets_in` reports when it resets, in seconds from now. A step with `late_turn` adds a second result with no status, as when a background subagent wakes the
 session after its status. A step with `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to
 FAKE_CLAUDE_DIR/peek.json. With no step left, the call returns done and changes nothing.
 
@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -36,6 +37,7 @@ with (home / "calls.jsonl").open("a") as calls:
         "db_port": os.environ.get("DB_PORT"),
         "run_dir": os.environ.get("LOOP_RUN_DIR"),
         "schema": json.loads(args[args.index("--json-schema") + 1]),
+        "model": args[args.index("--model") + 1] if "--model" in args else None,
         "mcp_config": args[args.index("--mcp-config") + 1] if "--mcp-config" in args else None,
         "agents": args[args.index("--agents") + 1] if "--agents" in args else None,
         "system_prompt": args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else None,
@@ -72,6 +74,9 @@ if step.get("peek"):
     logs = {log.name: log.read_text() for log in Path(os.environ["LOOP_RUN_DIR"]).glob("agent-*")}
     (home / "peek.json").write_text(json.dumps(logs))
 if step.get("error") == "usage":
+    if "resets_in" in step:
+        info = {"status": "rejected", "resetsAt": int(time.time()) + step["resets_in"], "rateLimitType": "five_hour"}
+        print(json.dumps({"type": "rate_limit_event", "rate_limit_info": info, "session_id": session}))
     print(json.dumps({"type": "result", "is_error": True, "result": "Claude usage limit reached", "session_id": session}))
     sys.exit(1)
 if step.get("error") == "crash":
@@ -89,6 +94,8 @@ def cost(dollars: float, turns: int) -> dict[str, object]:
 
 
 output = {"status": step.get("status", "done"), "reason": step.get("reason", ""), "decisions": step.get("decisions", [])}
+if "findings" in record["schema"]["properties"]:
+    output["findings"] = step.get("findings", [])
 print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output, **cost(0.5, 3)}))
 if step.get("late_turn"):
     print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied.", **cost(0.75, 4)}))

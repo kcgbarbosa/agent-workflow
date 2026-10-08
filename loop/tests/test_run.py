@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 from conftest import EPIC, World, sh
 
-from loop.run import AGENTS, DISPATCH, RESTART_PROMPT
+from loop import run as loop_run
+from loop.run import AGENTS, DISPATCH, RESTART_PROMPT, REVIEW_MODEL, USAGE_RESUME_PROMPT
 
 
 def test_the_frontier_runs_blockers_first_and_lands_each_ticket(world: World) -> None:
@@ -26,7 +27,8 @@ def test_the_frontier_runs_blockers_first_and_lands_each_ticket(world: World) ->
 
     assert world.run() == 0
 
-    assert {call["name"] for call in world.calls()} == {"DEMO-2", "DEMO-3", f"{EPIC}-review"}
+    names = {call["name"] for call in world.calls()}
+    assert names == {"DEMO-2", "DEMO-2-review", "DEMO-3", "DEMO-3-review", f"{EPIC}-review"}
     merges = [subject for subject in world.epic_log() if subject.startswith("merge(")]
     assert merges == ["merge(DEMO-3): Add the second part", "merge(DEMO-2): Add the first part"]
     steps = [(line["ticket"], line["step"], line["result"]) for line in world.decisions()]
@@ -318,9 +320,12 @@ def test_the_circuit_breaker_stops_the_loop(world: World) -> None:
     assert world.records("gh") == []
 
 
-def test_a_usage_limit_stops_the_loop_and_a_restart_continues_the_branch(world: World) -> None:
+@pytest.mark.parametrize("limit", [{"error": "usage"}, {"error": "usage", "resets_in": 3 * 24 * 3600}])
+def test_a_usage_limit_with_no_reset_soon_stops_the_loop_and_a_restart_continues_the_branch(
+    world: World, limit: dict[str, object]
+) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
-    world.plan({"DEMO-2": [{"error": "usage"}, {"write": {"a.txt": "a"}}]})
+    world.plan({"DEMO-2": [limit, {"write": {"a.txt": "a"}}]})
 
     assert world.run() == 1
     assert world.jira.notifications == [f"{EPIC} stopped"]
@@ -335,6 +340,25 @@ def test_a_usage_limit_stops_the_loop_and_a_restart_continues_the_branch(world: 
     run_dir = world.state / EPIC / "runs" / "DEMO-2"
     assert "usage limit" in (run_dir / "agent-1.jsonl").read_text()
     assert (run_dir / "agent-2.jsonl").exists()
+
+
+def test_a_usage_limit_that_resets_soon_pauses_and_resumes_the_session(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pauses: list[float] = []
+    monkeypatch.setattr(loop_run, "pause", pauses.append)
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"error": "usage", "resets_in": 120}, {"write": {"a.txt": "a"}}]})
+
+    assert world.run() == 0
+
+    limited, resumed = world.calls("DEMO-2")[:2]
+    assert resumed["resume"] is not None and resumed["prompt"] == USAGE_RESUME_PROMPT
+    started = (world.state / EPIC / "runs" / "DEMO-2" / "agent-1.jsonl").read_text()
+    assert resumed["resume"] in started
+    assert len(pauses) == 1 and 170 <= pauses[0] <= 181
+    assert world.jira.notifications[0] == f"{EPIC} paused"
+    assert "merge(DEMO-2): Add the first part" in world.epic_log()
 
 
 def test_a_remote_branch_with_the_key_is_adopted_as_a_restart(world: World) -> None:
@@ -395,14 +419,105 @@ def test_a_ticket_whose_comments_cannot_be_read_still_lands(world: World) -> Non
     assert ("DEMO-2", "tracker-comments", "fail") in steps
 
 
-def test_a_ui_change_lands_only_with_screenshots_and_they_reach_the_ticket(world: World) -> None:
-    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
-    world.plan({"DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}, {"screenshot": True}]})
+def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the_agent(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    finding = "a.txt:1 holds the wrong letter."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}}, {"write": {"a.txt": "b"}}],
+            "DEMO-2-review": [{"findings": [finding]}],
+        }
+    )
 
     assert world.run() == 0
 
-    review = world.calls("DEMO-2")[1]
-    assert "ui-review" in review["prompt"] and review["run_dir"] in review["prompt"]
+    (review,) = world.calls("DEMO-2-review")
+    assert review["prompt"].startswith("/code-review feat/DEMO-1-the-loop ")
+    assert review["resume"] is None and review["model"] == REVIEW_MODEL
+    assert "findings" in review["schema"]["required"]
+    first, fix = world.calls("DEMO-2")
+    assert first["model"] is None
+    assert fix["resume"] is not None and finding in fix["prompt"]
+    assert world.epic_file("a.txt").read_text() == "b"
+    ticket = (world.state / EPIC / "runs" / "DEMO-2" / "ticket.md").read_text()
+    assert "the loop runs the code review, and the UI review for a UI change, in their own sessions" in ticket
+    assert "A UI review saves" not in ticket
+
+
+def test_a_code_review_fix_is_not_a_fix_attempt(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC, status="In Progress")
+    sh(world.repo, "git", "branch", "feat/DEMO-2-first-part")
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}, {"delete": ["TICKET_FAIL"]}, {}],
+            "DEMO-2-review": [{"findings": ["a.txt:1 is wrong."]}],
+        }
+    )
+
+    assert world.run() == 0
+
+    assert len(world.calls("DEMO-2")) == 3
+    assert not world.jira.issues["DEMO-2"].flagged
+
+
+def test_a_ui_change_lands_only_after_a_ui_review_and_its_screenshots_reach_the_ticket(world: World) -> None:
+    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}], "DEMO-2-ui": [{"screenshot": True}]})
+
+    assert world.run() == 0
+
+    (review,) = world.calls("DEMO-2-ui")
+    assert review["prompt"].startswith("/ui-review ") and review["run_dir"] in review["prompt"]
+    assert review["resume"] is None and review["model"] == REVIEW_MODEL
+    assert len(world.calls("DEMO-2")) == 1
+    assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
+
+
+def test_a_ui_fault_goes_back_to_the_agent_and_the_fixed_commit_gets_a_new_review(world: World) -> None:
+    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
+    fault = "home--intermediary--webkit-es.png shows English text."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}, {"write": {"frontend/src/home.tsx": "y"}}],
+            "DEMO-2-ui": [{"screenshot": True, "findings": [fault]}, {"screenshot": True}],
+        }
+    )
+
+    assert world.run() == 0
+
+    fix = world.calls("DEMO-2")[1]
+    assert fix["resume"] is not None and fault in fix["prompt"]
+    assert len(world.calls("DEMO-2-ui")) == 2
+    gates = [line["result"] for line in world.decisions() if line["step"] == "ui-gate"]
+    assert gates == ["fail", "pass"]
+
+
+def test_a_ui_review_that_saves_no_screenshots_makes_the_ticket_stuck(world: World) -> None:
+    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}]})
+
+    world.run()
+
+    assert world.jira.issues["DEMO-2"].flagged
+    assert "saved no screenshots" in world.jira.issues["DEMO-2"].comments[0]
+
+
+def test_a_restart_keeps_the_screenshots_of_the_same_commit(world: World) -> None:
+    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}, {"error": "usage"}],
+            "DEMO-2-ui": [{"screenshot": True}],
+        }
+    )
+    # The merge gate fails for a reason outside the code, and the fix run stops at a usage limit.
+    (world.fakes / "merge-gate-fails").touch()
+    assert world.run() == 1
+    (world.fakes / "merge-gate-fails").unlink()
+
+    assert world.run() == 0
+
+    assert len(world.calls("DEMO-2-ui")) == 1
     assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
 
 
@@ -635,8 +750,8 @@ def test_every_agent_run_gets_the_subagent_tiers_and_the_dispatch_rule(world: Wo
     assert world.run() == 0
 
     calls = world.calls()
-    # The ticket run, its fix run, and the review, fix, and PR body runs of the finish.
-    assert [call["name"] for call in calls] == ["DEMO-2", "DEMO-2", *[f"{EPIC}-review"] * 3]
+    # The ticket run, its fix run, its code review, and the review, fix, and PR body runs of the finish.
+    assert [call["name"] for call in calls] == ["DEMO-2", "DEMO-2", "DEMO-2-review", *[f"{EPIC}-review"] * 3]
     assert {call["agents"] for call in calls} == {str(AGENTS)}
     assert {call["system_prompt"] for call in calls} == {DISPATCH.read_text()}
 
