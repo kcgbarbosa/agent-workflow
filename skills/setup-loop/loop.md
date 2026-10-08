@@ -18,6 +18,7 @@ Every repo keeps these rules. Change a rule here, on purpose, and give the reaso
    - `-n` names the session after the ticket key.
    - `--mcp-config` gives the run the worktree's `.mcp.json` when it has one, because nobody approved the project's MCP servers in a new worktree folder.
    - `--agents` gives the loop's subagent tiers in [`agents.json`](../../loop/src/loop/agents.json), and `--append-system-prompt` adds the rule for when to hand work to them in [`dispatch.md`](../../loop/src/loop/dispatch.md). A run of `implement` outside the loop gets neither.
+   - `--settings` gives the rules of [`agent_settings`](../../loop/src/loop/run.py): the gate commands run without the classifier, and the classifier learns that the `<name>-<key>` stacks are the loop's own, so an agent can stop one to free a port. No agent run deletes a volume. Nobody answers a prompt in a run, so a routine action that auto mode denies makes a ticket stuck.
    - `--resume` continues the session for a fix attempt.
 
    The schema returns `status` (`done` or `blocked`), `reason`, and `decisions`, the judgement calls for KC to check. The script comments the decisions on the ticket and lists them in the Epic PR. Each turn ends with a result event, and the script takes the status from the last result event that has one. A `blocked` status makes the ticket stuck.

@@ -57,6 +57,22 @@ def test_each_agent_gets_the_ticket_file_the_secrets_and_its_own_stack(world: Wo
     assert land["ticket"] == "DEMO-2" and land["commit"]
 
 
+def test_each_agent_may_run_the_gates_and_reset_its_stack_without_a_prompt(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    world.run()
+
+    settings = world.calls("DEMO-2")[0]["settings"]
+    assert settings["permissions"]["allow"] == [
+        "Bash(make check)", "Bash(make check *)", "Bash(make lint test)", "Bash(make lint test *)",
+    ]  # fmt: skip
+    assert "Bash(docker volume rm *)" in settings["permissions"]["deny"]
+    rules = settings["autoMode"]["allow"]
+    assert rules[0] == "$defaults" and settings["autoMode"]["environment"][0] == "$defaults"
+    assert any("`demo-<ticket key>`" in rule and "The volumes stay." in rule for rule in rules)
+
+
 def test_the_run_writes_the_board_that_loop_watch_shows(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.jira.add("DEMO-3", "Add the second part", parent=EPIC, blockers=["DEMO-2"])
