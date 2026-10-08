@@ -130,6 +130,10 @@ def test_a_stuck_ticket_is_flagged_and_the_tickets_downstream_wait(world: World)
     assert "merge(DEMO-4): Separate work" in world.epic_log()
     body = world.records("gh")[-1]["body"]
     assert "| DEMO-2 | Stuck |" in body and "| DEMO-3 | Not built |" in body
+    create = world.records("gh")[-1]
+    assert "--draft" in create["args"]
+    assert create["body"].startswith("**Unfinished tickets:** DEMO-2, DEMO-3.")
+    assert f"{EPIC} pr-draft" in world.jira.notifications
 
 
 def test_a_conflict_goes_back_to_the_agent_and_the_ticket_lands(world: World) -> None:

@@ -48,6 +48,7 @@ PR_PROMPT = (
 )
 LANDED_KEYS_PROMPT = "\n\nName no ticket key that the table does not give."
 NOT_LANDED = "Done in the tracker, not landed"
+UNFINISHED = ("Stuck", "Not built", NOT_LANDED)
 # The loop's own comments start with these lines, so the ticket file leaves them out.
 STUCK_COMMENT = "The loop stopped this ticket."
 DECISIONS_COMMENT = "The agent made these decisions for KC to check:"
@@ -572,7 +573,15 @@ class EpicRun:
             "--json", "url", "--jq", ".[].url",
         ]  # fmt: skip
         existing = self.command(command, self.epic_worktree).stdout.strip()
+        # Merging the Epic PR can close the Epic and all of its children in the tracker.
+        children = self.tracker.children(key)
+        unfinished = [
+            self.ticket_label(ticket) for ticket in children if self.ticket_result(ticket) in UNFINISHED
+        ]
+        draft = bool(failing or unfinished)
         lines: list[str] = []
+        if unfinished:
+            lines += [f"**Unfinished tickets:** {', '.join(unfinished)}.", ""]
         if failing:
             lines += [f"**Failing gate:** `{failing[0]}`. The log is `{failing[1]}`.", ""]
         lines += notes + ([""] if notes else [])
@@ -581,11 +590,11 @@ class EpicRun:
             lines += ["**Decisions to check:**", *items, ""]
         body_file = self.home / "runs" / key / "pr-body.md"
         body_file.write_text("\n".join(lines) + body)
-        state = "pr-draft" if failing else "pr-open"
+        state = "pr-draft" if draft else "pr-open"
         if existing:
             # A PR from an earlier run gets the new body and the new draft state.
             self.command(["gh", "pr", "edit", existing, "--body-file", str(body_file)], self.epic_worktree)
-            ready = ["gh", "pr", "ready", existing, *(["--undo"] if failing else [])]
+            ready = ["gh", "pr", "ready", existing, *(["--undo"] if draft else [])]
             self.command(ready, self.epic_worktree)
             self.log(key, "pr", state, detail=existing)
             self.notify(f"{key} {state}")
@@ -595,7 +604,7 @@ class EpicRun:
             "gh", "pr", "create", "--base", self.config.main_branch, "--head", self.epic_branch,
             "--title", f"feat({key}): {summary}", "--body-file", str(body_file),
         ]  # fmt: skip
-        if failing:
+        if draft:
             command.append("--draft")
         created = self.command(command, self.epic_worktree)
         if created.returncode != 0:
