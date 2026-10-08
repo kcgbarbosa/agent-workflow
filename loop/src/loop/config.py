@@ -60,6 +60,7 @@ class Config:
     main_branch: str
     agent_hint: str
     tools: tuple[str, ...]
+    watch_port: int
     stack: Stack | None
     secrets: Mapping[str, Secret]
     state_dir: Path
@@ -102,6 +103,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
     notify = top.table("notify", optional=True)
     ui = top.table("ui", optional=True)
     stack_table = top.table("stack", optional=True)
+    watch = top.table("watch", optional=True)
     secrets_table = top.table("secrets")
 
     secrets = {}
@@ -139,11 +141,12 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         main_branch=top.text("main_branch", "main"),
         agent_hint=top.text("agent_hint", ""),
         tools=top.texts("tools", ()),
+        watch_port=watch.number("port", 8790),
         stack=stack,
         secrets=secrets,
         state_dir=state_dir or Path.home() / ".local/state" / f"{name}-loop",
     )
-    for table in (top, tracker, gates, limits, notify, ui, stack_table, secrets_table):
+    for table in (top, tracker, gates, limits, notify, ui, stack_table, watch, secrets_table):
         table.done()
     return config
 

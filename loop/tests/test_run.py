@@ -57,6 +57,36 @@ def test_each_agent_gets_the_ticket_file_the_secrets_and_its_own_stack(world: Wo
     assert land["ticket"] == "DEMO-2" and land["commit"]
 
 
+def test_each_agent_may_run_the_gates_and_reset_its_stack_without_a_prompt(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    world.run()
+
+    settings = world.calls("DEMO-2")[0]["settings"]
+    assert settings["permissions"]["allow"] == [
+        "Bash(make check)", "Bash(make check *)", "Bash(make lint test)", "Bash(make lint test *)",
+    ]  # fmt: skip
+    assert "Bash(docker volume rm *)" in settings["permissions"]["deny"]
+    rules = settings["autoMode"]["allow"]
+    assert rules[0] == "$defaults" and settings["autoMode"]["environment"][0] == "$defaults"
+    assert any("`demo-<ticket key>`" in rule and "The volumes stay." in rule for rule in rules)
+
+
+def test_the_run_writes_the_board_that_loop_watch_shows(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.jira.add("DEMO-3", "Add the second part", parent=EPIC, blockers=["DEMO-2"])
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}], "DEMO-3": [{"write": {"b.txt": "b"}}]})
+
+    world.run()
+
+    board = json.loads((world.state / EPIC / "board.json").read_text())
+    assert board["summary"] == "The Loop"
+    tickets = {ticket["key"]: ticket for ticket in board["tickets"]}
+    assert tickets["DEMO-2"]["landed"] and tickets["DEMO-3"]["landed"]
+    assert tickets["DEMO-3"]["blockers"] == [{"key": "DEMO-2", "done": True}]
+
+
 def test_a_run_first_stops_the_stacks_that_earlier_runs_left(world: World) -> None:
     projects = [{"Name": name} for name in ("demo-demo-0", "demo-old-35", "demo", "other-x-1")]
     (world.fakes / "compose-projects.json").write_text(json.dumps(projects))

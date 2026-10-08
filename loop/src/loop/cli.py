@@ -3,6 +3,7 @@
 loop start <Epic key>   starts a run in its own tmux session
 loop run <Epic key>     the run itself, which `loop start` runs in that session
 loop secrets            copies the secrets from Bitwarden to this host, after `bw unlock`
+loop watch              serves a web page of the runs on this host, which `loop start` opens
 """
 
 from __future__ import annotations
@@ -16,21 +17,26 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
+import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from . import config as config_file
+from . import watch as watch_page
 from .config import Config, ConfigError
 from .run import run
 from .tracker import TrackerError
 from .update import Stale, source_checkout, update
 
 TOOLS = ("git", "claude", "gh", "timeout")
-SECRETS_FILE = "secrets.json"
+SECRETS_FILE = watch_page.SECRETS_FILE
+RUN_LOCK = watch_page.RUN_LOCK
 START_POLLS = 60
 START_POLL_SECONDS = 2
+WATCH_POLLS = 20
 
 
 class Refused(Exception):
@@ -39,12 +45,12 @@ class Refused(Exception):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="loop", description="Builds one Epic unattended.")
-    parser.add_argument("command", choices=("start", "run", "secrets"))
+    parser.add_argument("command", choices=("start", "run", "secrets", "watch"))
     parser.add_argument("epic", metavar="<Epic key>", nargs="?")
     parser.add_argument("--repo", type=Path, help="the main checkout. Defaults to the one around this folder")
     arguments = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(arguments)
-    if args.command != "secrets" and not re.fullmatch(r"[A-Z]+-\d+", args.epic or ""):
+    if args.command in ("start", "run") and not re.fullmatch(r"[A-Z]+-\d+", args.epic or ""):
         print("Usage: loop start <Epic key>, for example loop start PITCH-42", file=sys.stderr)
         return 2
     try:
@@ -58,12 +64,14 @@ def main(argv: list[str] | None = None) -> int:
         config = config_file.load(repo)
         if args.command == "secrets":
             return copy_secrets(config)
+        if args.command == "watch":
+            return watch(config)
         if args.command == "start":
             return start(args.epic, config)
         check_tools(config)
         secrets = read_secrets(config)
         check_services(config, secrets)
-        with one_run(config.state_dir), awake(config.name, args.epic):
+        with one_run(config.state_dir, args.epic), awake(config.name, args.epic):
             return run(args.epic, config, secrets)
     except (Refused, ConfigError, Stale) as error:
         print(f"The loop refuses to run. {error}", file=sys.stderr)
@@ -173,15 +181,22 @@ def check_services(config: Config, secrets: dict[str, str]) -> None:
 
 
 @contextmanager
-def one_run(state_dir: Path) -> Iterator[None]:
+def one_run(state_dir: Path, epic_key: str) -> Iterator[None]:
     """Refuses a second run of this repo on this host. KC keeps to one run across hosts."""
     state_dir.mkdir(parents=True, exist_ok=True)
-    with (state_dir / "run.lock").open("w") as lock:
+    with (state_dir / RUN_LOCK).open("a+") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise Refused("Another run is active on this host.") from error
-        yield
+        # `loop watch` reads which run is active from the lock, and does not take the lock itself.
+        lock.truncate(0)
+        lock.write(json.dumps({"pid": os.getpid(), "epic": epic_key}))
+        lock.flush()
+        try:
+            yield
+        finally:
+            lock.truncate(0)
 
 
 @contextmanager
@@ -241,7 +256,8 @@ def start(epic_key: str, config: Config) -> int:
         dead = _tmux(["display-message", "-p", "-t", target, "#{pane_dead}"]) == "1"
         pane = _tmux(["capture-pane", "-p", "-S", "-", "-t", target])
         if f" {epic_key} start ok" in pane:
-            print(f"The loop is building {epic_key}. See it with `tmux attach -t {session}`.")
+            page = open_watch(config, epic_key)
+            print(f"The loop is building {epic_key}. Watch it at {page}, or with `tmux attach -t {session}`.")
             return 0
         if dead:
             print("\n".join(line for line in pane.splitlines() if line), file=sys.stderr)
@@ -251,6 +267,53 @@ def start(epic_key: str, config: Config) -> int:
         f"The loop has not started after 2 minutes. See it with `tmux attach -t {session}`.", file=sys.stderr
     )
     return 1
+
+
+def watch(config: Config) -> int:
+    """Serves the page until the process stops. It reads the state folder and changes nothing."""
+    try:
+        servers = watch_page.serve(config.state_dir, config.watch_port)
+    except OSError as error:
+        raise Refused(f"loop watch cannot listen on port {config.watch_port}: {error}") from error
+    for server in servers:
+        host = str(server.server_address[0])
+        print(f"loop watch serves the {config.name} runs at http://{host}:{config.watch_port}/")
+    sys.stdout.flush()
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def open_watch(config: Config, epic_key: str) -> str:
+    """Starts `loop watch` in its own tmux session when nothing answers on its port, then opens the page."""
+    page = watch_page.url(config.watch_port, epic_key)
+    if not watch_answers(config.watch_port):
+        session = f"{config.name}-watch"
+        # A session whose server does not answer is left from a watch that failed.
+        _tmux(["kill-session", "-t", f"={session}"])
+        command = shlex.join([sys.executable, "-m", "loop", "watch", "--repo", str(config.repo)])
+        _tmux(["new-session", "-d", "-s", session, "-c", str(config.repo), command])
+        for _ in range(WATCH_POLLS):
+            if watch_answers(config.watch_port):
+                break
+            time.sleep(0.25)
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    display = sys.platform == "darwin" or os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    if display and shutil.which(opener):
+        subprocess.Popen(
+            [opener, page], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
+        )
+    return page
+
+
+def watch_answers(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/epics", timeout=2):
+            return True
+    except OSError:
+        return False
 
 
 def _tmux(args: list[str]) -> str:

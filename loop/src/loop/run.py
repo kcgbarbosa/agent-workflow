@@ -19,6 +19,7 @@ from . import repo
 from .config import Config
 from .repo import git, out
 from .tracker import Ticket, TrackerError
+from .watch import BOARD
 
 AGENT_SCHEMA = json.dumps(
     {
@@ -62,6 +63,8 @@ MODEL_USAGE = (
     "inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD", "costBasis",
 )  # fmt: skip
 TIMED_OUT = 124
+# The loop keeps the stack volumes for KC, so no agent run deletes one.
+VOLUME_DENY = ("Bash(docker volume rm *)", "Bash(docker volume prune*)", "Bash(docker system prune*)")
 LOG_TAIL_LINES = 80
 
 # Slot 0 is the main checkout, and the Epic branch has its own slot.
@@ -166,6 +169,46 @@ def agent_usage(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def agent_settings(config: Config) -> str:
+    """The permission rules and the auto mode rules of every agent run, for `--settings`.
+
+    Nobody answers a prompt in a loop run, and a denied action can make a ticket stuck. These rules let the
+    routine actions of a ticket run without the classifier, and tell the classifier what the loop owns.
+    """
+    gates = sorted({shlex.join(gate) for gate in (config.ticket_gate, config.merge_gate)})
+    allow = [rule for gate in gates for rule in (f"Bash({gate})", f"Bash({gate} *)")]
+    named = " and ".join(f"`{gate}`" for gate in gates)
+    environment = [
+        "$defaults",
+        "Host containment: an unattended build loop runs this session. Nobody is at the keyboard. The "
+        f"loop owns each git worktree and run folder under {config.state_dir}.",
+    ]
+    classifier_allow = [
+        "$defaults",
+        f"Loop gates: running {named} in a loop worktree is allowed, also with the output redirected to a "
+        "file. The loop runs the same commands as its gates.",
+    ]
+    deny: tuple[str, ...] = ()
+    if config.stack:
+        project = f"{config.name}-<ticket key>"
+        environment.append(
+            f"Loop stacks: each Docker Compose project named `{project}`, such as `{config.name}-abc-12`, "
+            "and its containers are a disposable test stack of the loop. No person works in one. The "
+            f"project `{config.name}` without a key is KC's own stack, and it is not one of them."
+        )
+        classifier_allow.append(
+            f"Loop stacks: stopping, removing, or starting again a container or Compose project named "
+            f"`{project}`, for example `docker stop {config.name}-abc-11-db-1` or `docker compose down`, "
+            "is allowed to free a port or reset a test stack. The volumes stay."
+        )
+        deny = VOLUME_DENY
+    settings = {
+        "permissions": {"allow": allow, "deny": list(deny)},
+        "autoMode": {"environment": environment, "allow": classifier_allow},
+    }
+    return json.dumps(settings)
+
+
 class EpicRun:
     def __init__(self, epic_key: str, config: Config, secrets: Mapping[str, str]) -> None:
         self.epic_key = epic_key
@@ -183,6 +226,7 @@ class EpicRun:
         self.epic_worktree = self.home / "worktrees" / epic_key
         self.epic_summary = ""
         self.decisions: list[tuple[Ticket, str]] = []
+        self.settings = agent_settings(config)
 
     # --- Run ---
 
@@ -268,6 +312,7 @@ class EpicRun:
         def landed(key: str) -> bool:
             return repo.landed(self.repo, self.epic_branch, key)
 
+        self.write_board(tickets, {ticket.key for ticket in tickets if landed(ticket.key)})
         return [
             ticket
             for ticket in tickets
@@ -660,6 +705,7 @@ class EpicRun:
             "--permission-mode", "auto", "--permission-prompts", "none",
             "--output-format", "stream-json", "--verbose", "--json-schema", AGENT_SCHEMA, "-n", name,
             "--agents", str(AGENTS), "--append-system-prompt", DISPATCH.read_text(),
+            "--settings", self.settings,
         ]  # fmt: skip
         env = {
             **self.child_env(),
@@ -788,6 +834,34 @@ class EpicRun:
         if self.config.agent_hint:
             text += f"- {self.config.agent_hint}\n"
         (run.run_dir / "ticket.md").write_text(text)
+
+    def write_board(self, tickets: list[Ticket], landed: set[str]) -> None:
+        """The tickets as the frontier last read them, for `loop watch`, which reads no tracker."""
+        board = {
+            "time": datetime.now(UTC).isoformat(timespec="seconds"),
+            "epic": self.epic_key,
+            "summary": self.epic_summary,
+            "branch": self.epic_branch,
+            "tickets": [
+                {
+                    "key": ticket.key,
+                    "summary": ticket.summary,
+                    "status": ticket.status,
+                    "done": ticket.done,
+                    "flagged": ticket.flagged,
+                    "landed": ticket.key in landed,
+                    "blockers": [
+                        {"key": blocker.key, "done": blocker.done or blocker.key in landed}
+                        for blocker in ticket.blockers
+                    ],
+                }
+                for ticket in tickets
+            ],
+        }
+        path = self.home / BOARD
+        # A reader never sees half a file.
+        path.with_suffix(".tmp").write_text(json.dumps(board))
+        path.with_suffix(".tmp").replace(path)
 
     def comments(self, key: str) -> list[str]:
         """The comments on the ticket other than the loop's own. A failed read is logged and gives none."""
