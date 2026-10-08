@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """A fake `make` for the loop tests. A marker file in the checked out tree makes a gate fail.
 
-TICKET_FAIL fails every gate. MERGE_FAIL fails `make check` only. GATE_HANG starts a child process and
+TICKET_FAIL fails every gate. MERGE_FAIL fails `make check` only, and so does a file `merge-gate-fails` in
+FAKE_CLAUDE_DIR, for a failure outside the code. GATE_HANG starts a child process and
 hangs. The child touches FAKE_CLAUDE_DIR/gate-child-survived if it still runs two seconds later.
 """
 
@@ -27,7 +28,7 @@ if Path("GATE_HANG").exists():
 if Path("TICKET_FAIL").exists():
     print("FAILED tests/test_ticket.py::test_it - the ticket gate fails")
     sys.exit(2)
-if "check" in targets and Path("MERGE_FAIL").exists():
+if "check" in targets and (Path("MERGE_FAIL").exists() or Path(os.environ["FAKE_CLAUDE_DIR"], "merge-gate-fails").exists()):
     print("FAILED e2e/home.spec.ts - the merge gate fails")
     sys.exit(2)
 print("all green")
