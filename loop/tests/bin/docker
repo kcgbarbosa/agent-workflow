@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
-"""A fake Docker CLI for the loop tests. It records each call and starts no container."""
+"""A fake Docker CLI for the loop tests. It records each call and starts no container.
+
+`compose ls` prints FAKE_CLAUDE_DIR/compose-projects.json, or no project. Each call also goes to
+commands.jsonl, which keeps the order of the Docker and `make` calls.
+"""
 
 import json
 import os
 import sys
 from pathlib import Path
 
-with Path(os.environ["FAKE_CLAUDE_DIR"], "docker.jsonl").open("a") as calls:
-    record = {"args": sys.argv[1:], "project": os.environ.get("COMPOSE_PROJECT_NAME")}
-    calls.write(json.dumps(record) + "\n")
+fakes = Path(os.environ["FAKE_CLAUDE_DIR"])
+record = {"args": sys.argv[1:], "project": os.environ.get("COMPOSE_PROJECT_NAME")}
+for name in ("docker.jsonl", "commands.jsonl"):
+    with (fakes / name).open("a") as calls:
+        calls.write(json.dumps({**record, "tool": "docker"}) + "\n")
+
+if sys.argv[1:3] == ["compose", "ls"]:
+    projects = fakes / "compose-projects.json"
+    print(projects.read_text() if projects.exists() else "[]")

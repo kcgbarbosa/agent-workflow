@@ -21,6 +21,7 @@ Every repo keeps these rules. Change a rule here, on purpose, and give the reaso
    - `--resume` continues the session for a fix attempt.
 
    The schema returns `status` (`done` or `blocked`), `reason`, and `decisions`, the judgement calls for KC to check. The script comments the decisions on the ticket and lists them in the Epic PR. Each turn ends with a result event, and the script takes the status from the last result event that has one. A `blocked` status makes the ticket stuck.
+
 4. **Ticket gate.** The script runs the ticket gate in the worktree. When it fails, the script resumes the session with the tail of the log, up to the fix attempt limit. Still failing, the ticket is stuck. Every gate runs under `timeout` with `--kill-after`, as the agent does, with the gate timeout as its limit, so a gate past its limit fails and its child processes stop with it.
 5. **UI gate.** When the diff against the Epic branch touches a UI path, the ticket lands only with UI review screenshots in its run folder. Without them, the script resumes the session and asks for the UI review. The script attaches the screenshots to the ticket.
 6. **Land.** Merges run one at a time: `git merge --no-ff` into the Epic branch, with the key in the message, then the merge gate on the Epic branch. When the gate passes, the Epic branch takes the merge and the script pushes it. A failed push is logged, and the run goes on. A conflict or a failed merge gate undoes the merge. The script then merges the Epic branch into the ticket branch and resumes the session as a fix attempt, to resolve the conflict or to fix the cause from the tail of the gate log. Out of fix attempts, the ticket is stuck.
@@ -65,6 +66,7 @@ Settles the ticket gate, the merge gate, and what CI runs. `[gates]` gives `tick
 ### Stack per worktree
 
 Settles how two tickets run full stacks side by side. `[stack]` gives the base `ports` and the `port_step` per slot, and the script sets `COMPOSE_PROJECT_NAME` to `<name>-<key>`. A repo with no stack leaves it out.
+Every Epic uses the same slot, so the slot ports must be free when a run starts. At start, the script stops each `<name>-<key>` project that an earlier run left, and it stops the Epic stack when the run ends. Before each gate, it stops the stack of that gate, so the gate starts on new containers. A container from a failed start can start later with no published port. The volumes stay.
 
 ### UI review
 
