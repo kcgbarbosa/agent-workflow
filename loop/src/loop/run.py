@@ -548,7 +548,7 @@ class EpicRun:
         key = self.epic_key
         tickets = ["| Ticket | Result |", "| ------ | ------ |"]
         for ticket in self.tracker.children(key):
-            tickets.append(f"| {self.pr_name(ticket)} | {self.ticket_result(ticket)} |")
+            tickets.append(f"| {self.ticket_label(ticket)} | {self.ticket_result(ticket)} |")
         table = "\n".join(tickets)
         body_file = run.run_dir / "pr-body.md"
         body_file.unlink(missing_ok=True)
@@ -575,7 +575,7 @@ class EpicRun:
             lines += [f"**Failing gate:** `{failing[0]}`. The log is `{failing[1]}`.", ""]
         lines += notes + ([""] if notes else [])
         if self.decisions:
-            items = [f"- {self.pr_name(ticket)}: {item}" for ticket, item in self.decisions]
+            items = [f"- {self.ticket_label(ticket)}: {item}" for ticket, item in self.decisions]
             lines += ["**Decisions to check:**", *items, ""]
         body_file = self.home / "runs" / key / "pr-body.md"
         body_file.write_text("\n".join(lines) + body)
@@ -604,9 +604,8 @@ class EpicRun:
         self.notify(f"{key} {state}")
         return 0
 
-    def pr_name(self, ticket: Ticket) -> str:
-        """The key of the Epic or of a landed ticket, else the summary, so that merging the Epic PR
-        closes no issue whose work it does not hold."""
+    def ticket_label(self, ticket: Ticket) -> str:
+        """The key of the Epic or of a landed ticket, else the summary. Rule 10 of `loop.md` gives why."""
         if ticket.key == self.epic_key or repo.landed(self.repo, self.epic_branch, ticket.key):
             return ticket.key
         return ticket.summary

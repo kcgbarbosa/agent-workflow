@@ -130,7 +130,6 @@ def test_a_stuck_ticket_is_flagged_and_the_tickets_downstream_wait(world: World)
     assert world.calls("DEMO-3") == []
     assert "merge(DEMO-4): Separate work" in world.epic_log()
     body = world.records("gh")[-1]["body"]
-    # A merged PR can close each issue it names, so the body names only the keys that landed.
     assert "| Needs a decision | Stuck |" in body and "| Builds on the decision | Not built |" in body
     assert "| DEMO-4 | Landed |" in body and "Needs a decision: Kept the role." in body
     assert "DEMO-2" not in body and "DEMO-3" not in body
