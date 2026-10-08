@@ -11,7 +11,7 @@ DESIGN = LOOP.parent / "skills" / "setup-loop" / "loop.md"
 
 def test_the_design_doc_names_every_config_key() -> None:
     source = (LOOP / "src" / "loop" / "config.py").read_text()
-    keys = set(re.findall(r'\.(?:text|number|texts|table)\(\s*"([a-z_]+)"', source))
+    keys = set(re.findall(r'\.(?:text|number|texts|table|flag)\(\s*"([a-z_]+)"', source))
     doc = DESIGN.read_text()
 
     assert keys, "the key pattern no longer matches config.py"

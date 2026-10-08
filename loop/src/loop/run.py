@@ -46,6 +46,7 @@ PR_PROMPT = (
     "`{body_file}`. Do not commit, push, or open the pull request. In Evidence, give this ticket "
     "table as it is:\n\n{tickets}"
 )
+LANDED_KEYS_PROMPT = "\n\nName no ticket key that the table does not give."
 NOT_LANDED = "Done in the tracker, not landed"
 # The loop's own comments start with these lines, so the ticket file leaves them out.
 STUCK_COMMENT = "The loop stopped this ticket."
@@ -180,7 +181,7 @@ class EpicRun:
         self.epic_branch = ""
         self.epic_worktree = self.home / "worktrees" / epic_key
         self.epic_summary = ""
-        self.decisions: list[str] = []
+        self.decisions: list[tuple[Ticket, str]] = []
 
     # --- Run ---
 
@@ -547,11 +548,13 @@ class EpicRun:
         key = self.epic_key
         tickets = ["| Ticket | Result |", "| ------ | ------ |"]
         for ticket in self.tracker.children(key):
-            tickets.append(f"| {ticket.key} | {self.ticket_result(ticket)} |")
+            tickets.append(f"| {self.ticket_label(ticket)} | {self.ticket_result(ticket)} |")
         table = "\n".join(tickets)
         body_file = run.run_dir / "pr-body.md"
         body_file.unlink(missing_ok=True)
         prompt = PR_PROMPT.format(merge_base=merge_base, body_file=body_file, tickets=table)
+        if self.config.name_landed_keys_only:
+            prompt += LANDED_KEYS_PROMPT
         try:
             self.agent(run, prompt, session=session, name=f"{key}-review")
         except (AgentFailed, UsageLimit) as error:
@@ -574,7 +577,8 @@ class EpicRun:
             lines += [f"**Failing gate:** `{failing[0]}`. The log is `{failing[1]}`.", ""]
         lines += notes + ([""] if notes else [])
         if self.decisions:
-            lines += ["**Decisions to check:**", *(f"- {item}" for item in self.decisions), ""]
+            items = [f"- {self.ticket_label(ticket)}: {item}" for ticket, item in self.decisions]
+            lines += ["**Decisions to check:**", *items, ""]
         body_file = self.home / "runs" / key / "pr-body.md"
         body_file.write_text("\n".join(lines) + body)
         state = "pr-draft" if failing else "pr-open"
@@ -601,6 +605,12 @@ class EpicRun:
         self.log(key, "pr", state, detail=created.stdout.strip())
         self.notify(f"{key} {state}")
         return 0
+
+    def ticket_label(self, ticket: Ticket) -> str:
+        """The key, or the summary of a ticket that did not land when `name_landed_keys_only` is on."""
+        if not self.config.name_landed_keys_only or ticket.key == self.epic_key:
+            return ticket.key
+        return ticket.key if repo.landed(self.repo, self.epic_branch, ticket.key) else ticket.summary
 
     def ticket_result(self, ticket: Ticket) -> str:
         if repo.landed(self.repo, self.epic_branch, ticket.key):
@@ -675,7 +685,7 @@ class EpicRun:
         decisions = [str(item) for item in output.get("decisions", [])]
         if decisions:
             key = run.ticket.key
-            self.decisions += [f"{key}: {item}" for item in decisions]
+            self.decisions += [(run.ticket, item) for item in decisions]
             bullets = "\n".join(f"- {item}" for item in decisions)
             text = f"{DECISIONS_COMMENT}\n{bullets}"
             self.track(key, "comment", lambda: self.tracker.comment(key, text))

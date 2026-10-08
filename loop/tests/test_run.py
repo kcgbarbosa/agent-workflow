@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -419,6 +420,26 @@ def test_the_decisions_of_an_agent_go_to_jira_and_the_epic_pr(world: World) -> N
 
     assert "Kept the filter in access.py." in world.jira.issues["DEMO-2"].comments[-1]
     assert "DEMO-2: Kept the filter in access.py." in world.records("gh")[-1]["body"]
+
+
+def test_with_name_landed_keys_only_the_epic_pr_names_no_key_that_did_not_land(world: World) -> None:
+    world.jira.add("DEMO-2", "Needs a decision", parent=EPIC)
+    world.jira.add("DEMO-3", "Builds on the decision", parent=EPIC, blockers=["DEMO-2"])
+    world.jira.add("DEMO-4", "Separate work", parent=EPIC)
+    world.jira.add("DEMO-5", "Done before", parent=EPIC, status="Done")
+    blocked = {"status": "blocked", "reason": "Which role?", "decisions": ["Kept the role."]}
+    world.plan({"DEMO-2": [blocked], "DEMO-4": [{"write": {"d.txt": "d"}}]})
+
+    assert world.run(landed_keys_only=True) == 0
+
+    body = world.records("gh")[-1]["body"]
+    assert "| DEMO-4 | Landed |" in body and "| Needs a decision | Stuck |" in body
+    assert (
+        "| Builds on the decision | Not built |" in body and "| Done before | Done before this run |" in body
+    )
+    assert "- Needs a decision: Kept the role." in body
+    assert not {"DEMO-2", "DEMO-3", "DEMO-5"} & set(re.findall(r"DEMO-\d+", body))
+    assert "Name no ticket key" in world.calls(f"{EPIC}-review")[-1]["prompt"]
 
 
 def test_the_epic_pr_is_a_draft_when_a_gate_still_fails(world: World) -> None:

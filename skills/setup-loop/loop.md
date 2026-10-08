@@ -44,7 +44,7 @@ Settles who starts a run, and where. The command is `loop start <Epic key>` in t
 
 ### Tracker
 
-Settles the tracker and how the Epic's children and blocking edges are stored. `[tracker]` gives `kind` and `url`. Jira is the only adapter.
+Settles the tracker and how the Epic's children and blocking edges are stored. `[tracker]` gives `kind` and `url`. Jira is the only adapter. Set `name_landed_keys_only = true` when the tracker's automation closes each issue that a merged pull request names. The Epic PR then gives a ticket that did not land by its summary, not its key. The default is `false`.
 
 ### Status and stuck marker
 
