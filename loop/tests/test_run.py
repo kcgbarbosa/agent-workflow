@@ -111,9 +111,11 @@ def test_a_stuck_ticket_is_flagged_and_the_tickets_downstream_wait(world: World)
     world.jira.add("DEMO-2", "Needs a decision", parent=EPIC)
     world.jira.add("DEMO-3", "Builds on the decision", parent=EPIC, blockers=["DEMO-2"])
     world.jira.add("DEMO-4", "Separate work", parent=EPIC)
+    reason = "The WorkOS role change needs KC."
+    blocked = {"status": "blocked", "reason": reason, "decisions": ["Kept the role."]}
     world.plan(
         {
-            "DEMO-2": [{"status": "blocked", "reason": "The WorkOS role change needs KC."}],
+            "DEMO-2": [blocked],
             "DEMO-4": [{"write": {"d.txt": "d"}}],
         }
     )
@@ -122,13 +124,16 @@ def test_a_stuck_ticket_is_flagged_and_the_tickets_downstream_wait(world: World)
 
     stuck = world.jira.issues["DEMO-2"]
     assert stuck.flagged
-    assert "The WorkOS role change needs KC." in stuck.comments[0]
-    assert str(world.state / EPIC / "runs" / "DEMO-2") in stuck.comments[0]
+    assert "The WorkOS role change needs KC." in stuck.comments[-1]
+    assert str(world.state / EPIC / "runs" / "DEMO-2") in stuck.comments[-1]
     assert "DEMO-2 stuck" in world.jira.notifications
     assert world.calls("DEMO-3") == []
     assert "merge(DEMO-4): Separate work" in world.epic_log()
     body = world.records("gh")[-1]["body"]
-    assert "| DEMO-2 | Stuck |" in body and "| DEMO-3 | Not built |" in body
+    # A merged PR can close each issue it names, so the body names only the keys that landed.
+    assert "| Needs a decision | Stuck |" in body and "| Builds on the decision | Not built |" in body
+    assert "| DEMO-4 | Landed |" in body and "Needs a decision: Kept the role." in body
+    assert "DEMO-2" not in body and "DEMO-3" not in body
 
 
 def test_a_conflict_goes_back_to_the_agent_and_the_ticket_lands(world: World) -> None:
@@ -407,8 +412,8 @@ def test_a_done_ticket_whose_work_never_landed_is_reported(world: World) -> None
 
     assert "DEMO-3 done-not-landed" in world.jira.notifications
     body = world.records("gh")[-1]["body"]
-    assert "| DEMO-3 | Done in the tracker, not landed |" in body
-    assert "| DEMO-4 | Done before this run |" in body
+    assert "| Done too early | Done in the tracker, not landed |" in body
+    assert "| Squash merged | Done before this run |" in body
 
 
 def test_the_decisions_of_an_agent_go_to_jira_and_the_epic_pr(world: World) -> None:
