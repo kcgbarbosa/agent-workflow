@@ -19,6 +19,7 @@ from . import repo
 from .config import Config
 from .repo import git, out
 from .tracker import Ticket, TrackerError
+from .watch import BOARD
 
 AGENT_SCHEMA = json.dumps(
     {
@@ -268,6 +269,7 @@ class EpicRun:
         def landed(key: str) -> bool:
             return repo.landed(self.repo, self.epic_branch, key)
 
+        self.write_board(tickets, {ticket.key for ticket in tickets if landed(ticket.key)})
         return [
             ticket
             for ticket in tickets
@@ -788,6 +790,34 @@ class EpicRun:
         if self.config.agent_hint:
             text += f"- {self.config.agent_hint}\n"
         (run.run_dir / "ticket.md").write_text(text)
+
+    def write_board(self, tickets: list[Ticket], landed: set[str]) -> None:
+        """The tickets as the frontier last read them, for `loop watch`, which reads no tracker."""
+        board = {
+            "time": datetime.now(UTC).isoformat(timespec="seconds"),
+            "epic": self.epic_key,
+            "summary": self.epic_summary,
+            "branch": self.epic_branch,
+            "tickets": [
+                {
+                    "key": ticket.key,
+                    "summary": ticket.summary,
+                    "status": ticket.status,
+                    "done": ticket.done,
+                    "flagged": ticket.flagged,
+                    "landed": ticket.key in landed,
+                    "blockers": [
+                        {"key": blocker.key, "done": blocker.done or blocker.key in landed}
+                        for blocker in ticket.blockers
+                    ],
+                }
+                for ticket in tickets
+            ],
+        }
+        path = self.home / BOARD
+        # A reader never sees half a file.
+        path.with_suffix(".tmp").write_text(json.dumps(board))
+        path.with_suffix(".tmp").replace(path)
 
     def comments(self, key: str) -> list[str]:
         """The comments on the ticket other than the loop's own. A failed read is logged and gives none."""
