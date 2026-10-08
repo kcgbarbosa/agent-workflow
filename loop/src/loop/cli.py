@@ -1,13 +1,15 @@
 """The `loop` command. It builds one Epic unattended, with the settings in the repo's `loop.toml`.
 
-loop start <Epic key>   starts a run in its own tmux session, after `export BW_SESSION=$(bw unlock --raw)`
+loop start <Epic key>   starts a run in its own tmux session
 loop run <Epic key>     the run itself, which `loop start` runs in that session
+loop secrets            copies the secrets from Bitwarden to this host, after `bw unlock`
 """
 
 from __future__ import annotations
 
 import argparse
 import fcntl
+import json
 import os
 import re
 import shlex
@@ -25,7 +27,8 @@ from .run import run
 from .tracker import TrackerError
 from .update import Stale, source_checkout, update
 
-TOOLS = ("git", "claude", "gh", "bw", "timeout")
+TOOLS = ("git", "claude", "gh", "timeout")
+SECRETS_FILE = "secrets.json"
 START_POLLS = 60
 START_POLL_SECONDS = 2
 
@@ -36,12 +39,12 @@ class Refused(Exception):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="loop", description="Builds one Epic unattended.")
-    parser.add_argument("command", choices=("start", "run"))
-    parser.add_argument("epic", metavar="<Epic key>")
+    parser.add_argument("command", choices=("start", "run", "secrets"))
+    parser.add_argument("epic", metavar="<Epic key>", nargs="?")
     parser.add_argument("--repo", type=Path, help="the main checkout. Defaults to the one around this folder")
     arguments = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(arguments)
-    if not re.fullmatch(r"[A-Z]+-\d+", args.epic):
+    if args.command != "secrets" and not re.fullmatch(r"[A-Z]+-\d+", args.epic or ""):
         print("Usage: loop start <Epic key>, for example loop start PITCH-42", file=sys.stderr)
         return 2
     try:
@@ -53,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
                 # This process still runs the old code, which can refuse a loop.toml key that is new.
                 os.execv(sys.executable, [sys.executable, "-m", "loop", *arguments])
         config = config_file.load(repo)
+        if args.command == "secrets":
+            return copy_secrets(config)
         if args.command == "start":
             return start(args.epic, config)
         check_tools(config)
@@ -78,7 +83,14 @@ def main_checkout() -> Path:
 def check_tools(config: Config) -> None:
     """Every prerequisite, before the run starts."""
     inhibitor = "caffeinate" if sys.platform == "darwin" else "systemd-inhibit"
-    needed = (*TOOLS, *config.tools, *(["docker"] if config.stack else []), inhibitor)
+    bitwarden = not secrets_file(config).exists()
+    needed = (
+        *TOOLS,
+        *(["bw"] if bitwarden else []),
+        *config.tools,
+        *(["docker"] if config.stack else []),
+        inhibitor,
+    )
     missing = [tool for tool in dict.fromkeys(needed) if shutil.which(tool) is None]
     if missing:
         raise Refused(f"These commands are missing: {', '.join(missing)}.")
@@ -87,15 +99,55 @@ def check_tools(config: Config) -> None:
         problems.append("Docker does not answer. Start Docker, or check the docker group.")
     if _quiet(["gh", "auth", "status"]) != 0:
         problems.append("The GitHub CLI is not signed in. Run `gh auth login`.")
-    status = subprocess.run(["bw", "status"], capture_output=True, text=True).stdout
-    if '"status":"unlocked"' not in status.replace(" ", ""):
-        problems.append("Bitwarden is locked. Run `export BW_SESSION=$(bw unlock --raw)`.")
+    if bitwarden and not bitwarden_unlocked():
+        problems.append(
+            "Bitwarden is locked. Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
+        )
     if problems:
         raise Refused(" ".join(problems))
 
 
+def secrets_file(config: Config) -> Path:
+    return config.state_dir / SECRETS_FILE
+
+
+def bitwarden_unlocked() -> bool:
+    status = subprocess.run(["bw", "status"], capture_output=True, text=True).stdout
+    return '"status":"unlocked"' in status.replace(" ", "")
+
+
+def copy_secrets(config: Config) -> int:
+    """Writes the secrets to a file that only this user can read, so that a run needs no unlock."""
+    if shutil.which("bw") is None or not bitwarden_unlocked():
+        raise Refused("Bitwarden is locked. Run `export BW_SESSION=$(bw unlock --raw)` first.")
+    secrets = bitwarden_secrets(config)
+    path = secrets_file(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_CREAT sets the mode only on a new file.
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w") as file:
+        json.dump(secrets, file)
+    print(f"The {config.name} secrets are in {path}. A run needs no unlock now.")
+    return 0
+
+
 def read_secrets(config: Config) -> dict[str, str]:
-    """Reads the secrets from Bitwarden into memory. Nothing is written to disk."""
+    """The secrets from the file of `loop secrets`, or else from Bitwarden."""
+    path = secrets_file(config)
+    if not path.exists():
+        return bitwarden_secrets(config)
+    secrets = json.loads(path.read_text())
+    missing = [env for env in config.secrets if not secrets.get(env)]
+    if missing:
+        raise Refused(
+            f"{path} has no value for {', '.join(missing)}. "
+            "Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
+        )
+    return {env: secrets[env] for env in config.secrets}
+
+
+def bitwarden_secrets(config: Config) -> dict[str, str]:
     _quiet(["bw", "sync"])
     secrets: dict[str, str] = {}
     missing: list[str] = []
@@ -114,7 +166,8 @@ def check_services(config: Config, secrets: dict[str, str]) -> None:
     try:
         config.tracker(secrets).check_access()
     except TrackerError as error:
-        raise Refused(f"The tracker refuses the credentials: {error}") from error
+        changed = " If a secret changed, run `loop secrets` again." if secrets_file(config).exists() else ""
+        raise Refused(f"The tracker refuses the credentials: {error}{changed}") from error
     if _quiet(["git", "ls-remote", "--exit-code", "origin", "HEAD"], cwd=config.repo) != 0:
         raise Refused("The remote origin does not answer.")
 
@@ -160,9 +213,9 @@ def awake(name: str, epic_key: str) -> Iterator[None]:
 def start(epic_key: str, config: Config) -> int:
     """Starts `loop run` in its own tmux session, so the run outlives the agent or shell that starts it."""
     bw_session = os.environ.get("BW_SESSION")
-    if not bw_session:
+    if not bw_session and not secrets_file(config).exists():
         raise Refused(
-            "BW_SESSION is not set. Run `export BW_SESSION=$(bw unlock --raw)` in this shell first."
+            "This host has no secrets file. Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
         )
     if shutil.which("tmux") is None:
         raise Refused("tmux is missing.")
@@ -178,7 +231,8 @@ def start(epic_key: str, config: Config) -> int:
     _tmux(["new-session", "-d", "-s", session, "-c", repo])
     _tmux(["set-option", "-p", "-t", target, "remain-on-exit", "on"])
     # A tmux pane takes its env from the tmux server, so BW_SESSION goes in with -e.
-    _tmux(["respawn-pane", "-k", "-t", target, "-c", repo, "-e", f"BW_SESSION={bw_session}", command])
+    session_env = ["-e", f"BW_SESSION={bw_session}"] if bw_session else []
+    _tmux(["respawn-pane", "-k", "-t", target, "-c", repo, *session_env, command])
 
     # The run prints "<time> <Epic key> start ok" once its checks pass. A refusal ends the pane first.
     # A short run can also end before the first look, so the line counts before the dead pane does.
