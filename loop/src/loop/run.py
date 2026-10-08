@@ -189,11 +189,15 @@ class EpicRun:
     def run(self) -> int:
         self.home.mkdir(parents=True, exist_ok=True)
         try:
+            self.stop_stale_stacks()
             return self._run()
         except Exception as error:
             self.log(self.epic_key, "stop", "loop-error", detail=str(error))
             self.notify(f"{self.epic_key} stopped")
             raise
+        finally:
+            # The next Epic uses the same slot and its ports. The volume stays for KC.
+            self.stack_down(self.epic_worktree, EPIC_SLOT, self.epic_key, volumes=False)
 
     def _run(self) -> int:
         epic = self.tracker.issue(self.epic_key)
@@ -707,6 +711,10 @@ class EpicRun:
         processes. The output goes to the log file, so the run waits on no pipe that a child holds open.
         """
         env = {**self.child_env(), **stack}
+        if stack:
+            # A container from a start that failed, such as on a port that was in use, can start later
+            # with no published port. A gate on new containers does not depend on an earlier start.
+            self.command(["docker", "compose", "down"], cwd, stack)
         limit = f"{self.config.gate_timeout_minutes}m"
         with log_file.open("w") as log:
             wrapped = ["timeout", "--kill-after=60", limit, *command]
@@ -722,6 +730,24 @@ class EpicRun:
     def push(self, worktree: Path, branch: str, key: str) -> None:
         result = git(worktree, "push", "--set-upstream", "origin", branch, check=False)
         self.log(key, "push", "ok" if result.returncode == 0 else "fail", detail=result.stderr.strip()[-300:])
+
+    def stop_stale_stacks(self) -> None:
+        """Stops the Compose projects of earlier runs, which hold the ports of the slots.
+
+        The run lock lets one run go at a time, so no other run uses them. The volumes stay for KC.
+        """
+        if self.config.stack is None:
+            return
+        listed = self.command(["docker", "compose", "ls", "--all", "--format", "json"], self.home)
+        projects = json.loads(listed.stdout or "[]") if listed.returncode == 0 else []
+        # The projects are `<name>-<key>`, as in `stack_env`. The main checkout's project has no key.
+        ours = re.compile(rf"{re.escape(self.config.name)}-[a-z][a-z0-9_]*-[0-9]+")
+        for project in projects:
+            name = project.get("Name", "")
+            if ours.fullmatch(name):
+                down = self.command(["docker", "compose", "--project-name", name, "down"], self.home)
+                result = "ok" if down.returncode == 0 else "fail"
+                self.log(self.epic_key, "stop-stale-stack", result, detail=name)
 
     def stack_down(self, worktree: Path, slot: int, key: str, volumes: bool) -> None:
         if self.config.stack is None or not worktree.exists():

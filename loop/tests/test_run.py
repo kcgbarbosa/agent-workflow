@@ -57,6 +57,46 @@ def test_each_agent_gets_the_ticket_file_the_secrets_and_its_own_stack(world: Wo
     assert land["ticket"] == "DEMO-2" and land["commit"]
 
 
+def test_a_run_first_stops_the_stacks_that_earlier_runs_left(world: World) -> None:
+    projects = [{"Name": name} for name in ("demo-demo-0", "demo-old-35", "demo", "other-x-1")]
+    (world.fakes / "compose-projects.json").write_text(json.dumps(projects))
+
+    world.run()
+
+    downs = [record["args"] for record in world.records("docker") if "--project-name" in record["args"]]
+    assert downs == [
+        ["compose", "--project-name", "demo-demo-0", "down"],
+        ["compose", "--project-name", "demo-old-35", "down"],
+    ]
+    stopped = [line["detail"] for line in world.decisions() if line["step"] == "stop-stale-stack"]
+    assert stopped == ["demo-demo-0", "demo-old-35"]
+
+
+def test_each_gate_runs_on_new_containers(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    world.run()
+
+    commands = world.records("commands")
+    gates = [index for index, record in enumerate(commands) if record["tool"] == "make"]
+    assert gates
+    for index in gates:
+        before = commands[index - 1]
+        assert before["args"] == ["compose", "down"]
+        assert before["project"] == commands[index]["project"]
+
+
+def test_the_epic_stack_stops_when_the_run_stops(world: World) -> None:
+    world.jira.add("DEMO-2", "Break the end to end tests", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"MERGE_FAIL": "x"}}]})
+
+    assert world.run() == 1
+
+    last = world.records("docker")[-1]
+    assert last["args"] == ["compose", "down"] and last["project"] == "demo-demo-1"
+
+
 def test_a_failed_ticket_gate_goes_back_to_the_session_with_the_log_tail(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}, {"delete": ["TICKET_FAIL"]}]})

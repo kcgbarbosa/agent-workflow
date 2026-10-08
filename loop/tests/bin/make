@@ -13,9 +13,10 @@ import time
 from pathlib import Path
 
 targets = sys.argv[1:]
-with Path(os.environ["FAKE_CLAUDE_DIR"], "make.jsonl").open("a") as calls:
-    record = {"targets": targets, "cwd": os.getcwd(), "project": os.environ.get("COMPOSE_PROJECT_NAME")}
-    calls.write(json.dumps(record) + "\n")
+record = {"targets": targets, "cwd": os.getcwd(), "project": os.environ.get("COMPOSE_PROJECT_NAME")}
+for name in ("make.jsonl", "commands.jsonl"):
+    with Path(os.environ["FAKE_CLAUDE_DIR"], name).open("a") as calls:
+        calls.write(json.dumps({**record, "tool": "make"}) + "\n")
 
 if Path("GATE_HANG").exists():
     survived = Path(os.environ["FAKE_CLAUDE_DIR"], "gate-child-survived")
