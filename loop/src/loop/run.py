@@ -44,9 +44,9 @@ FIX_PROMPT = (
 PR_PROMPT = (
     "/pr Write the body of the Epic pull request for the diff `{merge_base}..HEAD` to the file "
     "`{body_file}`. Do not commit, push, or open the pull request. In Evidence, give this ticket "
-    "table as it is:\n\n{tickets}\n\nName no ticket key that the table does not give, because the "
-    "tracker can close each issue that a merged pull request names."
+    "table as it is:\n\n{tickets}"
 )
+LANDED_KEYS_PROMPT = "\n\nName no ticket key that the table does not give."
 NOT_LANDED = "Done in the tracker, not landed"
 # The loop's own comments start with these lines, so the ticket file leaves them out.
 STUCK_COMMENT = "The loop stopped this ticket."
@@ -553,6 +553,8 @@ class EpicRun:
         body_file = run.run_dir / "pr-body.md"
         body_file.unlink(missing_ok=True)
         prompt = PR_PROMPT.format(merge_base=merge_base, body_file=body_file, tickets=table)
+        if self.config.name_landed_keys_only:
+            prompt += LANDED_KEYS_PROMPT
         try:
             self.agent(run, prompt, session=session, name=f"{key}-review")
         except (AgentFailed, UsageLimit) as error:
@@ -605,10 +607,10 @@ class EpicRun:
         return 0
 
     def ticket_label(self, ticket: Ticket) -> str:
-        """The key of the Epic or of a landed ticket, else the summary. Rule 10 of `loop.md` gives why."""
-        if ticket.key == self.epic_key or repo.landed(self.repo, self.epic_branch, ticket.key):
+        """The key, or the summary of a ticket that did not land when `name_landed_keys_only` is on."""
+        if not self.config.name_landed_keys_only or ticket.key == self.epic_key:
             return ticket.key
-        return ticket.summary
+        return ticket.key if repo.landed(self.repo, self.epic_branch, ticket.key) else ticket.summary
 
     def ticket_result(self, ticket: Ticket) -> str:
         if repo.landed(self.repo, self.epic_branch, ticket.key):

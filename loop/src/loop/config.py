@@ -45,6 +45,7 @@ class Config:
     name: str
     tracker_url: str
     in_progress: str
+    name_landed_keys_only: bool
     landed_status: str
     ticket_gate: tuple[str, ...]
     merge_gate: tuple[str, ...]
@@ -123,6 +124,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         name=name,
         tracker_url=tracker.text("url"),
         in_progress=tracker.text("in_progress", "In Progress"),
+        name_landed_keys_only=tracker.flag("name_landed_keys_only", False),
         landed_status=tracker.text("landed", "In Review"),
         ticket_gate=gates.texts("ticket"),
         merge_gate=gates.texts("merge"),
@@ -179,6 +181,15 @@ class _Table:
 
     def text(self, key: str, default: Any = _REQUIRED) -> Any:
         return self._get(key, default, str)
+
+    def flag(self, key: str, default: Any = _REQUIRED) -> bool:
+        self.read.add(key)
+        value = self.data.get(key, default)
+        if value is _REQUIRED:
+            raise KeyError(f"{self.path}{key} is missing")
+        if not isinstance(value, bool):
+            raise TypeError(f"{self.path}{key} has the wrong type")
+        return value
 
     def number(self, key: str, default: Any = _REQUIRED) -> int:
         value: int = self._get(key, default, int)

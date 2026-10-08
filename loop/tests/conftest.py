@@ -32,6 +32,7 @@ tools = ["make"]
 [tracker]
 kind = "jira"
 url = "{tracker_url}"
+name_landed_keys_only = {landed_keys_only}
 
 [gates]
 ticket = ["make", "lint", "test"]
@@ -57,8 +58,13 @@ NTFY_TOPIC = {{ item = "demo-ntfy-topic", field = "password" }}
 """
 
 
-def write_config(repo: Path, tracker_url: str = "http://127.0.0.1:9", parallel: int = 2) -> None:
-    (repo / config.FILE).write_text(CONFIG.format(tracker_url=tracker_url, parallel=parallel))
+def write_config(
+    repo: Path, tracker_url: str = "http://127.0.0.1:9", parallel: int = 2, landed_keys_only: bool = False
+) -> None:
+    text = CONFIG.format(
+        tracker_url=tracker_url, parallel=parallel, landed_keys_only=str(landed_keys_only).lower()
+    )
+    (repo / config.FILE).write_text(text)
 
 
 def sh(cwd: Path, *args: str) -> str:
@@ -76,8 +82,8 @@ class World:
     def plan(self, steps: dict[str, list[dict[str, Any]]]) -> None:
         (self.fakes / "plan.json").write_text(json.dumps(steps))
 
-    def run(self, parallel: int = 2) -> int:
-        write_config(self.repo, self.jira.url, parallel)
+    def run(self, parallel: int = 2, landed_keys_only: bool = False) -> int:
+        write_config(self.repo, self.jira.url, parallel, landed_keys_only)
         return run(EPIC, config.load(self.repo, state_dir=self.state), SECRETS)
 
     def records(self, name: str) -> list[dict[str, Any]]:
