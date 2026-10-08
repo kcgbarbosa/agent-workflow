@@ -83,6 +83,7 @@ Settles the channel, the events, and what a message may contain. `notify.url` is
 ### Secrets
 
 Settles which secrets the loop needs and where each one lives. `[secrets]` maps each env var to its Bitwarden `item` and `field`. The script needs `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `NTFY_TOPIC`, and passes every secret to each agent.
+`loop secrets` copies them from Bitwarden to `~/.local/state/<name>-loop/secrets.json`, with mode 600, so a run needs no unlock. Run it once per host, and again after a secret changes. A run reads Bitwarden only when the file is missing.
 
 ### Hosts
 
