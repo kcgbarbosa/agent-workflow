@@ -69,14 +69,6 @@ RESTART_PROMPT = "A previous run was interrupted. Check the diff against the tic
 USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work."
 # A limit that resets later than this, such as the weekly one, stops the loop.
 MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60
-TICKET_REVIEW_PROMPT = (
-    "/code-review {base} Review only the changes of `{base}..{merge}`, which is one ticket of the Epic. "
-    "The spec is the ticket file {ticket}. " + REVIEW_RULES
-)
-FIX_PROMPT = (
-    "The code review of the Epic found these problems:\n\n{findings}\n\nFix each one that is a real problem. "
-    "Commit the fixes with {key} as the commit scope. Return blocked with the reason when a finding needs KC."
-)
 PR_PROMPT = (
     "/pr Write the body of the Epic pull request for the diff `{merge_base}..HEAD` to the file "
     "`{body_file}`. Do not commit, push, or open the pull request. In Evidence, give this ticket "
@@ -631,7 +623,7 @@ class EpicRun:
     # --- Finish ---
 
     def finish(self) -> int:
-        """Reviews the Epic branch, runs one fix through the gates, and opens the Epic PR."""
+        """Runs the merge gate on the Epic branch and opens the Epic PR."""
         key = self.epic_key
         base = f"origin/{self.config.main_branch}"
         if out(self.epic_worktree, "rev-list", "--count", f"{base}..HEAD") == "0":
@@ -643,74 +635,19 @@ class EpicRun:
         run = TicketRun(
             self.tracker.issue(key), EPIC_SLOT, self.epic_branch, self.epic_worktree, run_dir, restart=False
         )
-        notes: list[str] = []
-        for shot in screenshots(run_dir):
-            shot.unlink()
-        self.write_ticket_file(run, self.config.merge_gate)
-        before_fix = out(self.epic_worktree, "rev-parse", "HEAD")
         merge_base = out(self.epic_worktree, "merge-base", base, "HEAD")
-        session: str | None = None
-        try:
-            findings = self.ticket_reviews(run)
-            if findings:
-                listed = "\n".join(f"- {finding}" for finding in findings)
-                fix = self.agent(
-                    run, FIX_PROMPT.format(key=key, findings=listed), session=None, name=f"{key}-review"
-                )
-                session = fix.session
-                if fix.status == "blocked":
-                    notes.append(f"The review fix run is blocked: {fix.reason}")
-        except UsageLimit as error:
-            self.log(key, "review", "usage-limit", detail=str(error))
-            self.notify(f"{key} stopped")
-            return 1
-        except AgentFailed as error:
-            notes.append(f"The review run failed: {error}")
-
-        dirty = out(self.epic_worktree, "status", "--porcelain")
-        # The merge gate runs every check of the ticket gate, so it is the only test gate here.
+        # The ticket reviews already ran at landing, so the finish only runs the merge gate, which is the
+        # only test gate here, and leaves the review of the whole Epic to KC.
         failing: tuple[str, Path] | None = None
         log_file = run_dir / "finish-merge-gate.log"
         command = self.config.merge_gate
-        if dirty:
-            # The gates would check changes the PR does not hold. The changes stay for KC.
-            log_file = run_dir / "finish-status.log"
-            log_file.write_text(dirty + "\n")
-            failing = ("git status --porcelain", log_file)
-            notes.append(
-                f"The review fix run left changes that are not committed in `{self.epic_worktree}`. "
-                "The PR does not hold them."
-            )
-            self.log(key, "clean-tree", "fail", detail=str(log_file))
-        elif not self.gate(command, self.epic_worktree, self.config.stack_env(EPIC_SLOT, key), log_file, key):
+        if not self.gate(command, self.epic_worktree, self.config.stack_env(EPIC_SLOT, key), log_file, key):
             failing = (" ".join(command), log_file)
-        else:
-            fixed = out(self.epic_worktree, "diff", "--name-only", f"{before_fix}..HEAD").splitlines()
-            if any(self.is_ui_path(path) for path in fixed) and not screenshots(run_dir):
-                failing = ("the UI gate", run_dir)
-                self.log(key, "ui-gate", "fail", detail="The review fix touches a UI path.")
         self.push(self.epic_worktree, self.epic_branch, key)
-        body = self.pr_body(run, session, merge_base)
-        return self.open_pr(failing, notes, body)
+        body = self.pr_body(run, merge_base)
+        return self.open_pr(failing, body)
 
-    def ticket_reviews(self, run: TicketRun) -> list[str]:
-        """The findings of one `REVIEW_MODEL` review per landed ticket, limited to that ticket's merge."""
-        findings: list[str] = []
-        for ticket in self.tracker.children(self.epic_key):
-            merges = repo.merges_of(self.repo, self.epic_branch, ticket.key)
-            if not merges:
-                continue
-            spec = self.home / "runs" / ticket.key / "ticket.md"
-            prompt = TICKET_REVIEW_PROMPT.format(
-                base=f"{merges[0]}^1",
-                merge=merges[0],
-                ticket=spec if spec.exists() else run.run_dir / "ticket.md",
-            )
-            review = self.review_agent(run, prompt, f"{ticket.key}-finish-review")
-            findings += [f"{ticket.key}: {finding}" for finding in review.findings]
-        return findings
-
-    def pr_body(self, run: TicketRun, session: str | None, merge_base: str) -> str:
+    def pr_body(self, run: TicketRun, merge_base: str) -> str:
         """The body an agent writes with the `pr` skill, or a table of the tickets when it writes none."""
         key = self.epic_key
         tickets = ["| Ticket | Result |", "| ------ | ------ |"]
@@ -723,7 +660,7 @@ class EpicRun:
         if self.config.name_landed_keys_only:
             prompt += LANDED_KEYS_PROMPT
         try:
-            self.agent(run, prompt, session=session, name=f"{key}-review")
+            self.agent(run, prompt, session=None, name=f"{key}-pr")
         except (AgentFailed, UsageLimit) as error:
             self.log(key, "pr-body", "fail", detail=str(error))
         written = body_file.read_text() if body_file.exists() else ""
@@ -732,7 +669,7 @@ class EpicRun:
         self.log(key, "pr-body", "fallback")
         return f"Builds the Epic {key}: {self.epic_summary}.\n\n{table}\n"
 
-    def open_pr(self, failing: tuple[str, Path] | None, notes: list[str], body: str) -> int:
+    def open_pr(self, failing: tuple[str, Path] | None, body: str) -> int:
         key = self.epic_key
         command = [
             "gh", "pr", "list", "--head", self.epic_branch, "--state", "open",
@@ -750,7 +687,6 @@ class EpicRun:
             lines += [f"**Unfinished tickets:** {', '.join(unfinished)}.", ""]
         if failing:
             lines += [f"**Failing gate:** `{failing[0]}`. The log is `{failing[1]}`.", ""]
-        lines += notes + ([""] if notes else [])
         if self.decisions:
             items = [f"- {self.ticket_label(ticket)}: {item}" for ticket, item in self.decisions]
             lines += ["**Decisions to check:**", *items, ""]

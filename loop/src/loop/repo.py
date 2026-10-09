@@ -38,15 +38,10 @@ def has_ref(repo: Path, ref: str) -> bool:
     return git(repo, "rev-parse", "--verify", "--quiet", ref, check=False).returncode == 0
 
 
-def merges_of(repo: Path, epic_branch: str, key: str) -> list[str]:
-    """The merges on the Epic branch that carry the ticket's key."""
-    log = out(repo, "log", "--merges", "--fixed-strings", f"--grep=({key})", "--format=%H", epic_branch)
-    return log.split()
-
-
 def landed(repo: Path, epic_branch: str, key: str) -> bool:
     """A ticket has landed when a merge on the Epic branch carries its key."""
-    return bool(merges_of(repo, epic_branch, key))
+    log = out(repo, "log", "--merges", "--fixed-strings", f"--grep=({key})", "--format=%H", epic_branch)
+    return bool(log)
 
 
 def adds_to(repo: Path, ref: str, base: str) -> bool:
