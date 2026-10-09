@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from . import report
+
 RUN_LOCK = "run.lock"
 SECRETS_FILE = "secrets.json"
 BOARD = "board.json"
@@ -117,6 +119,30 @@ def epics(state_dir: Path) -> list[dict[str, Any]]:
                 }
             )
     return sorted(found, key=lambda epic: epic["updated"], reverse=True)
+
+
+def all_runs(state_dir: Path) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Each run on this host, as its Epic key and its lines, the oldest first."""
+    runs = []
+    for home in state_dir.iterdir() if state_dir.is_dir() else []:
+        if KEY.fullmatch(home.name) and (home / DECISIONS).exists():
+            runs += [(home.name, run) for run in report.split_runs(home.name, read_lines(home / DECISIONS))]
+    return sorted(runs, key=lambda item: str(item[1][0].get("time")))
+
+
+def comparison(
+    state_dir: Path, epic_key: str | None = None, against: str | None = None
+) -> dict[str, Any] | None:
+    """The breakdown of an Epic's latest run, or of the latest run on this host, against the run before it."""
+    runs = all_runs(state_dir)
+    if epic_key is None and runs:
+        epic_key = runs[-1][0]
+    current, previous = report.pick(runs, epic_key or "", against)
+    if current is None:
+        return None
+    now = report.breakdown(*current)
+    before = report.breakdown(*previous) if previous else None
+    return {"current": now, "previous": before, "rows": report.compare(now, before)}
 
 
 def _board(home: Path) -> dict[str, Any]:
@@ -443,6 +469,10 @@ class Watch:
             if not (self.state_dir / parts[2] / DECISIONS).exists():
                 return self.missing()
             return self.json(epic_view(self.state_dir, parts[2]))
+        if len(parts) == 3 and parts[:2] == ["api", "report"] and KEY.fullmatch(parts[2]):
+            against = query.get("against", [""])[0]
+            found = comparison(self.state_dir, parts[2], against if KEY.fullmatch(against) else None)
+            return self.json(found) if found else self.missing()
         if len(parts) == 5 and parts[:2] == ["api", "agent"] and all(KEY.fullmatch(p) for p in parts[2:4]):
             home = self.state_dir / parts[2]
             path = home / "runs" / parts[3] / f"agent-{parts[4]}.jsonl"
