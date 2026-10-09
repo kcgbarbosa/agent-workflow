@@ -53,8 +53,10 @@ REVIEW_SCHEMA = json.dumps(
         "required": ["status", "reason", "decisions", "findings"],
     }
 )
-# The reviews run in their own sessions on this model, so the head agent's context stays small.
-REVIEW_MODEL = "claude-sonnet-5-5"
+# The reviews run in their own sessions, so the head agent's context stays small. At the same cost per task,
+# Opus scores as well as Sonnet or better, so the reviews run on Opus at a set effort.
+REVIEW_MODEL = "claude-opus-5-5"
+REVIEW_EFFORT = "medium"
 REVIEW_RULES = (
     "Change no file, and do not commit or push. Return each problem that needs a change in `findings`. "
     "Leave out a judgement call that you would not change."
@@ -91,6 +93,8 @@ DISPATCH = Path(__file__).with_name("dispatch.md")
 MODEL_USAGE = (
     "inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD", "costBasis",
 )  # fmt: skip
+# The oldest `claude` that knows each model in agents.json and prices the long prompts of Haiku 5.5.
+MIN_CLAUDE = (2, 1, 295)
 TIMED_OUT = 124
 # The loop keeps the stack volumes for KC, so no agent run deletes one.
 VOLUME_DENY = ("Bash(docker volume rm *)", "Bash(docker volume prune*)", "Bash(docker system prune*)")
@@ -217,6 +221,26 @@ def agent_usage(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def claude_version() -> str:
+    """The version that `claude --version` prints, such as 2.1.295, or "" when it prints none."""
+    try:
+        result = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30)
+    except OSError, subprocess.TimeoutExpired:
+        return ""
+    match = re.search(r"\d+\.\d+\.\d+", result.stdout)
+    return match[0] if match else ""
+
+
+def run_setup() -> dict[str, Any]:
+    """What the agents of a run run on. The start line keeps it, so `loop report` can tell two runs apart."""
+    tiers = json.loads(AGENTS.read_text())
+    return {
+        "claude": claude_version(),
+        "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.items()},
+        "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
+    }
+
+
 def agent_settings(config: Config) -> str:
     """The permission rules and the auto mode rules of every agent run, for `--settings`.
 
@@ -304,7 +328,7 @@ class EpicRun:
             repo.add_worktree(
                 self.repo, self.epic_worktree, self.epic_branch, f"origin/{self.config.main_branch}"
             )
-        self.log(self.epic_key, "start", "ok", detail=self.epic_branch)
+        self.log(self.epic_key, "start", "ok", detail=self.epic_branch, setup=run_setup())
         for ticket in self.tracker.children(self.epic_key):
             if self.ticket_result(ticket) == NOT_LANDED:
                 self.log(ticket.key, "start", "done-not-landed")
@@ -518,7 +542,9 @@ class EpicRun:
 
     def review_agent(self, run: TicketRun, prompt: str, name: str) -> AgentResult:
         """A review session with an empty context. A blocked review makes the ticket stuck."""
-        review = self.agent(run, prompt, None, name=name, schema=REVIEW_SCHEMA, model=REVIEW_MODEL)
+        review = self.agent(
+            run, prompt, None, name=name, schema=REVIEW_SCHEMA, model=REVIEW_MODEL, effort=REVIEW_EFFORT
+        )
         if review.status == "blocked":
             raise AgentFailed(f"The review {name} is blocked: {review.reason}")
         return review
@@ -751,6 +777,7 @@ class EpicRun:
         name: str | None = None,
         schema: str = AGENT_SCHEMA,
         model: str | None = None,
+        effort: str | None = None,
     ) -> AgentResult:
         """Runs `claude -p` with an empty context, or resumes a session.
 
@@ -759,7 +786,7 @@ class EpicRun:
         name = name or run.ticket.key
         while True:
             try:
-                return self.agent_run(run, prompt, session, name, schema, model)
+                return self.agent_run(run, prompt, session, name, schema, model, effort)
             except UsageLimit as error:
                 if error.reset is None or error.reset - time.time() > MAX_USAGE_WAIT_SECONDS:
                     raise
@@ -779,7 +806,14 @@ class EpicRun:
         pause(max(0.0, reset - time.time()) + 60)
 
     def agent_run(
-        self, run: TicketRun, prompt: str, session: str | None, name: str, schema: str, model: str | None
+        self,
+        run: TicketRun,
+        prompt: str,
+        session: str | None,
+        name: str,
+        schema: str,
+        model: str | None,
+        effort: str | None,
     ) -> AgentResult:
         limit = f"{self.config.agent_timeout_minutes}m"
         command = ["timeout", "--kill-after=60", limit, "claude", "-p", prompt]
@@ -787,6 +821,8 @@ class EpicRun:
             command += ["--resume", session]
         if model:
             command += ["--model", model]
+        if effort:
+            command += ["--effort", effort]
         # Each worktree is a new folder, where nobody approved the project `.mcp.json`. With the flag,
         # the loop does not depend on how `claude -p` treats a server that waits for approval.
         if (run.worktree / ".mcp.json").exists():
@@ -1000,6 +1036,7 @@ class EpicRun:
         session: str | None = None,
         detail: str = "",
         usage: dict[str, Any] | None = None,
+        setup: dict[str, Any] | None = None,
     ) -> None:
         line: dict[str, Any] = {
             "time": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -1013,6 +1050,8 @@ class EpicRun:
         }
         if usage is not None:
             line["usage"] = usage
+        if setup is not None:
+            line["setup"] = setup
         with self._log_lock, self.log_path.open("a") as file:
             file.write(json.dumps(line) + "\n")
         print(f"{line['time']} {ticket} {step} {result} {detail}".rstrip(), flush=True)

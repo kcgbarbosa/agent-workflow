@@ -106,6 +106,10 @@ pre.detail { margin: 6px 0 2px; padding: 8px; background: var(--code-bg); border
 .steps td.k { white-space: nowrap; font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .steps td.d { color: var(--muted); overflow-wrap: anywhere; font-size: 12.5px; }
 @media (max-width: 820px) { .steps td.k { display: none; } }
+.cost td.n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cost td.n.text { white-space: normal; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
+.cost tr.sec td { padding-top: 14px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+.cost td.up { color: var(--bad); } .cost td.down { color: var(--ok); }
 
 .shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
 .shots a { display: block; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
@@ -130,7 +134,7 @@ pre.detail { margin: 6px 0 2px; padding: 8px; background: var(--code-bg); border
 "use strict";
 const POLL_MS = 3000;
 const ORDER = [["running", "Running"], ["stuck", "Stuck"], ["waiting", "Waiting"], ["landed", "Landed"], ["done", "Done before this run"]];
-const ui = { epic: null, ticket: null, tab: "activity", agent: null, follow: true, view: null, feed: null };
+const ui = { epic: null, ticket: null, tab: "activity", agent: null, follow: true, view: null, feed: null, report: null };
 
 function h(tag, props, ...children) {
   const el = document.createElement(tag);
@@ -258,6 +262,7 @@ function renderDetail(v) {
   const tabs = [["activity", `Activity${agents.length ? ` · ${agents.length} runs` : ""}`], ["steps", "Steps"]];
   if (shots.length) tabs.push(["shots", `Screenshots · ${shots.length}`]);
   if (files.length) tabs.push(["files", `Files · ${files.length}`]);
+  if (!t) tabs.push(["cost", "Cost"]);
   if (!tabs.some(([k]) => k === ui.tab)) ui.tab = "activity";
 
   const head = h("div", { class: "head" },
@@ -272,6 +277,7 @@ function renderDetail(v) {
   let body;
   if (ui.tab === "activity") body = keep ? ui.feed.wrap : activityView(t ? t.key : v.key, agents, t ? t.column === "running" : v.state === "running");
   else if (ui.tab === "steps") body = stepsView(v.events.filter((e) => !t || e.ticket === t.key));
+  else if (ui.tab === "cost") body = costView(v.key);
   else if (ui.tab === "shots") body = h("div", { class: "body shots" }, shots.map((s) =>
     h("a", { href: fileUrl(s), target: "_blank" }, h("img", { src: fileUrl(s), loading: "lazy", alt: s }), s.split("/").pop())));
   else body = h("div", { class: "body files" }, files.map((f) => h("a", { href: fileUrl(f), target: "_blank" }, f.replace(/^runs\/[^/]+\//, ""))));
@@ -288,6 +294,43 @@ function stepsView(events) {
       h("td", {}, h("b", {}, e.step), " ", pill(e.result, e.result)),
       h("td", { class: "d" }, e.cost !== undefined ? `${money(e.cost)} · ${e.turns} turns ` : "",
         e.log ? h("a", { href: fileUrl(e.log), target: "_blank" }, "log") : "", " ", e.log ? "" : (e.detail || "").slice(0, 400)))))));
+}
+
+// --- Cost: the latest run against the run before it (`loop report`) ---
+function costView(key) {
+  const wrap = h("div", { class: "body" });
+  const fill = (report) => wrap.replaceChildren(report ? costTable(report) : h("div", { class: "empty" }, "No run of this Epic has a cost yet."));
+  const cached = ui.report && ui.report.key === key;
+  if (cached) fill(ui.report.data); else wrap.append(h("div", { class: "empty" }, "Loading..."));
+  if (!cached || Date.now() - ui.report.at > 30000) {
+    getJson(`/api/report/${key}`)
+      .then((data) => { ui.report = { key, data, at: Date.now() }; fill(data); })
+      .catch(() => { ui.report = { key, data: null, at: Date.now() }; fill(null); });
+  }
+  return wrap;
+}
+
+const figure = (kind, n) => (n === null || n === undefined ? "-" : kind === "money" ? money(n) : kind === "minutes" ? `${Math.round(n)} min` : String(n));
+
+function costTable(report) {
+  const before = report.previous ? `${report.previous.epic} ${(report.previous.started || "").slice(0, 10)}` : "No earlier run";
+  const rows = [];
+  let section = "";
+  for (const row of report.rows) {
+    if (row.section !== section) {
+      section = row.section;
+      const top = rows.length === 0;
+      rows.push(h("tr", { class: "sec" }, h("td", {}, section), h("td", { class: "n" }, top ? before : ""),
+        h("td", { class: "n" }, top ? "This run" : ""), h("td", { class: "n" }, top ? "Change" : "")));
+    }
+    const pct = typeof row.change === "number";
+    const change = pct ? `${row.change > 0 ? "+" : ""}${row.change}%` : row.change || "";
+    const tone = row.kind === "money" && pct && row.change !== 0 ? (row.change < 0 ? "down" : "up") : "";
+    const n = row.kind === "text" ? "n text" : "n";
+    rows.push(h("tr", {}, h("td", {}, row.label), h("td", { class: n }, figure(row.kind, row.previous)),
+      h("td", { class: n }, figure(row.kind, row.current)), h("td", { class: `n ${tone}` }, change)));
+  }
+  return h("table", { class: "steps cost" }, h("tbody", {}, rows));
 }
 
 // --- Activity ---

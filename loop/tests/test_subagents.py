@@ -20,6 +20,8 @@ def test_each_tier_has_a_description_a_prompt_a_model_an_effort_and_its_tools() 
         assert tier["model"].startswith("claude-"), name
         assert tier["effort"] in EFFORTS, name
         assert tier["tools"] and all(isinstance(tool, str) for tool in tier["tools"]), name
+        # Context grows each turn, and a cheap model's prompt past its short-prompt rate costs more.
+        assert isinstance(tier["maxTurns"], int) and tier["maxTurns"] > 0, name
     assert not {"Edit", "Write"} & {*tiers["runner"]["tools"], *tiers["scout"]["tools"]}
 
 
