@@ -8,6 +8,7 @@ agents/<name>.md a subagent tier on a cheaper model. The loop gives its agents t
 loop/            the loop command, which builds an Epic unattended. Its design is skills/setup-loop/loop.md
 AGENTS.md        linked to ~/.claude/CLAUDE.md, the name Claude Code reads
 install.sh       makes the links and installs the loop command. Safe to run again
+tests/           the repo-level checks that .github/workflows/repo.yml runs. Run them with uv run --no-project --with pytest pytest tests
 licenses/        upstream licenses. Keep
 ```
 
