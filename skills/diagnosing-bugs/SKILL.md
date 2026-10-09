@@ -109,6 +109,8 @@ Tool preference:
 
 **Tag every debug log** with a unique prefix, e.g. `[DEBUG-a4f2]`. Cleanup at the end becomes a single grep. Untagged logs survive; tagged logs die.
 
+**Parallel trials.** When a prediction is a change that should turn the Phase 1 loop green, and the loop needs no running stack (a unit test, a typecheck, a lint), test the hypotheses at once: send one `trial` subagent per hypothesis in one message, with its change as the approach and the loop command as the check. A trial starts from your last commit, so commit the minimised repro first. A pass supports its hypothesis and a fail rules it out. Review the passing diff yourself: it is evidence for Phase 5, not the fix.
+
 **Perf branch.** For performance regressions, logs are usually wrong. Instead: establish a baseline measurement (timing harness, `performance.now()`, profiler, query plan), then bisect. Measure first, fix second.
 
 ## Phase 5: Fix + regression test

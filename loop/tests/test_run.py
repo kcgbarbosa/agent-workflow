@@ -13,7 +13,8 @@ import pytest
 from conftest import EPIC, World, sh
 
 from loop import run as loop_run
-from loop.run import AGENTS, DISPATCH, RESTART_PROMPT, REVIEW_EFFORT, REVIEW_MODEL, USAGE_RESUME_PROMPT
+from loop import tiers
+from loop.run import DISPATCH, RESTART_PROMPT, REVIEW_EFFORT, REVIEW_MODEL, USAGE_RESUME_PROMPT
 
 
 def test_the_frontier_runs_blockers_first_and_lands_each_ticket(world: World) -> None:
@@ -75,6 +76,7 @@ def test_each_agent_may_run_the_gates_and_reset_its_stack_without_a_prompt(world
     rules = settings["autoMode"]["allow"]
     assert rules[0] == "$defaults" and settings["autoMode"]["environment"][0] == "$defaults"
     assert any("`demo-<ticket key>`" in rule and "The volumes stay." in rule for rule in rules)
+    assert settings["worktree"] == {"baseRef": "head"}
 
 
 def test_the_run_writes_the_board_that_loop_watch_shows(world: World) -> None:
@@ -745,7 +747,7 @@ def test_every_agent_run_gets_the_subagent_tiers_and_the_dispatch_rule(world: Wo
         "DEMO-2-review",
         f"{EPIC}-pr",
     ]
-    assert {call["agents"] for call in calls} == {str(AGENTS)}
+    assert {call["agents"] for call in calls} == {json.dumps(tiers.load())}
     assert {call["system_prompt"] for call in calls} == {DISPATCH.read_text()}
 
 
@@ -782,9 +784,23 @@ def test_the_start_line_keeps_what_the_agents_run_on(world: World) -> None:
     assert world.run() == 0
 
     start = next(line for line in world.decisions() if line["ticket"] == EPIC and line["step"] == "start")
-    tiers = json.loads(AGENTS.read_text())
     assert start["setup"] == {
         "claude": "2.1.295",
-        "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.items()},
+        "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }
+
+
+def test_the_loop_removes_the_trial_worktrees_that_a_ticket_run_left(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    trials = [{"name": "failed"}, {"name": "running", "locked": True}, {"name": "other", "from_main": True}]
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "trials": trials}]})
+
+    assert world.run() == 0
+
+    folder = world.repo / ".claude" / "worktrees"
+    assert sorted(path.name for path in folder.iterdir()) == ["agent-other", "agent-running"]
+    branches = sh(world.repo, "git", "branch", "--list", "worktree-agent-*", "--format=%(refname:short)")
+    assert branches.split() == ["worktree-agent-other", "worktree-agent-running"]
+    removed = next(line for line in world.decisions() if line["step"] == "trials")
+    assert removed["ticket"] == "DEMO-2" and removed["detail"].endswith("agent-failed")
