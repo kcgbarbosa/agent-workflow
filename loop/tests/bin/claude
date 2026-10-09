@@ -3,7 +3,7 @@
 
 FAKE_CLAUDE_DIR/plan.json maps a session name (`-n`) to a list of steps. Each call takes the next step.
 A step can write and delete files and commit them, write files with `uncommitted` and not commit them, save
-a screenshot or a PR body in LOOP_RUN_DIR, return a status and review findings, or fail with a usage limit
+a screenshot or a PR body in LOOP_RUN_DIR, make `trials` worktrees as a trial subagent leaves them, return a status and review findings, or fail with a usage limit
 or a crash after its commit. A usage limit with `resets_in` reports when it resets, in seconds from now. A step with `late_turn` adds a second result with no status, as when a background subagent wakes the
 session after its status. A step with `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to
 FAKE_CLAUDE_DIR/peek.json. With no step left, the call returns done and changes nothing. `--version` prints
@@ -66,6 +66,15 @@ if step.get("write") or step.get("delete"):
     subprocess.run(["git", "add", "-A"], check=True)
     message = step.get("commit", f"feat({name}): change")
     subprocess.run(["git", "commit", "-q", "-m", message], check=True)
+for trial in step.get("trials", []):
+    # A trial subagent's worktree, as Claude Code makes it: in the main checkout, from HEAD or from main.
+    common = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True, check=True)
+    path = Path(common.stdout.strip()).parent / ".claude" / "worktrees" / f"agent-{trial['name']}"
+    base = "origin/main" if trial.get("from_main") else "HEAD"
+    subprocess.run(["git", "worktree", "add", "-q", "-b", f"worktree-agent-{trial['name']}", str(path), base], check=True)
+    (path / "trial.txt").write_text("a change the trial left")
+    if trial.get("locked"):
+        subprocess.run(["git", "worktree", "lock", str(path)], check=True)
 for path, content in step.get("uncommitted", {}).items():
     Path(path).write_text(content)
 if step.get("pr_body"):

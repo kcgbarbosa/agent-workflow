@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Links each skill in this repo, and AGENTS.md as CLAUDE.md, into ~/.claude, and installs the loop command.
+# Links each skill and subagent tier in this repo, and AGENTS.md as CLAUDE.md, into ~/.claude, and installs the loop command.
 # Safe to run again.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")" && pwd)"
 dest="$HOME/.claude"
-mkdir -p "$dest/skills"
+mkdir -p "$dest/skills" "$dest/agents"
 
 for skill in "$repo"/skills/*/; do
   name="$(basename "$skill")"
@@ -24,6 +24,28 @@ for link in "$dest"/skills/*; do
     "$repo"/skills/*) [ -e "$link" ] || rm "$link" ;;
   esac
 done
+
+for tier in "$repo"/agents/*.md; do
+  name="$(basename "$tier")"
+  target="$dest/agents/$name"
+  if [ -e "$target" ] && [ ! -L "$target" ]; then
+    echo "agent-workflow: skipped the $name tier, $target is a real file" >&2
+    continue
+  fi
+  ln -sfn "$tier" "$target"
+done
+
+for link in "$dest"/agents/*; do
+  [ -L "$link" ] || continue
+  case "$(readlink "$link")" in
+    "$repo"/agents/*) [ -e "$link" ] || rm "$link" ;;
+  esac
+done
+
+# A trial subagent's worktree branches from the default branch unless this setting says otherwise.
+if ! grep -qs '"baseRef": *"head"' "$dest/settings.json"; then
+  echo 'agent-workflow: the trial tier needs "worktree": {"baseRef": "head"} in ~/.claude/settings.json' >&2
+fi
 
 if [ -e "$dest/CLAUDE.md" ] && [ ! -L "$dest/CLAUDE.md" ]; then
   echo "agent-workflow: skipped CLAUDE.md, $dest/CLAUDE.md is a real file. Remove it, then run this again" >&2

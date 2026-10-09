@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from . import repo
+from . import repo, tiers
 from .config import Config
 from .repo import git, out
 from .tracker import Ticket, TrackerError
@@ -86,14 +86,15 @@ USAGE_LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 # The commit that the screenshots in a run folder show.
 UI_COMMIT_FILE = "ui-review.commit"
-# The subagent tiers of every agent run, and the rule for when the head agent hands work to them.
-AGENTS = Path(__file__).with_name("agents.json")
+# The rule for when the head agent hands work to the subagent tiers in `tiers.py`.
 DISPATCH = Path(__file__).with_name("dispatch.md")
+# Where Claude Code makes the worktree of a `trial` subagent: in the main checkout, also for a ticket's run.
+TRIALS = Path(".claude/worktrees")
 # The usage fields the log keeps per model. A `costBasis` of "unknown" marks a cost the CLI guessed.
 MODEL_USAGE = (
     "inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD", "costBasis",
 )  # fmt: skip
-# The oldest `claude` that knows each model in agents.json and prices the long prompts of Haiku 5.5.
+# The oldest `claude` that knows each model the tiers name and prices the long prompts of Haiku 5.5.
 MIN_CLAUDE = (2, 1, 295)
 TIMED_OUT = 124
 # The loop keeps the stack volumes for KC, so no agent run deletes one.
@@ -233,10 +234,9 @@ def claude_version() -> str:
 
 def run_setup() -> dict[str, Any]:
     """What the agents of a run run on. The start line keeps it, so `loop report` can tell two runs apart."""
-    tiers = json.loads(AGENTS.read_text())
     return {
         "claude": claude_version(),
-        "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.items()},
+        "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }
 
@@ -254,6 +254,8 @@ def agent_settings(config: Config) -> str:
         "$defaults",
         "Host containment: an unattended build loop runs this session. Nobody is at the keyboard. The "
         f"loop owns each git worktree and run folder under {config.state_dir}.",
+        f"Trial worktrees: each worktree under {config.repo / TRIALS} belongs to a `trial` subagent, "
+        "which tries one approach there and removes its change when it reports.",
     ]
     classifier_allow = [
         "$defaults",
@@ -277,6 +279,8 @@ def agent_settings(config: Config) -> str:
     settings = {
         "permissions": {"allow": allow, "deny": list(deny)},
         "autoMode": {"environment": environment, "allow": classifier_allow},
+        # A `trial` branches from the ticket's last commit, not from the default branch.
+        "worktree": {"baseRef": "head"},
     }
     return json.dumps(settings)
 
@@ -471,6 +475,18 @@ class EpicRun:
             return self.agent(run, prompt, session)
         finally:
             self.push(run.worktree, run.branch, run.ticket.key)
+            self.remove_trials(run)
+
+    def remove_trials(self, run: TicketRun) -> None:
+        """Removes the trial worktrees that the ticket's agent run left, such as one of a trial that failed.
+
+        A trial removes its own change when it reports, and Claude Code then removes its worktree.
+        """
+        base = f"origin/{self.config.main_branch}"
+        with self._repo_lock:
+            removed = repo.remove_trials(self.repo, TRIALS, run.branch, base)
+        if removed:
+            self.log(run.ticket.key, "trials", "removed", detail=" ".join(map(str, removed)))
 
     def ticket_gate(self, run: TicketRun) -> GateFailure | None:
         """The ticket gate. A tree with changes not committed, or no commit, fails it first."""
@@ -830,7 +846,7 @@ class EpicRun:
         command += [
             "--permission-mode", "auto", "--permission-prompts", "none",
             "--output-format", "stream-json", "--verbose", "--json-schema", schema, "-n", name,
-            "--agents", str(AGENTS), "--append-system-prompt", DISPATCH.read_text(),
+            "--agents", json.dumps(tiers.load()), "--append-system-prompt", DISPATCH.read_text(),
             "--settings", self.settings,
         ]  # fmt: skip
         env = {

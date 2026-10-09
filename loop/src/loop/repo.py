@@ -65,6 +65,33 @@ def add_worktree(repo: Path, path: Path, branch: str, base: str) -> None:
         git(repo, "worktree", "add", "--no-track", "-b", branch, str(path), base)
 
 
+def is_ancestor(repo: Path, commit: str, ref: str) -> bool:
+    return git(repo, "merge-base", "--is-ancestor", commit, ref, check=False).returncode == 0
+
+
+def remove_trials(repo: Path, folder: Path, branch: str, base: str) -> list[Path]:
+    """Removes each trial worktree in the folder that started from the branch's work, with its branch.
+
+    Claude Code names the branch of a subagent's worktree `worktree-agent-<id>`, and locks the worktree
+    while the subagent runs, so a running trial stays. A worktree whose commit is on the base, and not
+    only on the branch, can belong to anyone's session, so it stays too.
+    """
+    root = (repo / folder).resolve()
+    removed = []
+    for entry in out(repo, "worktree", "list", "--porcelain").split("\n\n"):
+        fields = dict(line.partition(" ")[::2] for line in entry.splitlines())
+        path = Path(fields.get("worktree", "")).resolve()
+        trial_branch = fields.get("branch", "").removeprefix("refs/heads/")
+        if path.parent != root or "locked" in fields or not trial_branch.startswith("worktree-agent-"):
+            continue
+        if not is_ancestor(repo, fields["HEAD"], branch) or is_ancestor(repo, fields["HEAD"], base):
+            continue
+        git(repo, "worktree", "remove", "--force", str(path), check=False)
+        git(repo, "branch", "--delete", "--force", trial_branch, check=False)
+        removed.append(path)
+    return removed
+
+
 def slug(text: str, words: int = 6) -> str:
     parts = re.findall(r"[a-z0-9]+", text.lower())
     return "-".join(parts[:words]) or "work"

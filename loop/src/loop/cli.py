@@ -126,7 +126,7 @@ def check_tools(config: Config) -> None:
 
 
 def claude_problem(version: str) -> str | None:
-    """Why this `claude` cannot run the subagent tiers in agents.json, or None when it can."""
+    """Why this `claude` cannot run the subagent tiers, or None when it can."""
     if tuple(int(part) for part in version.split(".") if part) >= MIN_CLAUDE:
         return None
     needed = ".".join(map(str, MIN_CLAUDE))
