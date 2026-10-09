@@ -2,7 +2,8 @@
 """A fake `make` for the loop tests. A marker file in the checked out tree makes a gate fail.
 
 TICKET_FAIL fails every gate. MERGE_FAIL fails `make check` only, and so does a file `merge-gate-fails` in
-FAKE_CLAUDE_DIR, for a failure outside the code. GATE_HANG starts a child process and
+FAKE_CLAUDE_DIR, for a failure outside the code. A file `merge-gate-fails-after` there holds a number, and
+`make check` fails once it has run that many times, as the finish gate does after one landed ticket. GATE_HANG starts a child process and
 hangs. The child touches FAKE_CLAUDE_DIR/gate-child-survived if it still runs two seconds later.
 """
 
@@ -31,4 +32,10 @@ if Path("TICKET_FAIL").exists():
 if "check" in targets and (Path("MERGE_FAIL").exists() or Path(os.environ["FAKE_CLAUDE_DIR"], "merge-gate-fails").exists()):
     print("FAILED e2e/home.spec.ts - the merge gate fails")
     sys.exit(2)
+after = Path(os.environ["FAKE_CLAUDE_DIR"], "merge-gate-fails-after")
+if "check" in targets and after.exists():
+    runs = sum(1 for line in Path(os.environ["FAKE_CLAUDE_DIR"], "make.jsonl").read_text().splitlines() if '"check"' in line)
+    if runs > int(after.read_text()):
+        print("FAILED e2e/home.spec.ts - the merge gate fails")
+        sys.exit(2)
 print("all green")
