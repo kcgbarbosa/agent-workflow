@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from conftest import write_config
 
-from loop import config
+from loop import cli, config, watch
 from loop.cli import SECRETS_FILE, Refused, main, read_secrets
 
 
@@ -140,3 +140,19 @@ def test_a_config_mistake_refuses_the_file(tmp_path: Path, edit: Callable[[str],
 def test_a_missing_config_names_the_skill_that_writes_it(tmp_path: Path) -> None:
     with pytest.raises(config.ConfigError, match="setup-loop"):
         config.load(tmp_path)
+
+
+def test_loop_start_names_the_tailnet_address_of_the_watch_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_config(tmp_path)
+    settings = config.load(tmp_path)
+    monkeypatch.setattr(cli, "watch_answers", lambda port: True)
+    monkeypatch.setenv("DISPLAY", "")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "")
+
+    monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1", "100.64.0.7"])
+    assert cli.open_watch(settings, "DEMO-33") == "http://100.64.0.7:8790/#/DEMO-33"
+
+    monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1"])
+    assert cli.open_watch(settings, "DEMO-33") == "http://127.0.0.1:8790/#/DEMO-33"

@@ -519,5 +519,5 @@ def serve(state_dir: Path, port: int, hosts: list[str] | None = None) -> list[Th
     return servers
 
 
-def url(port: int, epic_key: str | None = None) -> str:
-    return f"http://127.0.0.1:{port}/" + (f"#/{epic_key}" if epic_key else "")
+def url(port: int, epic_key: str | None = None, host: str = "127.0.0.1") -> str:
+    return f"http://{host}:{port}/" + (f"#/{epic_key}" if epic_key else "")

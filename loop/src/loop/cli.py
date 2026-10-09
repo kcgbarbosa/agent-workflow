@@ -287,7 +287,7 @@ def watch(config: Config) -> int:
 
 
 def open_watch(config: Config, epic_key: str) -> str:
-    """Starts `loop watch` in its own tmux session when nothing answers on its port, then opens the page."""
+    """Starts `loop watch` when nothing answers on its port, opens the page, and returns its address."""
     page = watch_page.url(config.watch_port, epic_key)
     if not watch_answers(config.watch_port):
         session = f"{config.name}-watch"
@@ -305,7 +305,8 @@ def open_watch(config: Config, epic_key: str) -> str:
         subprocess.Popen(
             [opener, page], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
         )
-    return page
+    # 127.0.0.1 opens only on this host. The tailnet address also opens on the phone and the other host.
+    return watch_page.url(config.watch_port, epic_key, watch_page.addresses()[-1])
 
 
 def watch_answers(port: int) -> bool:
