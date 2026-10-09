@@ -28,7 +28,10 @@ def test_the_frontier_runs_blockers_first_and_lands_each_ticket(world: World) ->
     assert world.run() == 0
 
     names = {call["name"] for call in world.calls()}
-    assert names == {"DEMO-2", "DEMO-2-review", "DEMO-3", "DEMO-3-review", f"{EPIC}-review"}
+    assert names == {
+        "DEMO-2", "DEMO-2-review", "DEMO-2-finish-review",
+        "DEMO-3", "DEMO-3-review", "DEMO-3-finish-review", f"{EPIC}-review",
+    }  # fmt: skip
     merges = [subject for subject in world.epic_log() if subject.startswith("merge(")]
     assert merges == ["merge(DEMO-3): Add the second part", "merge(DEMO-2): Add the first part"]
     steps = [(line["ticket"], line["step"], line["result"]) for line in world.decisions()]
@@ -532,16 +535,25 @@ def test_a_change_to_a_frontend_test_file_needs_no_screenshots(world: World) -> 
 
 def test_the_finish_reviews_the_epic_and_opens_the_epic_pr(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
-    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}], f"{EPIC}-review": [{}, {"write": {"fix.txt": "fix"}}]})
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}}],
+            "DEMO-2-finish-review": [{"findings": ["a.txt:1 is wrong."]}],
+            f"{EPIC}-review": [{"write": {"fix.txt": "fix"}}],
+        }
+    )
 
     assert world.run() == 0
 
-    review, fix, _ = world.calls(f"{EPIC}-review")
+    (review,) = world.calls("DEMO-2-finish-review")
     assert review["prompt"].startswith("/code-review ")
+    assert review["model"] == REVIEW_MODEL and review["resume"] is None
+    assert str(world.state / EPIC / "runs" / "DEMO-2" / "ticket.md") in review["prompt"]
+    fix, _ = world.calls(f"{EPIC}-review")
+    assert "a.txt:1 is wrong." in fix["prompt"] and "DEMO-2: " in fix["prompt"]
     epic_ticket = world.state / EPIC / "runs" / EPIC / "ticket.md"
-    assert str(epic_ticket) in review["prompt"]
     assert "`make check`. Make it pass before you return done." in epic_ticket.read_text()
-    assert fix["resume"] is not None
+    assert fix["resume"] is None
     create = world.records("gh")[-1]
     assert create["args"][:2] == ["pr", "create"] and "--draft" not in create["args"]
     assert f"feat({EPIC}): the Loop" in create["args"]
@@ -558,7 +570,8 @@ def test_an_agent_writes_the_epic_pr_body_with_the_pr_skill(world: World) -> Non
     world.plan(
         {
             "DEMO-2": [{"write": {"a.txt": "a"}}],
-            f"{EPIC}-review": [{}, {"write": {"MERGE_FAIL": "x"}}, {"pr_body": body}],
+            "DEMO-2-finish-review": [{"findings": ["a.txt:1 is wrong."]}],
+            f"{EPIC}-review": [{"write": {"MERGE_FAIL": "x"}}, {"pr_body": body}],
         }
     )
 
@@ -634,7 +647,11 @@ def test_with_name_landed_keys_only_the_epic_pr_names_no_key_that_did_not_land(w
 def test_the_epic_pr_is_a_draft_when_a_gate_still_fails(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan(
-        {"DEMO-2": [{"write": {"a.txt": "a"}}], f"{EPIC}-review": [{}, {"write": {"MERGE_FAIL": "x"}}]}
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}}],
+            "DEMO-2-finish-review": [{"findings": ["a.txt:1 is wrong."]}],
+            f"{EPIC}-review": [{"write": {"MERGE_FAIL": "x"}}],
+        }
     )
 
     assert world.run() == 0
@@ -648,7 +665,11 @@ def test_the_epic_pr_is_a_draft_when_a_gate_still_fails(world: World) -> None:
 def test_changes_the_review_fix_leaves_uncommitted_make_the_epic_pr_a_draft(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan(
-        {"DEMO-2": [{"write": {"a.txt": "a"}}], f"{EPIC}-review": [{}, {"uncommitted": {"fix.txt": "fix"}}]}
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}}],
+            "DEMO-2-finish-review": [{"findings": ["a.txt:1 is wrong."]}],
+            f"{EPIC}-review": [{"uncommitted": {"fix.txt": "fix"}}],
+        }
     )
 
     assert world.run() == 0
@@ -716,7 +737,11 @@ def test_a_merge_that_fails_its_gate_never_reaches_the_frontier(world: World) ->
 def test_an_open_epic_pr_gets_the_new_body_and_draft_state(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan(
-        {"DEMO-2": [{"write": {"a.txt": "a"}}], f"{EPIC}-review": [{}, {"write": {"MERGE_FAIL": "x"}}]}
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}}],
+            "DEMO-2-finish-review": [{"findings": ["a.txt:1 is wrong."]}],
+            f"{EPIC}-review": [{"write": {"MERGE_FAIL": "x"}}],
+        }
     )
     (world.fakes / "pr-exists").touch()
 
@@ -750,8 +775,14 @@ def test_every_agent_run_gets_the_subagent_tiers_and_the_dispatch_rule(world: Wo
     assert world.run() == 0
 
     calls = world.calls()
-    # The ticket run, its fix run, its code review, and the review, fix, and PR body runs of the finish.
-    assert [call["name"] for call in calls] == ["DEMO-2", "DEMO-2", "DEMO-2-review", *[f"{EPIC}-review"] * 3]
+    # The ticket run, its fix run, its code review, and the finish review of the ticket and the PR body run.
+    assert [call["name"] for call in calls] == [
+        "DEMO-2",
+        "DEMO-2",
+        "DEMO-2-review",
+        "DEMO-2-finish-review",
+        f"{EPIC}-review",
+    ]
     assert {call["agents"] for call in calls} == {str(AGENTS)}
     assert {call["system_prompt"] for call in calls} == {DISPATCH.read_text()}
 

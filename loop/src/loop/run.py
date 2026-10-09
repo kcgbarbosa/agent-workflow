@@ -69,9 +69,13 @@ RESTART_PROMPT = "A previous run was interrupted. Check the diff against the tic
 USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work."
 # A limit that resets later than this, such as the weekly one, stops the loop.
 MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60
+TICKET_REVIEW_PROMPT = (
+    "/code-review {base} Review only the changes of `{base}..{merge}`, which is one ticket of the Epic. "
+    "The spec is the ticket file {ticket}. " + REVIEW_RULES
+)
 FIX_PROMPT = (
-    "Fix each finding of the review above that is a real problem. Commit the fixes with "
-    "{key} as the commit scope. Return blocked with the reason when a finding needs KC."
+    "The code review of the Epic found these problems:\n\n{findings}\n\nFix each one that is a real problem. "
+    "Commit the fixes with {key} as the commit scope. Return blocked with the reason when a finding needs KC."
 )
 PR_PROMPT = (
     "/pr Write the body of the Epic pull request for the diff `{merge_base}..HEAD` to the file "
@@ -647,12 +651,15 @@ class EpicRun:
         merge_base = out(self.epic_worktree, "merge-base", base, "HEAD")
         session: str | None = None
         try:
-            prompt = f"/code-review {merge_base} The Epic is in {run_dir / 'ticket.md'}."
-            review = self.agent(run, prompt, session=None, name=f"{key}-review")
-            session = review.session
-            fix = self.agent(run, FIX_PROMPT.format(key=key), session=session, name=f"{key}-review")
-            if fix.status == "blocked":
-                notes.append(f"The review fix run is blocked: {fix.reason}")
+            findings = self.ticket_reviews(run)
+            if findings:
+                listed = "\n".join(f"- {finding}" for finding in findings)
+                fix = self.agent(
+                    run, FIX_PROMPT.format(key=key, findings=listed), session=None, name=f"{key}-review"
+                )
+                session = fix.session
+                if fix.status == "blocked":
+                    notes.append(f"The review fix run is blocked: {fix.reason}")
         except UsageLimit as error:
             self.log(key, "review", "usage-limit", detail=str(error))
             self.notify(f"{key} stopped")
@@ -685,6 +692,23 @@ class EpicRun:
         self.push(self.epic_worktree, self.epic_branch, key)
         body = self.pr_body(run, session, merge_base)
         return self.open_pr(failing, notes, body)
+
+    def ticket_reviews(self, run: TicketRun) -> list[str]:
+        """The findings of one `REVIEW_MODEL` review per landed ticket, limited to that ticket's merge."""
+        findings: list[str] = []
+        for ticket in self.tracker.children(self.epic_key):
+            merges = repo.merges_of(self.repo, self.epic_branch, ticket.key)
+            if not merges:
+                continue
+            spec = self.home / "runs" / ticket.key / "ticket.md"
+            prompt = TICKET_REVIEW_PROMPT.format(
+                base=f"{merges[0]}^1",
+                merge=merges[0],
+                ticket=spec if spec.exists() else run.run_dir / "ticket.md",
+            )
+            review = self.review_agent(run, prompt, f"{ticket.key}-finish-review")
+            findings += [f"{ticket.key}: {finding}" for finding in review.findings]
+        return findings
 
     def pr_body(self, run: TicketRun, session: str | None, merge_base: str) -> str:
         """The body an agent writes with the `pr` skill, or a table of the tickets when it writes none."""
