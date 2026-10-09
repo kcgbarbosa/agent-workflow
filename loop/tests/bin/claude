@@ -6,8 +6,7 @@ A step can write and delete files and commit them, write files with `uncommitted
 a screenshot or a PR body in LOOP_RUN_DIR, return a status and review findings, or fail with a usage limit
 or a crash after its commit. A usage limit with `resets_in` reports when it resets, in seconds from now. A step with `late_turn` adds a second result with no status, as when a background subagent wakes the
 session after its status. A step with `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to
-FAKE_CLAUDE_DIR/peek.json. With no step left, the call returns done and changes nothing. `--version` prints
-FAKE_CLAUDE_VERSION, or a version new enough for the loop.
+FAKE_CLAUDE_DIR/peek.json. With no step left, the call returns done and changes nothing.
 
 The output is stream-json: one event per line, with one result event per turn. Each result event reports a
 cost, and the late turn reports a higher one, as the session's cost grows.
@@ -22,9 +21,6 @@ import uuid
 from pathlib import Path
 
 args = sys.argv[1:]
-if "--version" in args:
-    print(f"{os.environ.get('FAKE_CLAUDE_VERSION', '2.1.295')} (Claude Code)")
-    sys.exit(0)
 prompt = args[args.index("-p") + 1]
 name = args[args.index("-n") + 1]
 resume = args[args.index("--resume") + 1] if "--resume" in args else None
@@ -42,7 +38,6 @@ with (home / "calls.jsonl").open("a") as calls:
         "run_dir": os.environ.get("LOOP_RUN_DIR"),
         "schema": json.loads(args[args.index("--json-schema") + 1]),
         "model": args[args.index("--model") + 1] if "--model" in args else None,
-        "effort": args[args.index("--effort") + 1] if "--effort" in args else None,
         "mcp_config": args[args.index("--mcp-config") + 1] if "--mcp-config" in args else None,
         "agents": args[args.index("--agents") + 1] if "--agents" in args else None,
         "system_prompt": args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else None,

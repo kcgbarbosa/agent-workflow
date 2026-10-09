@@ -4,7 +4,6 @@ loop start <Epic key>   starts a run in its own tmux session
 loop run <Epic key>     the run itself, which `loop start` runs in that session
 loop secrets            copies the secrets from Bitwarden to this host, after `bw unlock`
 loop watch              serves a web page of the runs on this host, which `loop start` opens
-loop report [<Epic key>] breaks down what the latest run cost, against the run before it on this host
 """
 
 from __future__ import annotations
@@ -26,10 +25,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import config as config_file
-from . import report
 from . import watch as watch_page
 from .config import Config, ConfigError
-from .run import MIN_CLAUDE, claude_version, run
+from .run import run
 from .tracker import TrackerError
 from .update import Stale, source_checkout, update
 
@@ -47,12 +45,8 @@ class Refused(Exception):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="loop", description="Builds one Epic unattended.")
-    parser.add_argument("command", choices=("start", "run", "secrets", "watch", "report"))
+    parser.add_argument("command", choices=("start", "run", "secrets", "watch"))
     parser.add_argument("epic", metavar="<Epic key>", nargs="?")
-    parser.add_argument(
-        "--against", metavar="<Epic key>", help="report: compare with this Epic's latest run instead"
-    )
-    parser.add_argument("--json", action="store_true", help="report: print JSON")
     parser.add_argument("--repo", type=Path, help="the main checkout. Defaults to the one around this folder")
     arguments = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(arguments)
@@ -72,8 +66,6 @@ def main(argv: list[str] | None = None) -> int:
             return copy_secrets(config)
         if args.command == "watch":
             return watch(config)
-        if args.command == "report":
-            return print_report(config, args.epic, args.against, args.json)
         if args.command == "start":
             return start(args.epic, config)
         check_tools(config)
@@ -111,8 +103,6 @@ def check_tools(config: Config) -> None:
     if missing:
         raise Refused(f"These commands are missing: {', '.join(missing)}.")
     problems = []
-    if old_claude := claude_problem(claude_version()):
-        problems.append(old_claude)
     if config.stack and _quiet(["docker", "info"]) != 0:
         problems.append("Docker does not answer. Start Docker, or check the docker group.")
     if _quiet(["gh", "auth", "status"]) != 0:
@@ -123,15 +113,6 @@ def check_tools(config: Config) -> None:
         )
     if problems:
         raise Refused(" ".join(problems))
-
-
-def claude_problem(version: str) -> str | None:
-    """Why this `claude` cannot run the subagent tiers in agents.json, or None when it can."""
-    if tuple(int(part) for part in version.split(".") if part) >= MIN_CLAUDE:
-        return None
-    needed = ".".join(map(str, MIN_CLAUDE))
-    shown = version or "a version that does not print"
-    return f"`claude` is {shown}, and the subagent tiers need {needed} or later. Run `claude update`."
 
 
 def secrets_file(config: Config) -> Path:
@@ -302,21 +283,6 @@ def watch(config: Config) -> int:
         threading.Event().wait()
     except KeyboardInterrupt:
         pass
-    return 0
-
-
-def print_report(config: Config, epic_key: str | None, against: str | None, as_json: bool) -> int:
-    """The breakdown of what a run cost, against the run before it, from the logs on this host."""
-    found = watch_page.comparison(config.state_dir, epic_key, against)
-    if found is None:
-        print(
-            f"This host has no run of {epic_key}." if epic_key else "This host has no run.", file=sys.stderr
-        )
-        return 1
-    if as_json:
-        print(json.dumps(found, indent=1))
-    else:
-        print(report.text(found["current"], found["previous"], found["rows"]))
     return 0
 
 

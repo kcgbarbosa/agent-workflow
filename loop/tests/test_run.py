@@ -13,7 +13,7 @@ import pytest
 from conftest import EPIC, World, sh
 
 from loop import run as loop_run
-from loop.run import AGENTS, DISPATCH, RESTART_PROMPT, REVIEW_EFFORT, REVIEW_MODEL, USAGE_RESUME_PROMPT
+from loop.run import AGENTS, DISPATCH, RESTART_PROMPT, REVIEW_MODEL, USAGE_RESUME_PROMPT
 
 
 def test_the_frontier_runs_blockers_first_and_lands_each_ticket(world: World) -> None:
@@ -435,10 +435,10 @@ def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the
 
     (review,) = world.calls("DEMO-2-review")
     assert review["prompt"].startswith("/code-review feat/DEMO-1-the-loop ")
-    assert review["resume"] is None and review["model"] == REVIEW_MODEL and review["effort"] == REVIEW_EFFORT
+    assert review["resume"] is None and review["model"] == REVIEW_MODEL
     assert "findings" in review["schema"]["required"]
     first, fix = world.calls("DEMO-2")
-    assert first["model"] is None and first["effort"] is None
+    assert first["model"] is None
     assert fix["resume"] is not None and finding in fix["prompt"]
     assert world.epic_file("a.txt").read_text() == "b"
     ticket = (world.state / EPIC / "runs" / "DEMO-2" / "ticket.md").read_text()
@@ -772,19 +772,4 @@ def test_each_agent_line_logs_the_cost_from_the_last_result(world: World) -> Non
                 "costBasis": "list",
             },
         },
-    }
-
-
-def test_the_start_line_keeps_what_the_agents_run_on(world: World) -> None:
-    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
-    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
-
-    assert world.run() == 0
-
-    start = next(line for line in world.decisions() if line["ticket"] == EPIC and line["step"] == "start")
-    tiers = json.loads(AGENTS.read_text())
-    assert start["setup"] == {
-        "claude": "2.1.295",
-        "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.items()},
-        "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }
