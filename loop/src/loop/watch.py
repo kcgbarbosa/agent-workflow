@@ -7,11 +7,14 @@ gate logs, and the screenshots. It changes nothing, so it can run while a run la
 from __future__ import annotations
 
 import json
+import math
 import mimetypes
 import os
 import re
+import statistics
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,6 +38,12 @@ DENIED = "denied by the Claude Code auto mode classifier"
 MIN_SECRET = 8
 # The steps that say nothing new on the page.
 QUIET_STEPS = {"tracker-status", "tracker-flag", "tracker-comment", "tracker-attach", "tracker-comments"}
+# The lines that follow a step and say nothing about which step runs.
+AFTER_STEPS = {"push", "trials"}
+# The steps of one ticket, in the order the loop runs them (loop.md rules 3 to 6).
+STEPS = ("agent", "ticket-gate", "code-review", "ui-review", "land")
+RECENT_ITEMS = 3
+TAIL_BYTES = 256_000
 SUMMARY_CHARS = 160
 DETAIL_CHARS = 4000
 CHUNK_BYTES = 2_000_000
@@ -186,6 +195,7 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
     running = active_run(state_dir) == epic_key
 
     tickets: dict[str, _Ticket] = {}
+    by_ticket: dict[str, list[dict[str, Any]]] = {}
     for item in board.get("tickets", []):
         tickets[item["key"]] = _Ticket(
             key=item["key"],
@@ -201,8 +211,10 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
     every_run, this_run = _session_costs(lines), _session_costs(run)
     events = []
     for line in run:
-        key, step, result = line.get("ticket", ""), line.get("step", ""), line.get("result", "")
-        if key == epic_key or key.startswith(f"{epic_key}-"):
+        name, step, result = line.get("ticket", ""), line.get("step", ""), line.get("result", "")
+        # A review session is named after its ticket, such as `<KEY>-review`, and belongs to it.
+        key = match[0] if (match := KEY.match(name)) else name
+        if key == epic_key:
             if step == "stop":
                 state, stop_reason = "stopped", result
             elif step == "finish" and result == "nothing-landed":
@@ -211,6 +223,7 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
                 state, pr_url = result, line.get("detail", "")
         else:
             ticket = tickets.setdefault(key, _Ticket(key=key))
+            by_ticket.setdefault(key, []).append(line)
             if step == "start" and result == "done-not-landed":
                 ticket.done = True
             elif step == "start":
@@ -239,6 +252,9 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
         else:
             column = "waiting"
         run_dir = home / "runs" / ticket.key
+        agents = agent_logs(run_dir)
+        live = column == "running"
+        newest = max((log["updated"] for log in agents), default=None)
         columns.append(
             {
                 "key": ticket.key,
@@ -249,11 +265,14 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
                 "stuck_reason": ticket.stuck_reason,
                 "last": ticket.last,
                 "cost": round(sum(_ticket_sessions(lines, ticket.key, every_run).values()), 2),
-                "agents": agent_logs(run_dir),
+                "agents": agents,
+                "step": current_step(by_ticket.get(ticket.key, []), newest) if live else None,
+                "recent": recent_activity(home, ticket.key, run_dir, agents) if live else [],
                 "screenshots": _files(home, run_dir, image=True),
                 "files": _files(home, run_dir, image=False),
             }
         )
+    breakdown = report.breakdown(epic_key, run)
     return {
         "key": epic_key,
         "summary": board.get("summary", ""),
@@ -266,10 +285,145 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
         "cost": round(sum(this_run.values()), 2),
         "epic_cost": round(sum(every_run.values()), 2),
         "tickets": columns,
+        "stats": ticket_stats(columns, by_ticket),
+        "plan": plan_view(breakdown),
         "events": events,
         "epic_files": _files(home, home / "runs" / epic_key, image=False),
         "epic_agents": agent_logs(home / "runs" / epic_key),
     }
+
+
+def ticket_stats(columns: list[dict[str, Any]], by_ticket: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    """The counts of the board, a ticket done before this run left out. Of the tickets that landed in this
+    run: how many passed their first ticket gate, and the median time from their start to their landing.
+    """
+    names = ("landed", "running", "stuck", "waiting", "done")
+    counts = {name: sum(1 for ticket in columns if ticket["column"] == name) for name in names}
+    landed_here, first_pass, minutes = 0, 0, []
+    for lines in by_ticket.values():
+        land = next(
+            (line for line in lines if line.get("step") == "land" and line.get("result") == "landed"), None
+        )
+        if land is None:
+            continue
+        landed_here += 1
+        gates = [line for line in lines if _is_gate(line, "ticket")]
+        first_pass += bool(gates) and gates[0].get("result") == "pass"
+        start = next((line for line in lines if line.get("step") == "start"), None)
+        if start:
+            minutes.append((_time(land) - _time(start)) / 60)
+    return {
+        "landed": counts["landed"],
+        "total": len(columns) - counts["done"],
+        "running": counts["running"],
+        "stuck": counts["stuck"],
+        "waiting": counts["waiting"],
+        "first_pass_rate": first_pass / landed_here if landed_here else None,
+        "median_land_minutes": statistics.median(minutes) if minutes else None,
+    }
+
+
+def plan_view(breakdown: dict[str, Any]) -> dict[str, Any]:
+    """The plan meter of the run, and how many more tickets fit in the rest of each window at the points the
+    run used per landed ticket. A meter whose window has reset since the run read it gives no estimate.
+    """
+    now: dict[str, dict[str, Any]] = {}
+    fits: dict[str, int] = {}
+    for window, value in breakdown["meter"].items():
+        resets_at = value.get("resets_at")
+        past = isinstance(resets_at, int | float) and resets_at < time.time()
+        now[window] = {**value, "past": past}
+        each = breakdown["plan_per_landed"].get(window)
+        if each and not past:
+            fits[window] = max(0, math.floor((100 - value["utilization"] * 100) / each + 1e-9))
+    return {
+        "used": breakdown["plan_used"],
+        "per_landed": breakdown["plan_per_landed"],
+        "now": now,
+        "fits": fits,
+    }
+
+
+def current_step(lines: list[dict[str, Any]], newest_log: str | None) -> dict[str, Any] | None:
+    """The step a running ticket is on, and when it began, from its lines in this run and the time its newest
+    agent log last changed. An agent that still writes its log runs after the ticket's last line.
+    """
+    steps = [
+        line
+        for line in lines
+        if line.get("step") not in QUIET_STEPS | AFTER_STEPS
+        and not str(line.get("step")).startswith("tracker-")
+    ]
+    if not steps:
+        return None
+    last = steps[-1]
+    name, step, result = str(last.get("ticket")), last.get("step"), last.get("result")
+    reviewed = any(line.get("step") == "code-review" for line in steps)
+    gate_passed = _is_gate(last, "ticket") and result == "pass"
+    review_passed = step == "code-review" and result == "pass"
+    if newest_log is not None and newest_log > str(last.get("time")):
+        # Which agent runs follows from the step before it.
+        if gate_passed and not reviewed:
+            current = "code-review"
+        elif review_passed or (gate_passed and reviewed):
+            current = "ui-review"
+        else:
+            current = "agent"
+    elif name.endswith("-review"):
+        current = "code-review"
+    elif name.endswith("-ui"):
+        current = "ui-review"
+    elif step == "agent":
+        current = "ticket-gate" if result == "done" else "agent"
+    elif gate_passed:
+        current = "land" if reviewed else "code-review"
+    elif review_passed or (step == "ui-gate" and result == "pass") or _is_gate(last, "merge"):
+        current = "land"
+    else:
+        current = "agent"
+    return {"name": current, "since": last.get("time"), "paused": result == "usage-pause"}
+
+
+def recent_activity(
+    home: Path, key: str, run_dir: Path, agents: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The last tool calls and messages of the ticket's newest agent log, read from its end."""
+    if not agents:
+        return []
+    path = run_dir / f"agent-{agents[-1]['number']}.jsonl"
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as file:
+            file.seek(max(0, size - TAIL_BYTES))
+            data = file.read()
+    except OSError:
+        return []
+    if size > TAIL_BYTES:
+        data = data[data.find(b"\n") + 1 :]
+    roots = (f"{home}/worktrees/{key}/", f"{home}/runs/{key}/")
+    items: list[dict[str, Any]] = []
+    for raw in data.splitlines():
+        try:
+            event = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            items += [item for item in _items(event, roots) if item["kind"] in ("tool", "text")]
+    return [
+        {key: item[key] for key in ("kind", "tool", "summary", "text") if key in item}
+        for item in items[-RECENT_ITEMS:]
+    ]
+
+
+def _is_gate(line: dict[str, Any], kind: str) -> bool:
+    """A gate line names its log, such as `ticket-gate-1.log`. A ticket gate that finds no commit has none."""
+    if kind == "ticket" and line.get("step") == "ticket-gate":
+        return True
+    return f"/{kind}-gate-" in str(line.get("detail") or "")
+
+
+def _time(line: dict[str, Any]) -> float:
+    return datetime.fromisoformat(str(line.get("time"))).timestamp()
 
 
 def _session_costs(lines: list[dict[str, Any]]) -> dict[str, float]:
