@@ -731,6 +731,18 @@ def test_each_agent_gets_the_project_mcp_servers(world: World) -> None:
 
     call = world.calls("DEMO-2")[0]
     assert call["mcp_config"] == f"{call['cwd']}/.mcp.json"
+    # Only the repo's servers, so no host plugin or claude.ai connector adds to every turn's context.
+    assert call["strict_mcp_config"]
+
+
+def test_an_agent_in_a_repo_without_mcp_servers_keeps_the_host_servers(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    world.run()
+
+    call = world.calls("DEMO-2")[0]
+    assert call["mcp_config"] is None and not call["strict_mcp_config"]
 
 
 def test_every_agent_run_gets_the_subagent_tiers_and_the_dispatch_rule(world: World) -> None:

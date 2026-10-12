@@ -902,9 +902,11 @@ class EpicRun:
         if effort:
             command += ["--effort", effort]
         # Each worktree is a new folder, where nobody approved the project `.mcp.json`. With the flag,
-        # the loop does not depend on how `claude -p` treats a server that waits for approval.
+        # the loop does not depend on how `claude -p` treats a server that waits for approval. The strict
+        # flag leaves out the host's plugin servers and claude.ai connectors, whose tools and instructions
+        # every turn would send again.
         if (run.worktree / ".mcp.json").exists():
-            command += ["--mcp-config", str(run.worktree / ".mcp.json")]
+            command += ["--mcp-config", str(run.worktree / ".mcp.json"), "--strict-mcp-config"]
         command += [
             "--permission-mode", "auto", "--permission-prompts", "none",
             "--output-format", "stream-json", "--verbose", "--json-schema", schema, "-n", name,

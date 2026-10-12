@@ -16,7 +16,7 @@ Every repo keeps these rules. Change a rule here, on purpose, and give the reaso
    - `--output-format stream-json` with `--verbose` writes each event to the agent log as it happens, so a run can be followed while it lasts.
    - `--json-schema` makes the run return its status in a fixed shape.
    - `-n` names the session after the ticket key.
-   - `--mcp-config` gives the run the worktree's `.mcp.json` when it has one, because nobody approved the project's MCP servers in a new worktree folder.
+   - `--mcp-config` gives the run the worktree's `.mcp.json` when it has one, because nobody approved the project's MCP servers in a new worktree folder. `--strict-mcp-config` then gives the run only those servers (Connectors).
    - `--agents` gives the loop's subagent tiers, which [`tiers.py`](../../loop/src/loop/tiers.py) reads from the files in [`agents/`](../../agents). `install.sh` links the same files into `~/.claude/agents`. `--append-system-prompt` adds the rule for when to hand work to them in [`dispatch.md`](../../loop/src/loop/dispatch.md). A run of `implement` outside the loop gets the tiers, and not the rule.
    - `--settings` gives the rules of [`agent_settings`](../../loop/src/loop/run.py): the gate commands run without the classifier, and the classifier learns that the `<name>-<key>` stacks are the loop's own, so an agent can stop one to free a port. `worktree.baseRef` is `head`, so a `trial` worktree branches from the ticket's last commit rather than from main. No agent run deletes a volume. Nobody answers a prompt in a run, so a routine action that auto mode denies makes a ticket stuck.
    - `--resume` continues the session for a fix attempt.
@@ -80,7 +80,7 @@ Settles what the head agent runs on. `[agent]` gives `model` and `effort`, and t
 
 ### Connectors
 
-Settles which MCP servers the agent gets.
+Settles which MCP servers the agent gets. When the repo has a `.mcp.json`, every agent run gets its servers and no other: no plugin server and no claude.ai connector of the host. Each server adds its tool names and instructions to the context of every turn, and the ticket file already holds the ticket text, so a run needs no tracker connector. A repo without a `.mcp.json` leaves each run the host's servers.
 
 ### Notifications
 

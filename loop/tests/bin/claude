@@ -47,6 +47,7 @@ with (home / "calls.jsonl").open("a") as calls:
         "model": args[args.index("--model") + 1] if "--model" in args else None,
         "effort": args[args.index("--effort") + 1] if "--effort" in args else None,
         "mcp_config": args[args.index("--mcp-config") + 1] if "--mcp-config" in args else None,
+        "strict_mcp_config": "--strict-mcp-config" in args,
         "agents": args[args.index("--agents") + 1] if "--agents" in args else None,
         "system_prompt": args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else None,
         "settings": json.loads(args[args.index("--settings") + 1]) if "--settings" in args else None,
