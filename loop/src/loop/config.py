@@ -58,6 +58,8 @@ class Config:
     ui_path: str | None
     ui_skill: str
     main_branch: str
+    agent_model: str
+    agent_effort: str
     agent_hint: str
     tools: tuple[str, ...]
     watch_port: int
@@ -104,6 +106,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
     ui = top.table("ui", optional=True)
     stack_table = top.table("stack", optional=True)
     watch = top.table("watch", optional=True)
+    agent = top.table("agent", optional=True)
     secrets_table = top.table("secrets")
 
     secrets = {}
@@ -139,6 +142,8 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         ui_path=ui.text("path", None),
         ui_skill=ui.text("skill", "ui-review"),
         main_branch=top.text("main_branch", "main"),
+        agent_model=agent.text("model", "claude-opus-5-5"),
+        agent_effort=agent.text("effort", "high"),
         agent_hint=top.text("agent_hint", ""),
         tools=top.texts("tools", ()),
         watch_port=watch.number("port", 8790),
@@ -146,7 +151,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         secrets=secrets,
         state_dir=state_dir or Path.home() / ".local/state" / f"{name}-loop",
     )
-    for table in (top, tracker, gates, limits, notify, ui, stack_table, watch, secrets_table):
+    for table in (top, tracker, gates, limits, notify, ui, stack_table, watch, agent, secrets_table):
         table.done()
     return config
 

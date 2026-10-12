@@ -22,6 +22,9 @@ HAIKU_SHORT_RATES = {
 TOKEN_FIELDS = tuple(HAIKU_SHORT_RATES)
 FINDINGS = re.compile(r"(\d+) (?:findings|faults)")
 ROLES = {"head": "Head agent and its subagents", "review": "Reviews", "pr": "PR body"}
+# The dollar figures are what the API would bill. KC pays a plan, and its meter is the cost that counts.
+LIST_PRICE = "list price (API)"
+WINDOWS = {"five_hour": "Five-hour", "seven_day": "Seven-day"}
 
 
 def split_runs(epic: str, lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -70,6 +73,64 @@ def haiku_over_cap(models: dict[str, Any]) -> float:
     return over
 
 
+def plan_usage(run: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The plan points a run used, and the meter at its last agent line (loop.md rule 11).
+
+    The meter is the account's, so parallel sessions, and KC's own, move it together. For each window, which
+    one reset time names, the run used the highest end less the lowest start of its agent lines. One point
+    is 1% of the window.
+    """
+    spans: dict[tuple[str, Any], tuple[float, float]] = {}
+    now: dict[str, dict[str, Any]] = {}
+    for line in run:
+        plan = line.get("plan")
+        for window, value in plan.items() if isinstance(plan, dict) else ():
+            if not isinstance(value, dict):
+                continue
+            start, end = value.get("start"), value.get("end")
+            if not isinstance(start, int | float) or not isinstance(end, int | float):
+                continue
+            span = (window, value.get("resets_at"))
+            low, high = spans.get(span, (start, end))
+            spans[span] = (min(low, start), max(high, end))
+            now[window] = {"utilization": end, "resets_at": value.get("resets_at")}
+    used: dict[str, float] = {}
+    for (window, _), (low, high) in spans.items():
+        used[window] = round(used.get(window, 0.0) + (high - low) * 100, 1)
+    return {"used": used, "now": now}
+
+
+def head_drivers(run: list[dict[str, Any]]) -> dict[str, Any]:
+    """What drives the head agent's cost, per ticket it worked on: its turns, the peak context of its
+    sessions, and its hand-offs to each subagent tier. Each turn sends the whole context again.
+    """
+    tickets: set[str] = set()
+    turns = 0.0
+    handoffs: dict[str, int] = {}
+    for line in sessions(run):
+        name = str(line.get("ticket", ""))
+        if role(name) != "head" or name == run[0].get("ticket"):
+            continue
+        tickets.add(name)
+        turns += line["usage"].get("num_turns") or 0
+        for kind, count in (line["usage"].get("subagents") or {}).items():
+            handoffs[kind] = handoffs.get(kind, 0) + int(count)
+    # Each agent line gives the peak of its own run, so a ticket's peak is the largest of its lines.
+    peaks: dict[str, int] = {}
+    for line in run:
+        peak = (line.get("usage") or {}).get("peak_context") if line.get("step") == "agent" else None
+        name = str(line.get("ticket", ""))
+        if name in tickets and isinstance(peak, int):
+            peaks[name] = max(peaks.get(name, 0), peak)
+    count = len(tickets)
+    return {
+        "tickets": count,
+        "turns_per_ticket": round(turns / count, 1) if count else None,
+        "peak_context_per_ticket": round(sum(peaks.values()) / len(peaks)) if peaks else None,
+        "handoffs_per_ticket": {kind: round(n / count, 1) for kind, n in handoffs.items()} if count else {},
+    }
+
+
 def breakdown(epic: str, run: list[dict[str, Any]]) -> dict[str, Any]:
     """The cost of one run by role, model, and subagent, with what the run delivered for it."""
     roles = dict.fromkeys(ROLES, 0.0)
@@ -93,6 +154,7 @@ def breakdown(epic: str, run: list[dict[str, Any]]) -> dict[str, Any]:
         over += session_over
         over_sessions += session_over > 0
     landed = sum(1 for line in run if line.get("step") == "land" and line.get("result") == "landed")
+    plan = plan_usage(run)
     findings = 0
     for line in run:
         if line.get("step") in ("code-review", "ui-gate") and (
@@ -108,6 +170,12 @@ def breakdown(epic: str, run: list[dict[str, Any]]) -> dict[str, Any]:
         "stuck": sum(1 for line in run if line.get("step") == "stuck"),
         "cost": cost,
         "cost_per_landed": cost / landed if landed else None,
+        "plan_used": plan["used"],
+        "plan_per_landed": {window: round(points / landed, 1) for window, points in plan["used"].items()}
+        if landed
+        else {},
+        "meter": plan["now"],
+        "head": head_drivers(run),
         "turns": int(turns),
         "agent_minutes": agent_ms / 60000,
         "findings": findings,
@@ -156,30 +224,92 @@ def _row(section: str, label: str, kind: str, previous: Any, current: Any) -> di
 def compare(current: dict[str, Any], previous: dict[str, Any] | None) -> list[dict[str, Any]]:
     """One row per figure, with the previous run's value and the change in percent."""
     old = previous or {}
-    rows = [
+    rows = []
+    before_used, after_used = old.get("plan_used") or {}, current["plan_used"]
+    before_each, after_each = old.get("plan_per_landed") or {}, current["plan_per_landed"]
+    for window, name in WINDOWS.items():
+        if window in before_used or window in after_used:
+            rows += [
+                _row(
+                    "Plan usage",
+                    f"{name} points used",
+                    "points",
+                    before_used.get(window),
+                    after_used.get(window),
+                ),
+                _row(
+                    "Plan usage",
+                    f"{name} points per landed ticket",
+                    "points",
+                    before_each.get(window),
+                    after_each.get(window),
+                ),
+            ]
+    rows += [
         _row("Run", "Tickets landed", "count", old.get("landed"), current["landed"]),
         _row("Run", "Tickets stuck", "count", old.get("stuck"), current["stuck"]),
-        _row("Run", "Cost", "money", old.get("cost"), current["cost"]),
+        _row("Run", f"Cost, {LIST_PRICE}", "money", old.get("cost"), current["cost"]),
         _row(
-            "Run", "Cost per landed ticket", "money", old.get("cost_per_landed"), current["cost_per_landed"]
+            "Run",
+            f"Cost per landed ticket, {LIST_PRICE}",
+            "money",
+            old.get("cost_per_landed"),
+            current["cost_per_landed"],
         ),
         _row("Run", "Agent minutes", "minutes", old.get("agent_minutes"), current["agent_minutes"]),
         _row("Run", "Agent turns", "count", old.get("turns"), current["turns"]),
         _row("Run", "Review findings", "count", old.get("findings"), current["findings"]),
         _row(
             "Run",
-            "Haiku cost above the 100K rate",
+            f"Haiku cost above the 100K rate, {LIST_PRICE}",
             "money",
             old.get("haiku_over_cap"),
             current["haiku_over_cap"],
         ),
     ]
+    before_head, after_head = old.get("head") or {}, current["head"]
+    rows += [
+        _row(
+            "Head agent",
+            "Turns per ticket",
+            "count",
+            before_head.get("turns_per_ticket"),
+            after_head["turns_per_ticket"],
+        ),
+        _row(
+            "Head agent",
+            "Peak context per ticket",
+            "tokens",
+            before_head.get("peak_context_per_ticket"),
+            after_head["peak_context_per_ticket"],
+        ),
+    ]
+    before_handoffs, after_handoffs = (
+        before_head.get("handoffs_per_ticket") or {},
+        after_head["handoffs_per_ticket"],
+    )
+    for tier in sorted({*before_handoffs, *after_handoffs}):
+        rows.append(
+            _row(
+                "Head agent",
+                f"Hand-offs per ticket: {tier}",
+                "count",
+                before_handoffs.get(tier, 0 if previous else None),
+                after_handoffs.get(tier, 0),
+            )
+        )
     for key, label in ROLES.items():
         rows.append(
-            _row("Cost by role", label, "money", (old.get("roles") or {}).get(key), current["roles"][key])
+            _row(
+                f"Cost by role, {LIST_PRICE}",
+                label,
+                "money",
+                (old.get("roles") or {}).get(key),
+                current["roles"][key],
+            )
         )
     for section, field, kind in (
-        ("Cost by model", "models", "money"),
+        (f"Cost by model, {LIST_PRICE}", "models", "money"),
         ("Subagent calls", "subagents", "count"),
     ):
         before, after = old.get(field) or {}, current[field]
@@ -211,7 +341,7 @@ def text(current: dict[str, Any], previous: dict[str, Any] | None, rows: list[di
     now = f"{current['epic']} {_day(current['started'])}"
     then = f"{previous['epic']} {_day(previous['started'])}" if previous else "no earlier run"
     lines = [f"The run of {now}, against {then}."]
-    widths = (34, 24, 24)
+    widths = (50, 16, 16)
     section = ""
     for row in rows:
         if row["section"] != section:
@@ -231,6 +361,10 @@ def _value(kind: str, value: Any) -> str:
         return f"${value:,.2f}"
     if kind == "minutes":
         return f"{value:,.0f} min"
+    if kind == "points":
+        return f"{value:,.1f} pt"
+    if kind == "tokens":
+        return f"{value:,.0f}"
     return str(value)
 
 

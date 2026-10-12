@@ -11,7 +11,7 @@ from conftest import write_config
 
 from loop import config
 from loop.cli import claude_problem, main
-from loop.report import breakdown, compare, haiku_over_cap, split_runs
+from loop.report import breakdown, compare, haiku_over_cap, plan_usage, split_runs
 from loop.watch import Watch, comparison
 
 HAIKU = "claude-haiku-5-5"
@@ -109,6 +109,59 @@ def test_a_run_breaks_down_by_role_model_and_subagent() -> None:
     assert result["haiku_over_cap"] == 0 and result["setup"] == SETUP_AFTER
 
 
+def window(start: float, end: float, resets_at: int) -> dict[str, Any]:
+    return {"start": start, "end": end, "resets_at": resets_at}
+
+
+def test_plan_points_add_up_each_window_once_over_parallel_sessions() -> None:
+    t = "2026-10-08T10:00:00+00:00"
+    first, second, week = 1791267000, 1791285000, 1791554400
+    run = [
+        line("DEMO-1", t, "DEMO-1", "start", "ok"),
+        # Two tickets run at once, so their sessions move the same meter. The window counts once.
+        line("DEMO-1", t, "A-2", "agent", "done", plan={"five_hour": window(0.10, 0.60, first)}),
+        line(
+            "DEMO-1",
+            t,
+            "A-3",
+            "agent",
+            "done",
+            plan={"five_hour": window(0.30, 0.95, first), "seven_day": window(0.50, 0.62, week)},
+        ),
+        line("DEMO-1", t, "A-2", "agent", "usage-limit", plan={"five_hour": window(0.95, 1.0, first)}),
+        # The five-hour window resets, and the next one starts near zero.
+        line(
+            "DEMO-1",
+            t,
+            "A-2",
+            "agent",
+            "done",
+            plan={"five_hour": window(0.02, 0.20, second), "seven_day": window(0.66, 0.70, week)},
+        ),
+        line("DEMO-1", t, "A-2", "land", "landed"),
+        line("DEMO-1", t, "A-3", "land", "landed"),
+    ]
+
+    used = plan_usage(run)
+
+    assert used["used"] == pytest.approx({"five_hour": 108.0, "seven_day": 20.0})
+    assert used["now"] == {
+        "five_hour": {"utilization": 0.20, "resets_at": second},
+        "seven_day": {"utilization": 0.70, "resets_at": week},
+    }
+    result = breakdown("DEMO-1", run)
+    assert result["plan_used"] == pytest.approx({"five_hour": 108.0, "seven_day": 20.0})
+    assert result["plan_per_landed"] == pytest.approx({"five_hour": 54.0, "seven_day": 10.0})
+    assert result["meter"] == used["now"]
+
+
+def test_a_run_with_no_plan_meter_has_no_plan_points() -> None:
+    (run,) = split_runs("DEMO-1", run_lines("DEMO-1", "08", SETUP_AFTER, cost=4.0, haiku_cost=0))
+
+    assert plan_usage(run) == {"used": {}, "now": {}}
+    assert breakdown("DEMO-1", run)["plan_per_landed"] == {}
+
+
 def test_haiku_cost_above_the_short_prompt_rate_shows_a_prompt_past_100k() -> None:
     assert haiku_over_cap({HAIKU: haiku(1_000_000, 0.10)}) == 0
     # A prompt past 100K bills its tokens at five times the rate.
@@ -128,16 +181,65 @@ def test_the_latest_run_compares_with_the_run_before_it_on_this_host(tmp_path: P
     assert found is not None and found["previous"] is not None
     assert found["previous"]["epic"] == "DEMO-1" and found["current"]["epic"] == "DEMO-2"
     rows = {(row["section"], row["label"]): row for row in found["rows"]}
-    cost = rows[("Run", "Cost")]
+    cost = rows[("Run", "Cost, list price (API)")]
     assert (cost["previous"], cost["current"], cost["change"]) == (9.5, 5.5, -42)
-    assert rows[("Run", "Haiku cost above the 100K rate")]["current"] == pytest.approx(0.20)
-    assert (rows[("Cost by model", HAIKU)]["previous"], rows[("Cost by model", HAIKU)]["change"]) == (
+    assert rows[("Run", "Haiku cost above the 100K rate, list price (API)")]["current"] == pytest.approx(0.20)
+    by_model = rows[("Cost by model, list price (API)", HAIKU)]
+    assert (by_model["previous"], by_model["change"]) == (
         0,
         "new",
     )
     assert rows[("Setup", "review")]["change"] == "changed"
     assert rows[("Setup", "tiers scout")]["current"] == "claude-haiku-5-5 low"
     assert comparison(tmp_path, "DEMO-2", against="DEMO-1") is not None
+
+
+def head_run(epic: str, day: str, turns: int, peaks: tuple[int, int], points: float) -> list[dict[str, Any]]:
+    """Two tickets, each with one head session that hands work to scouts, and a review."""
+    t = f"2026-10-{day}T10:00:00+00:00"
+    five = int(day) * 100_000
+
+    def head(ticket: str, peak: int, subagents: dict[str, int]) -> dict[str, Any]:
+        cost = usage(2.0, {"claude-opus-5-5": {"costUSD": 2.0}}, subagents) | {
+            "num_turns": turns,
+            "peak_context": peak,
+        }
+        plan = {"five_hour": window(0.10, 0.10 + points / 100, five)}
+        return line(epic, t, ticket, "agent", "done", session=f"{epic}-{ticket}", usage=cost, plan=plan)
+
+    review = usage(1.0, {"claude-opus-5-5": {"costUSD": 1.0}}) | {"num_turns": 50, "peak_context": 900_000}
+    return [
+        line(epic, t, epic, "start", "ok"),
+        head("A-2", peaks[0], {"scout": 2}),
+        line(epic, t, "A-2-review", "agent", "done", session=f"{epic}-r", usage=review),
+        head("A-3", peaks[1], {"scout": 1, "runner": 1}),
+        line(epic, t, "A-2", "land", "landed"),
+        line(epic, t, "A-3", "land", "landed"),
+    ]
+
+
+def test_the_report_shows_the_plan_points_and_what_drives_the_head_agent_cost(tmp_path: Path) -> None:
+    write_run(tmp_path, "DEMO-1", head_run("DEMO-1", "07", turns=80, peaks=(200_000, 240_000), points=40))
+    write_run(tmp_path, "DEMO-2", head_run("DEMO-2", "08", turns=40, peaks=(100_000, 140_000), points=20))
+
+    found = comparison(tmp_path, "DEMO-2")
+
+    assert found is not None
+    rows = {(row["section"], row["label"]): row for row in found["rows"]}
+
+    def figures(section: str, label: str) -> tuple[Any, Any, Any]:
+        row = rows[(section, label)]
+        return row["previous"], row["current"], row["change"]
+
+    assert figures("Plan usage", "Five-hour points used") == (pytest.approx(40), pytest.approx(20), -50)
+    assert figures("Plan usage", "Five-hour points per landed ticket") == (20, 10, -50)
+    # The reviews are not the head agent, so their turns and context stay out of its rows.
+    assert figures("Head agent", "Turns per ticket") == (80, 40, -50)
+    assert figures("Head agent", "Peak context per ticket") == (220_000, 120_000, -45)
+    assert figures("Head agent", "Hand-offs per ticket: scout") == (1.5, 1.5, 0)
+    assert figures("Head agent", "Hand-offs per ticket: runner") == (0.5, 0.5, 0)
+    assert ("Plan usage", "Seven-day points used") not in rows
+    assert ("Cost by role, list price (API)", "Head agent and its subagents") in rows
 
 
 def test_a_first_run_has_nothing_to_compare_with() -> None:

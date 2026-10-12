@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -213,3 +215,125 @@ def test_loop_watch_serves_the_page_and_the_api(tmp_path: Path) -> None:
     assert epics == [
         {"key": EPIC, "summary": "The Loop", "updated": epics[0]["updated"], "running": False},
     ]
+
+
+def at(minutes: int) -> str:
+    return f"2026-10-08T02:{minutes:02d}:00+00:00"
+
+
+def gate(key: str, kind: str, number: int, result: str, minutes: int, home: Path) -> dict[str, Any]:
+    command = "make lint test" if kind == "ticket" else "make check"
+    log = f"{home}/runs/{key}/{kind}-gate-{number}.log"
+    return step(key, command, result, time=at(minutes), detail=log)
+
+
+def stats_state(tmp_path: Path, resets: int) -> Path:
+    """Two tickets that landed, one at the first ticket gate and one after a fix, and the plan meter."""
+    home = tmp_path / EPIC
+
+    def meter(five: tuple[float, float], seven: tuple[float, float]) -> dict[str, Any]:
+        return {
+            "five_hour": {"start": five[0], "end": five[1], "resets_at": resets},
+            "seven_day": {"start": seven[0], "end": seven[1], "resets_at": resets + 86400},
+        }
+
+    write_lines(
+        home / "decisions.jsonl",
+        [
+            step(EPIC, "start", "ok", time=at(0)),
+            step("DEMO-2", "start", "new", time=at(0)),
+            step("DEMO-3", "start", "new", time=at(0)),
+            step("DEMO-2", "agent", "done", time=at(8), plan=meter((0.10, 0.40), (0.50, 0.51))),
+            step("DEMO-2", "push", "ok", time=at(8)),
+            gate("DEMO-2", "ticket", 1, "pass", 10, home),
+            step("DEMO-2-review", "agent", "done", time=at(15), plan=meter((0.40, 0.45), (0.51, 0.52))),
+            step("DEMO-2", "code-review", "pass", time=at(15)),
+            gate("DEMO-2", "merge", 1, "pass", 30, home),
+            step("DEMO-2", "land", "landed", time=at(30)),
+            step("DEMO-3", "agent", "done", time=at(20)),
+            gate("DEMO-3", "ticket", 1, "fail", 22, home),
+            step("DEMO-3", "agent", "done", time=at(30)),
+            gate("DEMO-3", "ticket", 2, "pass", 32, home),
+            step("DEMO-3-review", "agent", "done", time=at(40)),
+            step("DEMO-3", "code-review", "pass", time=at(40)),
+            step("DEMO-3", "land", "landed", time=at(50)),
+            step("DEMO-4", "start", "new", time=at(50)),
+        ],
+    )
+    return tmp_path
+
+
+def test_the_page_derives_the_ticket_stats_and_the_plan_meter(tmp_path: Path) -> None:
+    resets = int(time.time()) + 3600
+    view = epic_view(stats_state(tmp_path, resets), EPIC)
+
+    # A review session belongs to its ticket, not to a ticket of its own.
+    assert sorted(ticket["key"] for ticket in view["tickets"]) == ["DEMO-2", "DEMO-3", "DEMO-4"]
+    assert view["stats"] == {
+        "landed": 2,
+        "total": 3,
+        "running": 0,
+        "stuck": 0,
+        "waiting": 1,
+        "first_pass_rate": 0.5,
+        "median_land_minutes": 40.0,
+    }
+    plan = view["plan"]
+    assert plan["used"] == {"five_hour": 35.0, "seven_day": 2.0}
+    assert plan["per_landed"] == {"five_hour": 17.5, "seven_day": 1.0}
+    assert plan["now"]["five_hour"] == {"utilization": 0.45, "resets_at": resets, "past": False}
+    # (100 - 45) / 17.5 and (100 - 52) / 1, rounded down.
+    assert plan["fits"] == {"five_hour": 3, "seven_day": 48}
+
+
+def test_a_meter_past_its_reset_gives_no_estimate(tmp_path: Path) -> None:
+    resets = int(time.time()) - 3600
+    plan = epic_view(stats_state(tmp_path, resets), EPIC)["plan"]
+
+    assert plan["now"]["five_hour"]["past"] and not plan["now"]["seven_day"]["past"]
+    assert plan["fits"] == {"seven_day": 48}
+
+
+def test_a_running_ticket_shows_its_current_step_and_its_last_activity(tmp_path: Path) -> None:
+    home = tmp_path / EPIC
+    write_lines(
+        home / "decisions.jsonl",
+        [
+            step(EPIC, "start", "ok", time=at(0)),
+            step("DEMO-2", "start", "new", time=at(0)),
+            step("DEMO-3", "start", "new", time=at(0)),
+            step("DEMO-4", "start", "new", time=at(0)),
+            step("DEMO-3", "agent", "done", time=at(5)),
+            step("DEMO-3", "push", "ok", time=at(5)),
+            step("DEMO-4", "agent", "done", time=at(5)),
+            gate("DEMO-4", "ticket", 1, "pass", 7, home),
+            step("DEMO-4-review", "agent", "done", time=at(9)),
+            step("DEMO-4", "code-review", "pass", time=at(9)),
+        ],
+    )
+    tool = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls", "description": "List"}}
+    events = [
+        {"type": "system", "subtype": "init", "session_id": "s1"},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "Reading the ticket."}]}},
+        {"type": "assistant", "message": {"content": [tool]}},
+    ]
+    for key in ("DEMO-2", "DEMO-4"):
+        log = home / "runs" / key / "agent-1.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("".join(json.dumps(event) + "\n" for event in events))
+    # The DEMO-4 log is newer than its last line, so an agent runs after the code review: the UI review.
+    os.utime(home / "runs" / "DEMO-4" / "agent-1.jsonl", (time.time(), time.time()))
+
+    with one_run(tmp_path, EPIC):
+        view = epic_view(tmp_path, EPIC)
+
+    tickets = {ticket["key"]: ticket for ticket in view["tickets"]}
+    assert all(ticket["column"] == "running" for ticket in tickets.values())
+    assert tickets["DEMO-2"]["step"] == {"name": "agent", "since": at(0), "paused": False}
+    assert tickets["DEMO-3"]["step"] == {"name": "ticket-gate", "since": at(5), "paused": False}
+    assert tickets["DEMO-4"]["step"] == {"name": "ui-review", "since": at(9), "paused": False}
+    assert [item.get("summary") or item.get("text") for item in tickets["DEMO-2"]["recent"]] == [
+        "Reading the ticket.",
+        "List",
+    ]
+    assert tickets["DEMO-3"]["recent"] == []

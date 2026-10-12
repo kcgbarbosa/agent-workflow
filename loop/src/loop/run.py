@@ -94,6 +94,8 @@ TRIALS = Path(".claude/worktrees")
 MODEL_USAGE = (
     "inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD", "costBasis",
 )  # fmt: skip
+# The tokens of one assistant message that make up the context it sent.
+CONTEXT_TOKENS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 # The oldest `claude` that knows each model the tiers name and prices the long prompts of Haiku 5.5.
 MIN_CLAUDE = (2, 1, 295)
 TIMED_OUT = 124
@@ -205,10 +207,60 @@ def usage_reset(events: list[dict[str, Any]]) -> float | None:
     return None
 
 
-def agent_usage(result: dict[str, Any]) -> dict[str, Any]:
-    """The cost, turns, duration, subagents, and per-model usage of one result event (loop.md rule 11)."""
+def agent_plan(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The plan meter over one run, from its `rate_limit_event` lines: the first and the last utilization
+    of each window, and when the window resets (loop.md rule 11). A window the run has no value for is left
+    out. When a window resets during the run, its entry starts again in the new window.
+    """
+    plan: dict[str, dict[str, Any]] = {}
+    for event in events:
+        info = event.get("rate_limit_info") if event.get("type") == "rate_limit_event" else None
+        if not isinstance(info, dict):
+            continue
+        windows = info.get("unifiedWindows")
+        if not isinstance(windows, dict):
+            # A CLI that gives no windows reports the one window that is closest to its limit.
+            windows = {info.get("rateLimitType"): info}
+        for window, value in windows.items():
+            if not isinstance(window, str) or not isinstance(value, dict):
+                continue
+            utilization, resets_at = value.get("utilization"), value.get("resetsAt")
+            if not isinstance(utilization, int | float) or isinstance(utilization, bool):
+                continue
+            entry = plan.get(window)
+            if entry is None or entry["resets_at"] != resets_at:
+                entry = plan[window] = {"start": utilization}
+            entry["end"], entry["resets_at"] = utilization, resets_at
+    return plan
+
+
+def peak_context(events: list[dict[str, Any]]) -> int:
+    """The largest context the session sent in one turn: the input, cache read, and cache write tokens of
+    its biggest assistant message. A subagent's messages carry a parent tool call, and they are not counted.
+    """
+    peak = 0
+    seen: set[str] = set()
+    for event in events:
+        message = event.get("message") if event.get("type") == "assistant" else None
+        if not isinstance(message, dict) or event.get("parent_tool_use_id"):
+            continue
+        # The stream repeats a message for each of its content blocks.
+        if message.get("id") in seen:
+            continue
+        seen.add(str(message.get("id")))
+        usage = message.get("usage")
+        if isinstance(usage, dict):
+            peak = max(peak, sum(int(usage.get(name) or 0) for name in CONTEXT_TOKENS))
+    return peak
+
+
+def agent_usage(result: dict[str, Any], events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """The cost, turns, duration, subagents, and per-model usage of one result event, with the peak context
+    of the run's events (loop.md rule 11).
+    """
     models = result.get("modelUsage")
     return {
+        "peak_context": peak_context(events or []),
         "total_cost_usd": result.get("total_cost_usd"),
         "num_turns": result.get("num_turns"),
         "duration_ms": result.get("duration_ms"),
@@ -232,10 +284,11 @@ def claude_version() -> str:
     return match[0] if match else ""
 
 
-def run_setup() -> dict[str, Any]:
+def run_setup(config: Config) -> dict[str, Any]:
     """What the agents of a run run on. The start line keeps it, so `loop report` can tell two runs apart."""
     return {
         "claude": claude_version(),
+        "agent": f"{config.agent_model} {config.agent_effort}",
         "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }
@@ -332,7 +385,7 @@ class EpicRun:
             repo.add_worktree(
                 self.repo, self.epic_worktree, self.epic_branch, f"origin/{self.config.main_branch}"
             )
-        self.log(self.epic_key, "start", "ok", detail=self.epic_branch, setup=run_setup())
+        self.log(self.epic_key, "start", "ok", detail=self.epic_branch, setup=run_setup(self.config))
         for ticket in self.tracker.children(self.epic_key):
             if self.ticket_result(ticket) == NOT_LANDED:
                 self.log(ticket.key, "start", "done-not-landed")
@@ -413,8 +466,8 @@ class EpicRun:
             # The agent writes its error to the .err file next to its output.
             log = run.agent_log.with_suffix(".err") if run and run.agent_log else run_dir
             return self.stuck(ticket, str(error), log, slot)
-        except UsageLimit as error:
-            self.log(ticket.key, "agent", "usage-limit", detail=str(error))
+        except UsageLimit:
+            # The agent run logged the limit.
             return "usage-limit"
         except Exception as error:  # noqa: BLE001 - a loop error makes the ticket stuck, not the run.
             log = run_dir / "loop-error.log"
@@ -472,7 +525,9 @@ class EpicRun:
     def ticket_agent(self, run: TicketRun, prompt: str, session: str | None) -> AgentResult:
         """An agent run, then a push of the ticket branch, also when the run fails."""
         try:
-            return self.agent(run, prompt, session)
+            return self.agent(
+                run, prompt, session, model=self.config.agent_model, effort=self.config.agent_effort
+            )
         finally:
             self.push(run.worktree, run.branch, run.ticket.key)
             self.remove_trials(run)
@@ -702,7 +757,14 @@ class EpicRun:
         if self.config.name_landed_keys_only:
             prompt += LANDED_KEYS_PROMPT
         try:
-            self.agent(run, prompt, session=None, name=f"{key}-pr")
+            self.agent(
+                run,
+                prompt,
+                session=None,
+                name=f"{key}-pr",
+                model=self.config.agent_model,
+                effort=self.config.agent_effort,
+            )
         except (AgentFailed, UsageLimit) as error:
             self.log(key, "pr-body", "fail", detail=str(error))
         written = body_file.read_text() if body_file.exists() else ""
@@ -840,9 +902,11 @@ class EpicRun:
         if effort:
             command += ["--effort", effort]
         # Each worktree is a new folder, where nobody approved the project `.mcp.json`. With the flag,
-        # the loop does not depend on how `claude -p` treats a server that waits for approval.
+        # the loop does not depend on how `claude -p` treats a server that waits for approval. The strict
+        # flag leaves out the host's plugin servers and claude.ai connectors, whose tools and instructions
+        # every turn would send again.
         if (run.worktree / ".mcp.json").exists():
-            command += ["--mcp-config", str(run.worktree / ".mcp.json")]
+            command += ["--mcp-config", str(run.worktree / ".mcp.json"), "--strict-mcp-config"]
         command += [
             "--permission-mode", "auto", "--permission-prompts", "none",
             "--output-format", "stream-json", "--verbose", "--json-schema", schema, "-n", name,
@@ -866,17 +930,20 @@ class EpicRun:
         events = json_lines(run.agent_log.read_text())
         results = [event for event in events if event.get("type") == "result"]
         data = results[-1] if results else {}
-        cost = agent_usage(data)
+        cost, plan = agent_usage(data, events), agent_plan(events)
         if result.returncode == TIMED_OUT:
-            self.log(name, "agent", "timeout", session=session, usage=cost)
+            self.log(name, "agent", "timeout", session=session, usage=cost, plan=plan)
             raise AgentFailed(f"The agent ran past {self.config.agent_timeout_minutes} minutes.")
         message = f"{data.get('result', '')}\n{errors}"
         if data.get("is_error") or not data:
             if data.get("api_error_status") in (429, "429") or USAGE_LIMIT.search(message):
                 started = next((event.get("session_id") for event in events if event.get("session_id")), None)
                 stopped = data.get("session_id") or started or session
-                raise UsageLimit(f"{name}: {message.strip()[:200]}", usage_reset(events), stopped)
-            self.log(name, "agent", "error", session=data.get("session_id"), usage=cost)
+                detail = f"{name}: {message.strip()[:200]}"
+                # The run that meets the limit moved the meter most, so its line keeps the plan.
+                self.log(name, "agent", "usage-limit", session=stopped, detail=detail, usage=cost, plan=plan)
+                raise UsageLimit(detail, usage_reset(events), stopped)
+            self.log(name, "agent", "error", session=data.get("session_id"), usage=cost, plan=plan)
             raise AgentFailed(f"The agent exited with code {result.returncode}: {message.strip()[:300]}")
         output = next(filter(None, map(agent_status, reversed(results))), None)
         if output is None:
@@ -885,7 +952,9 @@ class EpicRun:
         reason = str(output.get("reason", ""))
         session_id = str(data.get("session_id") or session or "")
         commit = out(run.worktree, "rev-parse", "HEAD")
-        self.log(name, "agent", status, commit=commit, session=session_id, detail=reason, usage=cost)
+        self.log(
+            name, "agent", status, commit=commit, session=session_id, detail=reason, usage=cost, plan=plan
+        )
         decisions = [str(item) for item in output.get("decisions", [])]
         if decisions:
             key = run.ticket.key
@@ -1053,6 +1122,7 @@ class EpicRun:
         detail: str = "",
         usage: dict[str, Any] | None = None,
         setup: dict[str, Any] | None = None,
+        plan: dict[str, Any] | None = None,
     ) -> None:
         line: dict[str, Any] = {
             "time": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -1066,6 +1136,8 @@ class EpicRun:
         }
         if usage is not None:
             line["usage"] = usage
+        if plan is not None:
+            line["plan"] = plan
         if setup is not None:
             line["setup"] = setup
         with self._log_lock, self.log_path.open("a") as file:

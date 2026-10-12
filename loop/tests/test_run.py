@@ -440,7 +440,7 @@ def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the
     assert review["resume"] is None and review["model"] == REVIEW_MODEL and review["effort"] == REVIEW_EFFORT
     assert "findings" in review["schema"]["required"]
     first, fix = world.calls("DEMO-2")
-    assert first["model"] is None and first["effort"] is None
+    assert (first["model"], first["effort"]) == ("claude-opus-5-5", "high")
     assert fix["resume"] is not None and finding in fix["prompt"]
     assert world.epic_file("a.txt").read_text() == "b"
     ticket = (world.state / EPIC / "runs" / "DEMO-2" / "ticket.md").read_text()
@@ -731,6 +731,18 @@ def test_each_agent_gets_the_project_mcp_servers(world: World) -> None:
 
     call = world.calls("DEMO-2")[0]
     assert call["mcp_config"] == f"{call['cwd']}/.mcp.json"
+    # Only the repo's servers, so no host plugin or claude.ai connector adds to every turn's context.
+    assert call["strict_mcp_config"]
+
+
+def test_an_agent_in_a_repo_without_mcp_servers_keeps_the_host_servers(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    world.run()
+
+    call = world.calls("DEMO-2")[0]
+    assert call["mcp_config"] is None and not call["strict_mcp_config"]
 
 
 def test_every_agent_run_gets_the_subagent_tiers_and_the_dispatch_rule(world: World) -> None:
@@ -761,6 +773,7 @@ def test_each_agent_line_logs_the_cost_from_the_last_result(world: World) -> Non
     assert agent_lines and all(line["usage"]["total_cost_usd"] for line in agent_lines)
     ticket = next(line for line in agent_lines if line["ticket"] == "DEMO-2")
     assert ticket["usage"] == {
+        "peak_context": 0,
         "total_cost_usd": 0.75,
         "num_turns": 4,
         "duration_ms": 4000,
@@ -777,6 +790,78 @@ def test_each_agent_line_logs_the_cost_from_the_last_result(world: World) -> Non
     }
 
 
+def test_the_head_agent_runs_on_the_agent_table_in_every_session(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    # A remote branch with the key makes the first run a restart. The gate fails once, so a fix resumes it.
+    sh(world.repo, "git", "switch", "-q", "-c", "feat/DEMO-2-add-the-first-part")
+    (world.repo / "b.txt").write_text("b")
+    sh(world.repo, "git", "add", "-A")
+    sh(world.repo, "git", "commit", "-q", "-m", "feat(DEMO-2): start")
+    sh(world.repo, "git", "push", "-q", "origin", "feat/DEMO-2-add-the-first-part")
+    sh(world.repo, "git", "switch", "-q", "main")
+    sh(world.repo, "git", "branch", "-q", "-D", "feat/DEMO-2-add-the-first-part")
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}, {"delete": ["TICKET_FAIL"]}]})
+
+    assert world.run(extra='\n[agent]\nmodel = "claude-sonnet-5-5"\neffort = "low"\n') == 0
+
+    restart, fix = world.calls("DEMO-2")
+    assert RESTART_PROMPT in restart["prompt"] and fix["resume"] is not None
+    for call in (restart, fix, *world.calls(f"{EPIC}-pr")):
+        assert (call["model"], call["effort"]) == ("claude-sonnet-5-5", "low")
+    (review,) = world.calls("DEMO-2-review")
+    assert (review["model"], review["effort"]) == (REVIEW_MODEL, REVIEW_EFFORT)
+    start = next(line for line in world.decisions() if line["ticket"] == EPIC and line["step"] == "start")
+    assert start["setup"]["agent"] == "claude-sonnet-5-5 low"
+
+
+def test_each_agent_line_logs_the_plan_meter_and_the_peak_context(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    five, seven = 1791267000, 1791554400
+    meter = [
+        {"five_hour": [0.14, five], "seven_day": [0.80, seven]},
+        {"five_hour": [0.30, five], "seven_day": [0.82, seven]},
+        {"five_hour": [0.55, five]},
+    ]
+    messages = [
+        {"id": "m1", "context": [2, 30_000, 8_000], "blocks": 2},
+        {"id": "m2", "context": [2, 90_000, 1_000], "blocks": 3},
+        # A subagent's context is not the head agent's.
+        {"id": "m3", "context": [2, 400_000, 0], "parent": "t1"},
+    ]
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}, "rate_limits": meter, "messages": messages}],
+            "DEMO-2-review": [{"rate_limits": [{"five_hour": [0.60, five]}]}],
+        }
+    )
+
+    assert world.run() == 0
+
+    agent_lines = [line for line in world.decisions() if line["step"] == "agent"]
+    ticket = next(line for line in agent_lines if line["ticket"] == "DEMO-2")
+    assert ticket["plan"] == {
+        "five_hour": {"start": 0.14, "end": 0.55, "resets_at": five},
+        "seven_day": {"start": 0.80, "end": 0.82, "resets_at": seven},
+    }
+    assert ticket["usage"]["peak_context"] == 91_002
+    review = next(line for line in agent_lines if line["ticket"] == "DEMO-2-review")
+    assert review["plan"] == {"five_hour": {"start": 0.60, "end": 0.60, "resets_at": five}}
+    pr = next(line for line in agent_lines if line["ticket"] == f"{EPIC}-pr")
+    assert pr["plan"] == {} and pr["usage"]["peak_context"] == 0
+
+
+def test_a_run_stopped_at_a_usage_limit_still_logs_its_plan_meter(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    meter = [{"five_hour": [0.90, 1791267000]}, {"five_hour": [1.0, 1791267000]}]
+    world.plan({"DEMO-2": [{"rate_limits": meter, "error": "usage"}]})
+
+    assert world.run() == 1
+
+    (limited,) = [line for line in world.decisions() if line["step"] == "agent"]
+    assert limited["result"] == "usage-limit" and "usage limit" in limited["detail"]
+    assert limited["plan"] == {"five_hour": {"start": 0.90, "end": 1.0, "resets_at": 1791267000}}
+
+
 def test_the_start_line_keeps_what_the_agents_run_on(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
@@ -786,6 +871,7 @@ def test_the_start_line_keeps_what_the_agents_run_on(world: World) -> None:
     start = next(line for line in world.decisions() if line["ticket"] == EPIC and line["step"] == "start")
     assert start["setup"] == {
         "claude": "2.1.295",
+        "agent": "claude-opus-5-5 high",
         "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }

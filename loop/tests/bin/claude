@@ -5,7 +5,10 @@ FAKE_CLAUDE_DIR/plan.json maps a session name (`-n`) to a list of steps. Each ca
 A step can write and delete files and commit them, write files with `uncommitted` and not commit them, save
 a screenshot or a PR body in LOOP_RUN_DIR, make `trials` worktrees as a trial subagent leaves them, return a status and review findings, or fail with a usage limit
 or a crash after its commit. A usage limit with `resets_in` reports when it resets, in seconds from now. A step with `late_turn` adds a second result with no status, as when a background subagent wakes the
-session after its status. A step with `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to
+session after its status. A step with `rate_limits` writes one `rate_limit_event` per item, with the
+utilization and the reset of each window, as the CLI writes the plan meter. A step with `messages` writes the
+assistant messages with their usage, one event per content block as the CLI does, and a message with `parent`
+comes from a subagent. A step with `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to
 FAKE_CLAUDE_DIR/peek.json. With no step left, the call returns done and changes nothing. `--version` prints
 FAKE_CLAUDE_VERSION, or a version new enough for the loop.
 
@@ -44,6 +47,7 @@ with (home / "calls.jsonl").open("a") as calls:
         "model": args[args.index("--model") + 1] if "--model" in args else None,
         "effort": args[args.index("--effort") + 1] if "--effort" in args else None,
         "mcp_config": args[args.index("--mcp-config") + 1] if "--mcp-config" in args else None,
+        "strict_mcp_config": "--strict-mcp-config" in args,
         "agents": args[args.index("--agents") + 1] if "--agents" in args else None,
         "system_prompt": args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else None,
         "settings": json.loads(args[args.index("--settings") + 1]) if "--settings" in args else None,
@@ -87,6 +91,17 @@ if step.get("peek"):
     print("Starting the MCP servers", file=sys.stderr, flush=True)
     logs = {log.name: log.read_text() for log in Path(os.environ["LOOP_RUN_DIR"]).glob("agent-*")}
     (home / "peek.json").write_text(json.dumps(logs))
+for meter in step.get("rate_limits", []):
+    windows = {window: {"utilization": value, "resetsAt": resets} for window, (value, resets) in meter.items()}
+    first = next(iter(windows))
+    info = {"status": "allowed", "rateLimitType": first, **windows[first], "unifiedWindows": windows}
+    print(json.dumps({"type": "rate_limit_event", "rate_limit_info": info, "session_id": session}))
+for message in step.get("messages", []):
+    fresh, read, written = message["context"]
+    usage = {"input_tokens": fresh, "cache_read_input_tokens": read, "cache_creation_input_tokens": written, "output_tokens": 5}
+    for _ in range(message.get("blocks", 1)):
+        body = {"id": message["id"], "role": "assistant", "content": [{"type": "text", "text": "Working."}], "usage": usage}
+        print(json.dumps({"type": "assistant", "message": body, "parent_tool_use_id": message.get("parent"), "session_id": session}))
 if step.get("error") == "usage":
     if "resets_in" in step:
         info = {"status": "rejected", "resetsAt": int(time.time()) + step["resets_in"], "rateLimitType": "five_hour"}
