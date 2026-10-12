@@ -310,7 +310,14 @@ function costView(key) {
   return wrap;
 }
 
-const figure = (kind, n) => (n === null || n === undefined ? "-" : kind === "money" ? money(n) : kind === "minutes" ? `${Math.round(n)} min` : String(n));
+function figure(kind, n) {
+  if (n === null || n === undefined) return "-";
+  if (kind === "money") return money(n);
+  if (kind === "minutes") return `${Math.round(n)} min`;
+  if (kind === "points") return `${n.toFixed(1)} pt`;
+  if (kind === "tokens") return n.toLocaleString();
+  return String(n);
+}
 
 function costTable(report) {
   const before = report.previous ? `${report.previous.epic} ${(report.previous.started || "").slice(0, 10)}` : "No earlier run";
@@ -325,7 +332,7 @@ function costTable(report) {
     }
     const pct = typeof row.change === "number";
     const change = pct ? `${row.change > 0 ? "+" : ""}${row.change}%` : row.change || "";
-    const tone = row.kind === "money" && pct && row.change !== 0 ? (row.change < 0 ? "down" : "up") : "";
+    const tone = (row.kind === "money" || row.kind === "points") && pct && row.change !== 0 ? (row.change < 0 ? "down" : "up") : "";
     const n = row.kind === "text" ? "n text" : "n";
     rows.push(h("tr", {}, h("td", {}, row.label), h("td", { class: n }, figure(row.kind, row.previous)),
       h("td", { class: n }, figure(row.kind, row.current)), h("td", { class: `n ${tone}` }, change)));
