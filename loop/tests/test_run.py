@@ -761,6 +761,7 @@ def test_each_agent_line_logs_the_cost_from_the_last_result(world: World) -> Non
     assert agent_lines and all(line["usage"]["total_cost_usd"] for line in agent_lines)
     ticket = next(line for line in agent_lines if line["ticket"] == "DEMO-2")
     assert ticket["usage"] == {
+        "peak_context": 0,
         "total_cost_usd": 0.75,
         "num_turns": 4,
         "duration_ms": 4000,
@@ -799,6 +800,54 @@ def test_the_head_agent_runs_on_the_agent_table_in_every_session(world: World) -
     assert (review["model"], review["effort"]) == (REVIEW_MODEL, REVIEW_EFFORT)
     start = next(line for line in world.decisions() if line["ticket"] == EPIC and line["step"] == "start")
     assert start["setup"]["agent"] == "claude-sonnet-5-5 low"
+
+
+def test_each_agent_line_logs_the_plan_meter_and_the_peak_context(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    five, seven = 1791267000, 1791554400
+    meter = [
+        {"five_hour": [0.14, five], "seven_day": [0.80, seven]},
+        {"five_hour": [0.30, five], "seven_day": [0.82, seven]},
+        {"five_hour": [0.55, five]},
+    ]
+    messages = [
+        {"id": "m1", "context": [2, 30_000, 8_000], "blocks": 2},
+        {"id": "m2", "context": [2, 90_000, 1_000], "blocks": 3},
+        # A subagent's context is not the head agent's.
+        {"id": "m3", "context": [2, 400_000, 0], "parent": "t1"},
+    ]
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}, "rate_limits": meter, "messages": messages}],
+            "DEMO-2-review": [{"rate_limits": [{"five_hour": [0.60, five]}]}],
+        }
+    )
+
+    assert world.run() == 0
+
+    agent_lines = [line for line in world.decisions() if line["step"] == "agent"]
+    ticket = next(line for line in agent_lines if line["ticket"] == "DEMO-2")
+    assert ticket["plan"] == {
+        "five_hour": {"start": 0.14, "end": 0.55, "resets_at": five},
+        "seven_day": {"start": 0.80, "end": 0.82, "resets_at": seven},
+    }
+    assert ticket["usage"]["peak_context"] == 91_002
+    review = next(line for line in agent_lines if line["ticket"] == "DEMO-2-review")
+    assert review["plan"] == {"five_hour": {"start": 0.60, "end": 0.60, "resets_at": five}}
+    pr = next(line for line in agent_lines if line["ticket"] == f"{EPIC}-pr")
+    assert pr["plan"] == {} and pr["usage"]["peak_context"] == 0
+
+
+def test_a_run_stopped_at_a_usage_limit_still_logs_its_plan_meter(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    meter = [{"five_hour": [0.90, 1791267000]}, {"five_hour": [1.0, 1791267000]}]
+    world.plan({"DEMO-2": [{"rate_limits": meter, "error": "usage"}]})
+
+    assert world.run() == 1
+
+    (limited,) = [line for line in world.decisions() if line["step"] == "agent"]
+    assert limited["result"] == "usage-limit" and "usage limit" in limited["detail"]
+    assert limited["plan"] == {"five_hour": {"start": 0.90, "end": 1.0, "resets_at": 1791267000}}
 
 
 def test_the_start_line_keeps_what_the_agents_run_on(world: World) -> None:

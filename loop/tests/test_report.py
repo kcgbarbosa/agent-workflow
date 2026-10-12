@@ -11,7 +11,7 @@ from conftest import write_config
 
 from loop import config
 from loop.cli import claude_problem, main
-from loop.report import breakdown, compare, haiku_over_cap, split_runs
+from loop.report import breakdown, compare, haiku_over_cap, plan_usage, split_runs
 from loop.watch import Watch, comparison
 
 HAIKU = "claude-haiku-5-5"
@@ -107,6 +107,59 @@ def test_a_run_breaks_down_by_role_model_and_subagent() -> None:
     assert result["cost_per_landed"] == pytest.approx(2.75)
     assert result["agent_minutes"] == pytest.approx(6)
     assert result["haiku_over_cap"] == 0 and result["setup"] == SETUP_AFTER
+
+
+def window(start: float, end: float, resets_at: int) -> dict[str, Any]:
+    return {"start": start, "end": end, "resets_at": resets_at}
+
+
+def test_plan_points_add_up_each_window_once_over_parallel_sessions() -> None:
+    t = "2026-10-08T10:00:00+00:00"
+    first, second, week = 1791267000, 1791285000, 1791554400
+    run = [
+        line("DEMO-1", t, "DEMO-1", "start", "ok"),
+        # Two tickets run at once, so their sessions move the same meter. The window counts once.
+        line("DEMO-1", t, "A-2", "agent", "done", plan={"five_hour": window(0.10, 0.60, first)}),
+        line(
+            "DEMO-1",
+            t,
+            "A-3",
+            "agent",
+            "done",
+            plan={"five_hour": window(0.30, 0.95, first), "seven_day": window(0.50, 0.62, week)},
+        ),
+        line("DEMO-1", t, "A-2", "agent", "usage-limit", plan={"five_hour": window(0.95, 1.0, first)}),
+        # The five-hour window resets, and the next one starts near zero.
+        line(
+            "DEMO-1",
+            t,
+            "A-2",
+            "agent",
+            "done",
+            plan={"five_hour": window(0.02, 0.20, second), "seven_day": window(0.66, 0.70, week)},
+        ),
+        line("DEMO-1", t, "A-2", "land", "landed"),
+        line("DEMO-1", t, "A-3", "land", "landed"),
+    ]
+
+    used = plan_usage(run)
+
+    assert used["used"] == pytest.approx({"five_hour": 108.0, "seven_day": 20.0})
+    assert used["now"] == {
+        "five_hour": {"utilization": 0.20, "resets_at": second},
+        "seven_day": {"utilization": 0.70, "resets_at": week},
+    }
+    result = breakdown("DEMO-1", run)
+    assert result["plan_used"] == pytest.approx({"five_hour": 108.0, "seven_day": 20.0})
+    assert result["plan_per_landed"] == pytest.approx({"five_hour": 54.0, "seven_day": 10.0})
+    assert result["meter"] == used["now"]
+
+
+def test_a_run_with_no_plan_meter_has_no_plan_points() -> None:
+    (run,) = split_runs("DEMO-1", run_lines("DEMO-1", "08", SETUP_AFTER, cost=4.0, haiku_cost=0))
+
+    assert plan_usage(run) == {"used": {}, "now": {}}
+    assert breakdown("DEMO-1", run)["plan_per_landed"] == {}
 
 
 def test_haiku_cost_above_the_short_prompt_rate_shows_a_prompt_past_100k() -> None:

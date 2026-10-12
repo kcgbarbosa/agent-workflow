@@ -70,6 +70,33 @@ def haiku_over_cap(models: dict[str, Any]) -> float:
     return over
 
 
+def plan_usage(run: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The plan points a run used, and the meter at its last agent line (loop.md rule 11).
+
+    The meter is the account's, so parallel sessions, and KC's own, move it together. For each window, which
+    one reset time names, the run used the highest end less the lowest start of its agent lines. One point
+    is 1% of the window.
+    """
+    spans: dict[tuple[str, Any], tuple[float, float]] = {}
+    now: dict[str, dict[str, Any]] = {}
+    for line in run:
+        plan = line.get("plan")
+        for window, value in plan.items() if isinstance(plan, dict) else ():
+            if not isinstance(value, dict):
+                continue
+            start, end = value.get("start"), value.get("end")
+            if not isinstance(start, int | float) or not isinstance(end, int | float):
+                continue
+            span = (window, value.get("resets_at"))
+            low, high = spans.get(span, (start, end))
+            spans[span] = (min(low, start), max(high, end))
+            now[window] = {"utilization": end, "resets_at": value.get("resets_at")}
+    used: dict[str, float] = {}
+    for (window, _), (low, high) in spans.items():
+        used[window] = round(used.get(window, 0.0) + (high - low) * 100, 1)
+    return {"used": used, "now": now}
+
+
 def breakdown(epic: str, run: list[dict[str, Any]]) -> dict[str, Any]:
     """The cost of one run by role, model, and subagent, with what the run delivered for it."""
     roles = dict.fromkeys(ROLES, 0.0)
@@ -93,6 +120,7 @@ def breakdown(epic: str, run: list[dict[str, Any]]) -> dict[str, Any]:
         over += session_over
         over_sessions += session_over > 0
     landed = sum(1 for line in run if line.get("step") == "land" and line.get("result") == "landed")
+    plan = plan_usage(run)
     findings = 0
     for line in run:
         if line.get("step") in ("code-review", "ui-gate") and (
@@ -108,6 +136,11 @@ def breakdown(epic: str, run: list[dict[str, Any]]) -> dict[str, Any]:
         "stuck": sum(1 for line in run if line.get("step") == "stuck"),
         "cost": cost,
         "cost_per_landed": cost / landed if landed else None,
+        "plan_used": plan["used"],
+        "plan_per_landed": {window: round(points / landed, 1) for window, points in plan["used"].items()}
+        if landed
+        else {},
+        "meter": plan["now"],
         "turns": int(turns),
         "agent_minutes": agent_ms / 60000,
         "findings": findings,
