@@ -440,7 +440,7 @@ def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the
     assert review["resume"] is None and review["model"] == REVIEW_MODEL and review["effort"] == REVIEW_EFFORT
     assert "findings" in review["schema"]["required"]
     first, fix = world.calls("DEMO-2")
-    assert first["model"] is None and first["effort"] is None
+    assert (first["model"], first["effort"]) == ("claude-opus-5-5", "high")
     assert fix["resume"] is not None and finding in fix["prompt"]
     assert world.epic_file("a.txt").read_text() == "b"
     ticket = (world.state / EPIC / "runs" / "DEMO-2" / "ticket.md").read_text()
@@ -777,6 +777,30 @@ def test_each_agent_line_logs_the_cost_from_the_last_result(world: World) -> Non
     }
 
 
+def test_the_head_agent_runs_on_the_agent_table_in_every_session(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    # A remote branch with the key makes the first run a restart. The gate fails once, so a fix resumes it.
+    sh(world.repo, "git", "switch", "-q", "-c", "feat/DEMO-2-add-the-first-part")
+    (world.repo / "b.txt").write_text("b")
+    sh(world.repo, "git", "add", "-A")
+    sh(world.repo, "git", "commit", "-q", "-m", "feat(DEMO-2): start")
+    sh(world.repo, "git", "push", "-q", "origin", "feat/DEMO-2-add-the-first-part")
+    sh(world.repo, "git", "switch", "-q", "main")
+    sh(world.repo, "git", "branch", "-q", "-D", "feat/DEMO-2-add-the-first-part")
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}, {"delete": ["TICKET_FAIL"]}]})
+
+    assert world.run(extra='\n[agent]\nmodel = "claude-sonnet-5-5"\neffort = "low"\n') == 0
+
+    restart, fix = world.calls("DEMO-2")
+    assert RESTART_PROMPT in restart["prompt"] and fix["resume"] is not None
+    for call in (restart, fix, *world.calls(f"{EPIC}-pr")):
+        assert (call["model"], call["effort"]) == ("claude-sonnet-5-5", "low")
+    (review,) = world.calls("DEMO-2-review")
+    assert (review["model"], review["effort"]) == (REVIEW_MODEL, REVIEW_EFFORT)
+    start = next(line for line in world.decisions() if line["ticket"] == EPIC and line["step"] == "start")
+    assert start["setup"]["agent"] == "claude-sonnet-5-5 low"
+
+
 def test_the_start_line_keeps_what_the_agents_run_on(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
@@ -786,6 +810,7 @@ def test_the_start_line_keeps_what_the_agents_run_on(world: World) -> None:
     start = next(line for line in world.decisions() if line["ticket"] == EPIC and line["step"] == "start")
     assert start["setup"] == {
         "claude": "2.1.295",
+        "agent": "claude-opus-5-5 high",
         "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }

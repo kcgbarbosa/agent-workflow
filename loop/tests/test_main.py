@@ -107,6 +107,16 @@ def test_the_config_gives_each_worktree_its_own_stack(tmp_path: Path) -> None:
     assert settings.state_dir == Path.home() / ".local/state/demo-loop"
 
 
+def test_the_head_agent_runs_on_the_agent_table_or_the_defaults(tmp_path: Path) -> None:
+    write_config(tmp_path)
+    settings = config.load(tmp_path)
+    assert (settings.agent_model, settings.agent_effort) == ("claude-opus-5-5", "high")
+
+    write_config(tmp_path, extra='\n[agent]\nmodel = "claude-sonnet-5-5"\neffort = "medium"\n')
+    settings = config.load(tmp_path)
+    assert (settings.agent_model, settings.agent_effort) == ("claude-sonnet-5-5", "medium")
+
+
 def test_a_repo_without_a_stack_gets_no_stack_env(tmp_path: Path) -> None:
     write_config(tmp_path)
     text = (tmp_path / config.FILE).read_text()

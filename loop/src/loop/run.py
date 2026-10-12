@@ -232,10 +232,11 @@ def claude_version() -> str:
     return match[0] if match else ""
 
 
-def run_setup() -> dict[str, Any]:
+def run_setup(config: Config) -> dict[str, Any]:
     """What the agents of a run run on. The start line keeps it, so `loop report` can tell two runs apart."""
     return {
         "claude": claude_version(),
+        "agent": f"{config.agent_model} {config.agent_effort}",
         "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }
@@ -332,7 +333,7 @@ class EpicRun:
             repo.add_worktree(
                 self.repo, self.epic_worktree, self.epic_branch, f"origin/{self.config.main_branch}"
             )
-        self.log(self.epic_key, "start", "ok", detail=self.epic_branch, setup=run_setup())
+        self.log(self.epic_key, "start", "ok", detail=self.epic_branch, setup=run_setup(self.config))
         for ticket in self.tracker.children(self.epic_key):
             if self.ticket_result(ticket) == NOT_LANDED:
                 self.log(ticket.key, "start", "done-not-landed")
@@ -472,7 +473,9 @@ class EpicRun:
     def ticket_agent(self, run: TicketRun, prompt: str, session: str | None) -> AgentResult:
         """An agent run, then a push of the ticket branch, also when the run fails."""
         try:
-            return self.agent(run, prompt, session)
+            return self.agent(
+                run, prompt, session, model=self.config.agent_model, effort=self.config.agent_effort
+            )
         finally:
             self.push(run.worktree, run.branch, run.ticket.key)
             self.remove_trials(run)
@@ -702,7 +705,14 @@ class EpicRun:
         if self.config.name_landed_keys_only:
             prompt += LANDED_KEYS_PROMPT
         try:
-            self.agent(run, prompt, session=None, name=f"{key}-pr")
+            self.agent(
+                run,
+                prompt,
+                session=None,
+                name=f"{key}-pr",
+                model=self.config.agent_model,
+                effort=self.config.agent_effort,
+            )
         except (AgentFailed, UsageLimit) as error:
             self.log(key, "pr-body", "fail", detail=str(error))
         written = body_file.read_text() if body_file.exists() else ""

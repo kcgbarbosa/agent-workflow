@@ -59,12 +59,17 @@ NTFY_TOPIC = {{ item = "demo-ntfy-topic", field = "password" }}
 
 
 def write_config(
-    repo: Path, tracker_url: str = "http://127.0.0.1:9", parallel: int = 2, landed_keys_only: bool = False
+    repo: Path,
+    tracker_url: str = "http://127.0.0.1:9",
+    parallel: int = 2,
+    landed_keys_only: bool = False,
+    extra: str = "",
 ) -> None:
+    """The test config. `extra` adds tables at the end, such as `[agent]`."""
     text = CONFIG.format(
         tracker_url=tracker_url, parallel=parallel, landed_keys_only=str(landed_keys_only).lower()
     )
-    (repo / config.FILE).write_text(text)
+    (repo / config.FILE).write_text(text + extra)
 
 
 def sh(cwd: Path, *args: str) -> str:
@@ -82,8 +87,8 @@ class World:
     def plan(self, steps: dict[str, list[dict[str, Any]]]) -> None:
         (self.fakes / "plan.json").write_text(json.dumps(steps))
 
-    def run(self, parallel: int = 2, landed_keys_only: bool = False) -> int:
-        write_config(self.repo, self.jira.url, parallel, landed_keys_only)
+    def run(self, parallel: int = 2, landed_keys_only: bool = False, extra: str = "") -> int:
+        write_config(self.repo, self.jira.url, parallel, landed_keys_only, extra)
         return run(EPIC, config.load(self.repo, state_dir=self.state), SECRETS)
 
     def records(self, name: str) -> list[dict[str, Any]]:
