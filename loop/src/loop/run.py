@@ -99,6 +99,10 @@ CONTEXT_TOKENS = ("input_tokens", "cache_read_input_tokens", "cache_creation_inp
 # The oldest `claude` that knows each model the tiers name and prices the long prompts of Haiku 5.5.
 MIN_CLAUDE = (2, 1, 295)
 TIMED_OUT = 124
+# A session with a background task, such as a dev server, stays open after its status until the task ends.
+# After its status, a session gets this long to exit or to run a late turn. Then the loop stops it.
+EXIT_GRACE_SECONDS = 120.0
+EXIT_POLL_SECONDS = 2.0
 # The loop keeps the stack volumes for KC, so no agent run deletes one.
 VOLUME_DENY = ("Bash(docker volume rm *)", "Bash(docker volume prune*)", "Bash(docker system prune*)")
 LOG_TAIL_LINES = 80
@@ -923,7 +927,8 @@ class EpicRun:
         errors_log = run.agent_log.with_suffix(".err")
         # The output streams to the logs, so a run can be followed while it lasts.
         with run.agent_log.open("w") as stdout, errors_log.open("w") as stderr:
-            result = subprocess.run(command, cwd=run.worktree, env=env, stdout=stdout, stderr=stderr)
+            process = subprocess.Popen(command, cwd=run.worktree, env=env, stdout=stdout, stderr=stderr)
+            returncode, cut_short = self.wait_for_agent(process, run.agent_log, name)
         errors = errors_log.read_text()
         # Each turn ends with a result event. A background subagent that finishes after the status
         # wakes the session for one more turn, and that turn's result can have no status.
@@ -931,7 +936,7 @@ class EpicRun:
         results = [event for event in events if event.get("type") == "result"]
         data = results[-1] if results else {}
         cost, plan = agent_usage(data, events), agent_plan(events)
-        if result.returncode == TIMED_OUT:
+        if returncode == TIMED_OUT and not cut_short:
             self.log(name, "agent", "timeout", session=session, usage=cost, plan=plan)
             raise AgentFailed(f"The agent ran past {self.config.agent_timeout_minutes} minutes.")
         message = f"{data.get('result', '')}\n{errors}"
@@ -944,7 +949,7 @@ class EpicRun:
                 self.log(name, "agent", "usage-limit", session=stopped, detail=detail, usage=cost, plan=plan)
                 raise UsageLimit(detail, usage_reset(events), stopped)
             self.log(name, "agent", "error", session=data.get("session_id"), usage=cost, plan=plan)
-            raise AgentFailed(f"The agent exited with code {result.returncode}: {message.strip()[:300]}")
+            raise AgentFailed(f"The agent exited with code {returncode}: {message.strip()[:300]}")
         output = next(filter(None, map(agent_status, reversed(results))), None)
         if output is None:
             raise AgentFailed("The agent returned no status.")
@@ -964,6 +969,36 @@ class EpicRun:
             self.track(key, "comment", lambda: self.tracker.comment(key, text))
         findings = [str(item) for item in output.get("findings", [])]
         return AgentResult(status, reason, session_id, findings)
+
+    def wait_for_agent(self, process: subprocess.Popen[bytes], log: Path, name: str) -> tuple[int, bool]:
+        """Waits for the agent to exit. Returns its exit code, and whether the loop stopped it.
+
+        `claude -p` does not exit while a background task runs, such as the dev server that a UI review
+        starts, and the task can run until its own time limit. The loop stops a session that has given
+        its status and has not exited in the grace time, as the status is its last word. A late turn
+        that comes within the grace time still counts.
+        """
+        given: float | None = None
+        size = -1
+        while True:
+            try:
+                return process.wait(timeout=EXIT_POLL_SECONDS), False
+            except subprocess.TimeoutExpired:
+                pass
+            if given is None and log.stat().st_size != size:
+                size = log.stat().st_size
+                events = json_lines(log.read_text())
+                if any(agent_status(event) for event in events if event.get("type") == "result"):
+                    given = time.monotonic()
+            elif given is not None and time.monotonic() - given >= EXIT_GRACE_SECONDS:
+                self.log(name, "agent", "stopped", detail="The session kept running after its status.")
+                # `timeout` passes the signal on to the whole group that it started.
+                process.terminate()
+                try:
+                    return process.wait(timeout=75), True
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    return process.wait(), True
 
     def gate(
         self, command: tuple[str, ...], cwd: Path, stack: dict[str, str], log_file: Path, key: str

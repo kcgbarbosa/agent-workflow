@@ -690,6 +690,23 @@ def test_a_status_before_a_later_turn_with_none_still_counts(world: World) -> No
     assert not world.jira.issues["DEMO-2"].flagged
 
 
+def test_a_session_that_stays_open_after_its_status_is_stopped(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(loop_run, "EXIT_GRACE_SECONDS", 0.5)
+    monkeypatch.setattr(loop_run, "EXIT_POLL_SECONDS", 0.1)
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "linger": 60}]})
+
+    started = time.monotonic()
+    assert world.run() == 0
+
+    assert time.monotonic() - started < 30
+    assert "merge(DEMO-2): Add the first part" in world.epic_log()
+    assert not world.jira.issues["DEMO-2"].flagged
+    assert any(line["step"] == "agent" and line["result"] == "stopped" for line in world.decisions())
+
+
 def test_a_merge_that_fails_its_gate_never_reaches_the_frontier(world: World) -> None:
     world.jira.add("DEMO-2", "Break the end to end tests", parent=EPIC)
     world.jira.add("DEMO-3", "Build on the broken work", parent=EPIC, blockers=["DEMO-2"])

@@ -4,7 +4,7 @@
 FAKE_CLAUDE_DIR/plan.json maps a session name (`-n`) to a list of steps. Each call takes the next step.
 A step can write and delete files and commit them, write files with `uncommitted` and not commit them, save
 a screenshot or a PR body in LOOP_RUN_DIR, make `trials` worktrees as a trial subagent leaves them, return a status and review findings, or fail with a usage limit
-or a crash after its commit. A usage limit with `resets_in` reports when it resets, in seconds from now. A step with `late_turn` adds a second result with no status, as when a background subagent wakes the
+or a crash after its commit. A usage limit with `resets_in` reports when it resets, in seconds from now. A step with `linger` keeps the process open that many seconds after its last result, as a background task does. A step with `late_turn` adds a second result with no status, as when a background subagent wakes the
 session after its status. A step with `rate_limits` writes one `rate_limit_event` per item, with the
 utilization and the reset of each window, as the CLI writes the plan meter. A step with `messages` writes the
 assistant messages with their usage, one event per content block as the CLI does, and a message with `parent`
@@ -128,3 +128,6 @@ if "findings" in record["schema"]["properties"]:
 print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output, **cost(0.5, 3)}))
 if step.get("late_turn"):
     print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied.", **cost(0.75, 4)}))
+if step.get("linger"):
+    sys.stdout.flush()
+    time.sleep(step["linger"])
