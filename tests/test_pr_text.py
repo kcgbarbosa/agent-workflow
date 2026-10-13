@@ -10,6 +10,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO / ".github" / "scripts"
+DASH = chr(0x2014)
 
 
 @pytest.fixture
@@ -65,5 +66,5 @@ def test_a_title_needs_a_type() -> None:
 
 
 def test_an_em_dash_in_the_title_or_the_body_fails() -> None:
-    assert title("fix(loop): stop it — now").returncode == 1
-    assert title("fix(loop): stop it", "It stops — now.").returncode == 1
+    assert title(f"fix(loop): stop it {{DASH}} now").returncode == 1
+    assert title("fix(loop): stop it", f"It stops {{DASH}} now.").returncode == 1
