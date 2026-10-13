@@ -93,6 +93,10 @@ USAGE_LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 # The commit that the screenshots in a run folder show.
 UI_COMMIT_FILE = "ui-review.commit"
+# A ticket gets one code review. The first file marks it done. The second holds the fix prompt of its findings
+# until the head agent has had a run, so that a restart before the fix still passes the findings on.
+CODE_REVIEWED_FILE = "code-review.done"
+CODE_REVIEW_FIX_FILE = "code-review.fix"
 # The rule for when the head agent hands work to the subagent tiers in `tiers.py`.
 DISPATCH = Path(__file__).with_name("dispatch.md")
 # Where Claude Code makes the worktree of a `trial` subagent: in the main checkout, also for a ticket's run.
@@ -506,11 +510,15 @@ class EpicRun:
         """The agent run, the gates, and the merge, with the fix attempts."""
         prompt = f"/implement {run.run_dir / 'ticket.md'}"
         attempts = 0
+        unfixed = run.run_dir / CODE_REVIEW_FIX_FILE
         if run.restart:
             prompt += f"\n\n{RESTART_PROMPT}"
+            if unfixed.exists():
+                prompt += f"\n\n{unfixed.read_text()}"
             attempts = 1
         result = self.ticket_agent(run, prompt, session=None)
-        reviewed = False
+        unfixed.unlink(missing_ok=True)
+        reviewed = run.restart and (run.run_dir / CODE_REVIEWED_FILE).exists()
         while True:
             if result.status == "blocked":
                 reason = f"The agent is blocked: {result.reason}"
@@ -532,6 +540,7 @@ class EpicRun:
             if failure.on_epic:
                 failure = self.merge_epic(run, failure)
             result = self.ticket_agent(run, failure.prompt, session=result.session)
+            unfixed.unlink(missing_ok=True)
 
     def ticket_agent(self, run: TicketRun, prompt: str, session: str | None) -> AgentResult:
         """An agent run, then a push of the ticket branch, also when the run fails."""
@@ -585,12 +594,14 @@ class EpicRun:
         key = run.ticket.key
         prompt = CODE_REVIEW_PROMPT.format(base=self.epic_branch, ticket=run.run_dir / "ticket.md")
         review = self.review_agent(run, prompt, f"{key}-review")
+        (run.run_dir / CODE_REVIEWED_FILE).write_text("done\n")
         if not review.findings:
             self.log(key, "code-review", "pass")
             return None
         self.log(key, "code-review", "findings", detail=f"{len(review.findings)} findings")
         reason = "The code review found problems."
         fix = self.fix_prompt("code review", review.findings, key)
+        (run.run_dir / CODE_REVIEW_FIX_FILE).write_text(fix)
         return GateFailure(reason, fix, run.agent_log or run.run_dir, attempt=False)
 
     def ui_gate(self, run: TicketRun) -> GateFailure | None:
@@ -602,9 +613,17 @@ class EpicRun:
             return None
         head = out(run.worktree, "rev-parse", "HEAD")
         reviewed = run.run_dir / UI_COMMIT_FILE
-        if screenshots(run.run_dir) and reviewed.exists() and reviewed.read_text().strip() == head:
-            self.log(key, "ui-gate", "pass", commit=head, detail="The screenshots show this commit.")
-            return None
+        if screenshots(run.run_dir) and reviewed.exists():
+            seen = reviewed.read_text().strip()
+            if seen == head:
+                self.log(key, "ui-gate", "pass", commit=head, detail="The screenshots show this commit.")
+                return None
+            if self.ui_diff(run, seen) == self.ui_diff(run, head):
+                reviewed.write_text(head + "\n")
+                self.log(
+                    key, "ui-gate", "pass", commit=head, detail=f"The UI code is the same as at {seen[:7]}."
+                )
+                return None
         # Screenshots of an earlier commit do not show this code.
         reviewed.unlink(missing_ok=True)
         for shot in screenshots(run.run_dir):
@@ -621,6 +640,17 @@ class EpicRun:
         reviewed.write_text(head + "\n")
         self.log(key, "ui-gate", "pass", commit=head)
         return None
+
+    def ui_diff(self, run: TicketRun, rev: str) -> str:
+        """The ticket's own change to the UI paths at `rev`, with no context lines, so that a commit that
+        changes no UI code, or a merge of the Epic branch, gives the same text as the commit before it."""
+        span = f"{self.epic_branch}...{rev}"
+        names = [
+            name
+            for name in out(run.worktree, "diff", "--name-only", span).splitlines()
+            if self.is_ui_path(name)
+        ]
+        return out(run.worktree, "diff", "-U0", span, "--", *names) if names else ""
 
     def review_agent(self, run: TicketRun, prompt: str, name: str) -> AgentResult:
         """A review session with an empty context. A blocked review makes the ticket stuck."""
