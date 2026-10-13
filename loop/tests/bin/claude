@@ -46,6 +46,7 @@ with (home / "calls.jsonl").open("a") as calls:
         "schema": json.loads(args[args.index("--json-schema") + 1]),
         "model": args[args.index("--model") + 1] if "--model" in args else None,
         "effort": args[args.index("--effort") + 1] if "--effort" in args else None,
+        "autocompact": args[args.index("--autocompact") + 1] if "--autocompact" in args else None,
         "mcp_config": args[args.index("--mcp-config") + 1] if "--mcp-config" in args else None,
         "strict_mcp_config": "--strict-mcp-config" in args,
         "agents": args[args.index("--agents") + 1] if "--agents" in args else None,

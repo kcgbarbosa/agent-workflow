@@ -21,6 +21,7 @@ Every repo keeps these rules. Change a rule here, on purpose, and give the reaso
    - `--agents` gives the loop's subagent tiers, which [`tiers.py`](../../loop/src/loop/tiers.py) reads from the files in [`agents/`](../../agents). `install.sh` links the same files into `~/.claude/agents`. `--append-system-prompt` adds the rule for when to hand work to them in [`dispatch.md`](../../loop/src/loop/dispatch.md). A run of `implement` outside the loop gets the tiers, and not the rule.
    - `--settings` gives the rules of [`agent_settings`](../../loop/src/loop/run.py): the gate commands run without the classifier, and the classifier learns that the `<name>-<key>` stacks are the loop's own, so an agent can stop one to free a port. `worktree.baseRef` is `head`, so a `trial` worktree branches from the ticket's last commit rather than from main. No agent run deletes a volume. Nobody answers a prompt in a run, so a routine action that auto mode denies makes a ticket stuck.
    - `--resume` continues the session for a fix attempt.
+   - `--autocompact` sets the window that every run compacts at, `[agent]` `context_tokens` (Agent).
    - `--model` and `--effort` run the review sessions of rules 4 and 5 on `REVIEW_MODEL` at `REVIEW_EFFORT` in [`run.py`](../../loop/src/loop/run.py). Every other run, the head agent's sessions and the PR body, runs on the model and effort of `[agent]` (Agent), so no run takes them from the host's own Claude Code settings.
 
    The schema returns `status` (`done` or `blocked`), `reason`, and `decisions`, the judgement calls for KC to check. The script comments the decisions on the ticket and lists them in the Epic PR. Each turn ends with a result event, and the script takes the status from the last result event that has one. A `blocked` status makes the ticket stuck.
@@ -77,7 +78,7 @@ Settles the UI paths, the review skill, the browser, sign-in, and what the revie
 
 ### Agent
 
-Settles what the head agent runs on. `[agent]` gives `model` and `effort`, and the defaults are `claude-opus-5-5` and `high`. Effort is the setting to change to cut cost: at every cost, Opus 5.5 scores at or above Sonnet 5.5.
+Settles what the head agent runs on. `[agent]` gives `model` and `effort`, and the defaults are `claude-opus-5-5` and `high`. Effort is the setting to change to cut cost: at every cost, Opus 5.5 scores at or above Sonnet 5.5. `context_tokens` is the window that every agent run compacts at, passed as `--autocompact`, and it defaults to 200000. Each turn sends the whole context again, so the cost of a ticket grows with how large its sessions get: in the last Epic run, sessions that reached 190K to 330K tokens cost two to three times as much per turn as sessions under 110K.
 
 ### Connectors
 

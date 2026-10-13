@@ -39,6 +39,7 @@ def run_setup(config: Config) -> dict[str, Any]:
     return {
         "claude": claude_version(),
         "agent": f"{config.agent_model} {config.agent_effort}",
+        "context": config.agent_context_tokens,
         "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }

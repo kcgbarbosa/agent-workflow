@@ -739,6 +739,8 @@ class EpicRun:
             command += ["--model", model]
         if effort:
             command += ["--effort", effort]
+        # The window the session compacts at, so a long ticket never sends more than this on each turn.
+        command += ["--autocompact", str(self.config.agent_context_tokens)]
         # Each worktree is a new folder, where nobody approved the project `.mcp.json`, so the flag keeps the
         # run from waiting on that approval. The strict flag leaves out the host's plugin servers and
         # claude.ai connectors, whose tools and instructions every turn would send again.

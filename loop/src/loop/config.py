@@ -60,6 +60,7 @@ class Config:
     main_branch: str
     agent_model: str
     agent_effort: str
+    agent_context_tokens: int
     agent_hint: str
     tools: tuple[str, ...]
     watch_port: int
@@ -144,6 +145,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         main_branch=top.text("main_branch", "main"),
         agent_model=agent.text("model", "claude-opus-5-5"),
         agent_effort=agent.text("effort", "high"),
+        agent_context_tokens=agent.number("context_tokens", 200_000),
         agent_hint=top.text("agent_hint", ""),
         tools=top.texts("tools", ()),
         watch_port=watch.number("port", 8790),

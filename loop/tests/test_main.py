@@ -117,6 +117,14 @@ def test_the_head_agent_runs_on_the_agent_table_or_the_defaults(tmp_path: Path) 
     assert (settings.agent_model, settings.agent_effort) == ("claude-sonnet-5-5", "medium")
 
 
+def test_the_context_window_defaults_to_200k_and_the_agent_table_sets_it(tmp_path: Path) -> None:
+    write_config(tmp_path)
+    assert config.load(tmp_path).agent_context_tokens == 200_000
+
+    write_config(tmp_path, extra="\n[agent]\ncontext_tokens = 150000\n")
+    assert config.load(tmp_path).agent_context_tokens == 150_000
+
+
 def test_a_repo_without_a_stack_gets_no_stack_env(tmp_path: Path) -> None:
     write_config(tmp_path)
     text = (tmp_path / config.FILE).read_text()
