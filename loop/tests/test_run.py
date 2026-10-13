@@ -476,6 +476,7 @@ def test_a_ui_change_lands_only_after_a_ui_review_and_its_screenshots_reach_the_
 
     (review,) = world.calls("DEMO-2-ui")
     assert review["prompt"].startswith("/ui-review ") and review["run_dir"] in review["prompt"]
+    assert "list in `decisions` each screen or part that you could not check" in review["prompt"]
     assert review["resume"] is None and review["model"] == REVIEW_MODEL
     assert len(world.calls("DEMO-2")) == 1
     assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
