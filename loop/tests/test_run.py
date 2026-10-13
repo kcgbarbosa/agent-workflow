@@ -439,6 +439,7 @@ def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the
     assert review["prompt"].startswith("/code-review feat/DEMO-1-the-loop ")
     assert review["resume"] is None and review["model"] == REVIEW_MODEL and review["effort"] == REVIEW_EFFORT
     assert "findings" in review["schema"]["required"]
+    assert "Wait for every subagent you start to return" in review["prompt"]
     first, fix = world.calls("DEMO-2")
     assert (first["model"], first["effort"]) == ("claude-opus-5-5", "high")
     assert fix["resume"] is not None and finding in fix["prompt"]
@@ -688,6 +689,23 @@ def test_a_status_before_a_later_turn_with_none_still_counts(world: World) -> No
 
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
     assert not world.jira.issues["DEMO-2"].flagged
+
+
+def test_a_session_that_stays_open_after_its_status_is_stopped(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(loop_run, "EXIT_GRACE_SECONDS", 0.5)
+    monkeypatch.setattr(loop_run, "EXIT_POLL_SECONDS", 0.1)
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "linger": 60}]})
+
+    started = time.monotonic()
+    assert world.run() == 0
+
+    assert time.monotonic() - started < 30
+    assert "merge(DEMO-2): Add the first part" in world.epic_log()
+    assert not world.jira.issues["DEMO-2"].flagged
+    assert any(line["step"] == "agent" and line["result"] == "stopped" for line in world.decisions())
 
 
 def test_a_merge_that_fails_its_gate_never_reaches_the_frontier(world: World) -> None:
