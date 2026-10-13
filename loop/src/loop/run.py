@@ -94,8 +94,8 @@ USAGE_LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 # The commit that the screenshots in a run folder show.
 UI_COMMIT_FILE = "ui-review.commit"
-# A UI review's faults go back to the head agent this many times. A fault still there after that lands with the
-# ticket and goes to KC as a decision, because a small fault costs less to fix by hand than to review again.
+# A UI review's faults go back to the head agent this many times. A fault still there after that lands with
+# the ticket and goes to KC as a decision, because it costs less to fix by hand than to review again.
 UI_FIX_ROUNDS = 1
 # A ticket gets one code review. The first file marks it done. The second holds the fix prompt of its findings
 # until the head agent has had a run, so that a restart before the fix still passes the findings on.
