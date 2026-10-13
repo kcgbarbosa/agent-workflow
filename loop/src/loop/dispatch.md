@@ -12,13 +12,13 @@ A subagent costs little to run. What a hand-off costs you is the brief you write
 
 A one-line grep, a read of one short file, a single test, or a small edit costs less inline, so do it yourself.
 
-Each turn sends your whole context again, so what you read stays in the cost of every later turn. Read less:
+Each turn sends your whole context again, and your session compacts at a set size, so what you read stays in the cost of every later turn. In past runs, most of a head agent's context was whole files and spec sections that it printed with `cat` and `sed -n`, before its first edit. Orient through scouts instead:
 
-- Read a whole file only when you will change it. To learn how other code works, send a `scout` and read only the lines it points to.
-- When the ticket links a spec, read only the sections that the ticket names, with an offset and a limit.
+- Before your first edit, send `scout`s in one message, one per area: the spec sections the ticket names, the code it touches, and the code whose pattern you will copy. Ask each for what you need to write the change: the signatures, the pattern to follow, and the `path:line` of each place you will edit. A scout may summarise when you ask it to.
+- Then read, with an offset and a limit, only the lines you will edit. Print no file or spec section of more than 150 lines.
 - Do the reading for a step in one Bash call, not one call per file.
 
-Give each `scout` one question. For a wide search, send several scouts with separate questions in one message, so they run at once and each one stays small.
+Give each `scout` one question, so each one stays small and they run at once.
 
 Run each subagent in the foreground, so its result is in before you return your status. When `editor` returns a question, it is a judgement call: answer it yourself. Before you commit an `editor` change, read its diff and check it against your spec.
 

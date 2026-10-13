@@ -918,6 +918,7 @@ def test_the_head_agent_runs_on_the_agent_table_in_every_session(world: World) -
     assert RESTART_PROMPT in restart["prompt"] and fix["resume"] is not None
     for call in (restart, fix, *world.calls(f"{EPIC}-pr")):
         assert (call["model"], call["effort"]) == ("claude-sonnet-5-5", "low")
+    assert {call["autocompact"] for call in world.calls()} == {"200000"}
     (review,) = world.calls("DEMO-2-review")
     assert (review["model"], review["effort"]) == (REVIEW_MODEL, REVIEW_EFFORT)
     start = next(line for line in world.decisions() if line["ticket"] == EPIC and line["step"] == "start")
@@ -982,6 +983,7 @@ def test_the_start_line_keeps_what_the_agents_run_on(world: World) -> None:
     assert start["setup"] == {
         "claude": "2.1.295",
         "agent": "claude-opus-5-5 high",
+        "context": 200_000,
         "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }
