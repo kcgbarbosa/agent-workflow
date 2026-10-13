@@ -17,111 +17,47 @@ from pathlib import Path
 from typing import Any, Literal
 
 from . import repo, tiers
+from .claude import REVIEW_EFFORT, REVIEW_MODEL, TRIALS, agent_settings, run_setup
 from .config import Config
+from .prompts import (
+    AGENT_SCHEMA,
+    CODE_REVIEW_PROMPT,
+    DECISIONS_COMMENT,
+    DISPATCH,
+    LANDED_KEYS_PROMPT,
+    PR_PROMPT,
+    RESTART_PROMPT,
+    REVIEW_FIX_PROMPT,
+    REVIEW_SCHEMA,
+    STUCK_COMMENT,
+    UI_REVIEW_PROMPT,
+    USAGE_RESUME_PROMPT,
+)
 from .repo import git, out
+from .stream import agent_plan, agent_status, agent_usage, json_lines, usage_reset
 from .tracker import Ticket, TrackerError
 from .watch import BOARD
 
-AGENT_SCHEMA = json.dumps(
-    {
-        "type": "object",
-        "properties": {
-            "status": {"type": "string", "enum": ["done", "blocked"]},
-            "reason": {"type": "string"},
-            "decisions": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Each judgement call that KC should check. Make the call and continue.",
-            },
-        },
-        "required": ["status", "reason", "decisions"],
-        "additionalProperties": False,
-    }
-)
-# A review returns each finding that needs a change, and the head agent fixes them in its own session.
-REVIEW_SCHEMA = json.dumps(
-    {
-        **json.loads(AGENT_SCHEMA),
-        "properties": {
-            **json.loads(AGENT_SCHEMA)["properties"],
-            "findings": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Each problem that needs a change, with its file and line or its screenshot.",
-            },
-        },
-        "required": ["status", "reason", "decisions", "findings"],
-    }
-)
-# The reviews run in their own sessions, so the head agent's context stays small. At the same cost per task,
-# Opus scores as well as Sonnet or better, so the reviews run on Opus at a set effort.
-REVIEW_MODEL = "claude-opus-5-5"
-REVIEW_EFFORT = "medium"
-REVIEW_RULES = (
-    "Change no file, and do not commit or push. Return in `findings` each problem that breaks the behaviour, "
-    "the ticket, or a documented standard. List polish that blocks nothing, such as a name or a spacing, in "
-    "`decisions` instead, so that KC fixes it by hand. Leave out a judgement call that you would not change. "
-    "Wait for every subagent you start to return before you give your result, which ends the session."
-)
-CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. " + REVIEW_RULES
-UI_REVIEW_PROMPT = (
-    "/{skill} The run folder is {run_dir}. The base is `{base}`. "
-    + REVIEW_RULES
-    + " When the environment lacks something that a screen needs, such as a bucket name, that is not a block:"
-    " check the rest, return `done`, and list in `decisions` each screen or part that you could not check,"
-    " with the reason, so that KC reviews it by hand."
-)
-REVIEW_FIX_PROMPT = (
-    "The {review} found these problems:\n\n{findings}\n\nFix each one that is a real problem, and commit the "
-    "fixes with {key} as the commit scope. Give each one you leave as it is in `decisions`, with the reason."
-)
-RESTART_PROMPT = "A previous run was interrupted. Check the diff against the ticket and continue."
-USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work."
 # A limit that resets later than this, such as the weekly one, stops the loop.
 MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60
-PR_PROMPT = (
-    "/pr Write the body of the Epic pull request for the diff `{merge_base}..HEAD` to the file "
-    "`{body_file}`. Do not commit, push, or open the pull request. In Evidence, give this ticket "
-    "table as it is:\n\n{tickets}"
-)
-LANDED_KEYS_PROMPT = "\n\nName no ticket key that the table does not give."
 NOT_LANDED = "Done in the tracker, not landed"
 UNFINISHED = ("Stuck", "Not built", NOT_LANDED)
-# The loop's own comments start with these lines, so the ticket file leaves them out.
-STUCK_COMMENT = "The loop stopped this ticket."
-DECISIONS_COMMENT = "The agent made these decisions for KC to check:"
 USAGE_LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit", re.IGNORECASE)
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
-# The commit that the screenshots in a run folder show.
+# Marks in a ticket's run folder. They outlive a restart, so a restart repeats no review:
+# the commit that the screenshots show, a code review that ran, and the findings it left unfixed.
 UI_COMMIT_FILE = "ui-review.commit"
-# A UI review's faults go back to the head agent this many times. A fault still there after that lands with
-# the ticket and goes to KC as a decision, because it costs less to fix by hand than to review again.
-UI_FIX_ROUNDS = 1
-# A ticket gets one code review. The first file marks it done. The second holds the fix prompt of its findings
-# until the head agent has had a run, so that a restart before the fix still passes the findings on.
 CODE_REVIEWED_FILE = "code-review.done"
 CODE_REVIEW_FIX_FILE = "code-review.fix"
-# The rule for when the head agent hands work to the subagent tiers in `tiers.py`.
-DISPATCH = Path(__file__).with_name("dispatch.md")
-# Where Claude Code makes the worktree of a `trial` subagent: in the main checkout, also for a ticket's run.
-TRIALS = Path(".claude/worktrees")
-# The usage fields the log keeps per model. A `costBasis` of "unknown" marks a cost the CLI guessed.
-MODEL_USAGE = (
-    "inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "costUSD", "costBasis",
-)  # fmt: skip
-# The tokens of one assistant message that make up the context it sent.
-CONTEXT_TOKENS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-# The oldest `claude` that knows each model the tiers name and prices the long prompts of Haiku 5.5.
-MIN_CLAUDE = (2, 1, 295)
+# The faults of a UI review go back to the head agent this often. A fault left after that lands with the
+# ticket and goes to KC as a decision, because it costs less to fix by hand than to review again.
+UI_FIX_ROUNDS = 1
 TIMED_OUT = 124
-# A session with a background task, such as a dev server, stays open after its status until the task ends.
-# After its status, a session gets this long to exit or to run a late turn. Then the loop stops it.
+# A session with a background task, such as a dev server, stays open after its status. Past this grace
+# time the loop stops it.
 EXIT_GRACE_SECONDS = 120.0
 EXIT_POLL_SECONDS = 2.0
-# The loop keeps the stack volumes for KC, so no agent run deletes one.
-VOLUME_DENY = ("Bash(docker volume rm *)", "Bash(docker volume prune*)", "Bash(docker system prune*)")
 LOG_TAIL_LINES = 80
-
 # Slot 0 is the main checkout, and the Epic branch has its own slot.
 EPIC_SLOT = 1
 
@@ -171,13 +107,6 @@ class TicketRun:
     ui_fix_rounds: int = 0
 
 
-@dataclass
-class Counters:
-    stuck_in_row: int = 0
-    landed: list[str] = field(default_factory=list)
-    stuck: list[str] = field(default_factory=list)
-
-
 def next_log(run_dir: Path, stem: str, suffix: str) -> Path:
     """The next numbered log in the run folder, so that a restart keeps the logs of earlier runs."""
     number = len(list(run_dir.glob(f"{stem}-*{suffix}"))) + 1
@@ -192,172 +121,6 @@ def tail(text: str, lines: int = LOG_TAIL_LINES) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
-def json_lines(text: str) -> list[dict[str, Any]]:
-    """The JSON objects in stream-json output, one per line. A line that is not an object is skipped."""
-    events = []
-    for line in text.splitlines():
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            events.append(event)
-    return events
-
-
-def agent_status(result: dict[str, Any]) -> dict[str, Any] | None:
-    """The status of one result event, from the schema output or, failing that, from the result text."""
-    output = result.get("structured_output")
-    if not isinstance(output, dict):
-        try:
-            output = json.loads(str(result.get("result", "")))
-        except json.JSONDecodeError:
-            return None
-    if not isinstance(output, dict) or output.get("status") not in ("done", "blocked"):
-        return None
-    return output
-
-
-def usage_reset(events: list[dict[str, Any]]) -> float | None:
-    """The time, in epoch seconds, when the usage limit that stopped a run resets."""
-    for event in reversed(events):
-        info = event.get("rate_limit_info") if event.get("type") == "rate_limit_event" else None
-        if isinstance(info, dict) and info.get("status") == "rejected" and info.get("resetsAt"):
-            return float(info["resetsAt"])
-    return None
-
-
-def agent_plan(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """The plan meter over one run, from its `rate_limit_event` lines: the first and the last utilization
-    of each window, and when the window resets (loop.md rule 11). A window the run has no value for is left
-    out. When a window resets during the run, its entry starts again in the new window.
-    """
-    plan: dict[str, dict[str, Any]] = {}
-    for event in events:
-        info = event.get("rate_limit_info") if event.get("type") == "rate_limit_event" else None
-        if not isinstance(info, dict):
-            continue
-        windows = info.get("unifiedWindows")
-        if not isinstance(windows, dict):
-            # A CLI that gives no windows reports the one window that is closest to its limit.
-            windows = {info.get("rateLimitType"): info}
-        for window, value in windows.items():
-            if not isinstance(window, str) or not isinstance(value, dict):
-                continue
-            utilization, resets_at = value.get("utilization"), value.get("resetsAt")
-            if not isinstance(utilization, int | float) or isinstance(utilization, bool):
-                continue
-            entry = plan.get(window)
-            if entry is None or entry["resets_at"] != resets_at:
-                entry = plan[window] = {"start": utilization}
-            entry["end"], entry["resets_at"] = utilization, resets_at
-    return plan
-
-
-def peak_context(events: list[dict[str, Any]]) -> int:
-    """The largest context the session sent in one turn: the input, cache read, and cache write tokens of
-    its biggest assistant message. A subagent's messages carry a parent tool call, and they are not counted.
-    """
-    peak = 0
-    seen: set[str] = set()
-    for event in events:
-        message = event.get("message") if event.get("type") == "assistant" else None
-        if not isinstance(message, dict) or event.get("parent_tool_use_id"):
-            continue
-        # The stream repeats a message for each of its content blocks.
-        if message.get("id") in seen:
-            continue
-        seen.add(str(message.get("id")))
-        usage = message.get("usage")
-        if isinstance(usage, dict):
-            peak = max(peak, sum(int(usage.get(name) or 0) for name in CONTEXT_TOKENS))
-    return peak
-
-
-def agent_usage(result: dict[str, Any], events: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """The cost, turns, duration, subagents, and per-model usage of one result event, with the peak context
-    of the run's events (loop.md rule 11).
-    """
-    models = result.get("modelUsage")
-    return {
-        "peak_context": peak_context(events or []),
-        "total_cost_usd": result.get("total_cost_usd"),
-        "num_turns": result.get("num_turns"),
-        "duration_ms": result.get("duration_ms"),
-        "subagents": (result.get("subagent_stats") or {}).get("by_type"),
-        "models": {
-            model: {field: value for field, value in fields.items() if field in MODEL_USAGE}
-            for model, fields in models.items()
-        }
-        if isinstance(models, dict)
-        else None,
-    }
-
-
-def claude_version() -> str:
-    """The version that `claude --version` prints, such as 2.1.295, or "" when it prints none."""
-    try:
-        result = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30)
-    except OSError, subprocess.TimeoutExpired:
-        return ""
-    match = re.search(r"\d+\.\d+\.\d+", result.stdout)
-    return match[0] if match else ""
-
-
-def run_setup(config: Config) -> dict[str, Any]:
-    """What the agents of a run run on. The start line keeps it, so `loop report` can tell two runs apart."""
-    return {
-        "claude": claude_version(),
-        "agent": f"{config.agent_model} {config.agent_effort}",
-        "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
-        "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
-    }
-
-
-def agent_settings(config: Config) -> str:
-    """The permission rules and the auto mode rules of every agent run, for `--settings`.
-
-    Nobody answers a prompt in a loop run, and a denied action can make a ticket stuck. These rules let the
-    routine actions of a ticket run without the classifier, and tell the classifier what the loop owns.
-    """
-    gates = sorted({shlex.join(gate) for gate in (config.ticket_gate, config.merge_gate)})
-    allow = [rule for gate in gates for rule in (f"Bash({gate})", f"Bash({gate} *)")]
-    named = " and ".join(f"`{gate}`" for gate in gates)
-    environment = [
-        "$defaults",
-        "Host containment: an unattended build loop runs this session. Nobody is at the keyboard. The "
-        f"loop owns each git worktree and run folder under {config.state_dir}.",
-        f"Trial worktrees: each worktree under {config.repo / TRIALS} belongs to a `trial` subagent, "
-        "which tries one approach there and removes its change when it reports.",
-    ]
-    classifier_allow = [
-        "$defaults",
-        f"Loop gates: running {named} in a loop worktree is allowed, also with the output redirected to a "
-        "file. The loop runs the same commands as its gates.",
-    ]
-    deny: tuple[str, ...] = ()
-    if config.stack:
-        project = f"{config.name}-<ticket key>"
-        environment.append(
-            f"Loop stacks: each Docker Compose project named `{project}`, such as `{config.name}-abc-12`, "
-            "and its containers are a disposable test stack of the loop. No person works in one. The "
-            f"project `{config.name}` without a key is KC's own stack, and it is not one of them."
-        )
-        classifier_allow.append(
-            f"Loop stacks: stopping, removing, or starting again a container or Compose project named "
-            f"`{project}`, for example `docker stop {config.name}-abc-11-db-1` or `docker compose down`, "
-            "is allowed to free a port or reset a test stack. The volumes stay."
-        )
-        deny = VOLUME_DENY
-    settings = {
-        "permissions": {"allow": allow, "deny": list(deny)},
-        "autoMode": {"environment": environment, "allow": classifier_allow},
-        # A `trial` branches from the ticket's last commit, not from the default branch.
-        "worktree": {"baseRef": "head"},
-    }
-    return json.dumps(settings)
-
-
 class EpicRun:
     def __init__(self, epic_key: str, config: Config, secrets: Mapping[str, str]) -> None:
         self.epic_key = epic_key
@@ -370,7 +133,7 @@ class EpicRun:
         self._log_lock = threading.Lock()
         self._repo_lock = threading.Lock()
         self._land_lock = threading.Lock()
-        self.counters = Counters()
+        self.stuck_in_row = 0
         self.epic_branch = ""
         self.epic_worktree = self.home / "worktrees" / epic_key
         self.epic_summary = ""
@@ -446,12 +209,10 @@ class EpicRun:
                     free_slots.append(slot_of.pop(key))
                     outcome = future.result()
                     if outcome == "landed":
-                        self.counters.stuck_in_row = 0
-                        self.counters.landed.append(key)
+                        self.stuck_in_row = 0
                     elif outcome == "stuck":
-                        self.counters.stuck_in_row += 1
-                        self.counters.stuck.append(key)
-                        if self.counters.stuck_in_row >= self.config.circuit_breaker:
+                        self.stuck_in_row += 1
+                        if self.stuck_in_row >= self.config.circuit_breaker:
                             stopped = "circuit-breaker"
                     elif outcome == "usage-limit":
                         stopped = "usage-limit"
@@ -487,7 +248,6 @@ class EpicRun:
             log = run.agent_log.with_suffix(".err") if run and run.agent_log else run_dir
             return self.stuck(ticket, str(error), log, slot)
         except UsageLimit:
-            # The agent run logged the limit.
             return "usage-limit"
         except Exception as error:  # noqa: BLE001 - a loop error makes the ticket stuck, not the run.
             log = run_dir / "loop-error.log"
@@ -503,6 +263,9 @@ class EpicRun:
         with self._repo_lock:
             repo.add_worktree(self.repo, worktree, branch, self.epic_branch)
         run = TicketRun(ticket, slot, branch, worktree, run_dir, restart=existing is not None)
+        if not run.restart:
+            for name in (CODE_REVIEWED_FILE, CODE_REVIEW_FIX_FILE, UI_COMMIT_FILE):
+                (run_dir / name).unlink(missing_ok=True)
         self.write_ticket_file(run, self.config.ticket_gate, reviews=True)
         if ticket.status != self.config.in_progress:
             self.track(
@@ -512,32 +275,16 @@ class EpicRun:
         return run
 
     def drive(self, run: TicketRun) -> Outcome:
-        """The agent run, the gates, and the merge, with the fix attempts."""
-        prompt = f"/implement {run.run_dir / 'ticket.md'}"
-        attempts = 0
-        unfixed = run.run_dir / CODE_REVIEW_FIX_FILE
-        if run.restart:
-            prompt += f"\n\n{RESTART_PROMPT}"
-            if unfixed.exists():
-                prompt += f"\n\n{unfixed.read_text()}"
-            attempts = 1
+        """The agent run, the gates, the reviews, and the landing, with the fix attempts."""
+        prompt, attempts = self.first_prompt(run)
         result = self.ticket_agent(run, prompt, session=None)
-        unfixed.unlink(missing_ok=True)
-        reviewed = run.restart and (run.run_dir / CODE_REVIEWED_FILE).exists()
         while True:
             if result.status == "blocked":
                 reason = f"The agent is blocked: {result.reason}"
                 return self.stuck(run.ticket, reason, run.agent_log or run.run_dir, run.slot)
-            failure = self.ticket_gate(run)
-            if failure is None and not reviewed:
-                reviewed = True
-                failure = self.code_review(run)
-            failure = failure or self.ui_gate(run)
+            failure = self.ticket_gate(run) or self.code_review(run) or self.ui_gate(run) or self.land(run)
             if failure is None:
-                landed = self.land(run)
-                if not isinstance(landed, GateFailure):
-                    return landed
-                failure = landed
+                return "landed"
             if failure.attempt:
                 if attempts >= self.config.fix_attempts:
                     return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
@@ -545,14 +292,29 @@ class EpicRun:
             if failure.on_epic:
                 failure = self.merge_epic(run, failure)
             result = self.ticket_agent(run, failure.prompt, session=result.session)
-            unfixed.unlink(missing_ok=True)
+
+    def first_prompt(self, run: TicketRun) -> tuple[str, int]:
+        """The prompt of a ticket's first agent run, and the fix attempts it has already used.
+
+        A restart counts as a fix attempt. It carries the code review findings that the last run did not fix.
+        """
+        prompt = f"/implement {run.run_dir / 'ticket.md'}"
+        if not run.restart:
+            return prompt, 0
+        prompt += f"\n\n{RESTART_PROMPT}"
+        unfixed = run.run_dir / CODE_REVIEW_FIX_FILE
+        if unfixed.exists():
+            prompt += f"\n\n{unfixed.read_text()}"
+        return prompt, 1
 
     def ticket_agent(self, run: TicketRun, prompt: str, session: str | None) -> AgentResult:
         """An agent run, then a push of the ticket branch, also when the run fails."""
         try:
-            return self.agent(
+            result = self.agent(
                 run, prompt, session, model=self.config.agent_model, effort=self.config.agent_effort
             )
+            (run.run_dir / CODE_REVIEW_FIX_FILE).unlink(missing_ok=True)
+            return result
         finally:
             self.push(run.worktree, run.branch, run.ticket.key)
             self.remove_trials(run)
@@ -597,9 +359,12 @@ class EpicRun:
     def code_review(self, run: TicketRun) -> GateFailure | None:
         """`/code-review` in its own session. Its findings go back to the head agent's session."""
         key = run.ticket.key
+        reviewed = run.run_dir / CODE_REVIEWED_FILE
+        if reviewed.exists():
+            return None
         prompt = CODE_REVIEW_PROMPT.format(base=self.epic_branch, ticket=run.run_dir / "ticket.md")
         review = self.review_agent(run, prompt, f"{key}-review")
-        (run.run_dir / CODE_REVIEWED_FILE).write_text("done\n")
+        reviewed.write_text("done\n")
         if not review.findings:
             self.log(key, "code-review", "pass")
             return None
@@ -629,7 +394,6 @@ class EpicRun:
                     key, "ui-gate", "pass", commit=head, detail=f"The UI code is the same as at {seen[:7]}."
                 )
                 return None
-        # Screenshots of an earlier commit do not show this code.
         reviewed.unlink(missing_ok=True)
         for shot in screenshots(run.run_dir):
             shot.unlink()
@@ -685,51 +449,16 @@ class EpicRun:
         ui_path = self.config.ui_path
         return ui_path is not None and path.startswith(ui_path) and not is_test
 
-    def land(self, run: TicketRun) -> Outcome | GateFailure:
-        """Merges one ticket at a time, runs the merge gate on the Epic branch, and pushes it.
+    def land(self, run: TicketRun) -> GateFailure | None:
+        """Merges the ticket into the Epic branch, one ticket at a time, and records it as landed.
 
         A conflict or a failed merge gate returns a failure, so that the agent fixes it on the ticket branch.
         """
         key = run.ticket.key
-        epic = self.epic_worktree
         with self._land_lock:
-            # The merge is made on a detached HEAD. The Epic branch moves only when the merge gate
-            # passes, so the frontier never counts a merge that the gate can still undo.
-            git(epic, "switch", "--quiet", "--detach", self.epic_branch)
-            try:
-                message = f"merge({key}): {run.ticket.summary}"
-                merge = git(epic, "merge", "--no-ff", run.branch, "-m", message, check=False)
-                if merge.returncode != 0:
-                    log_file = run.run_dir / "merge.log"
-                    log_file.write_text(merge.stdout + merge.stderr)
-                    git(epic, "merge", "--abort", check=False)
-                    self.log(key, "land", "conflict", detail=str(log_file))
-                    reason = "The merge into the Epic branch has a conflict."
-                    prompt = (
-                        f"Another ticket landed on the Epic branch `{self.epic_branch}`, "
-                        "and this branch no longer merges into it."
-                    )
-                    return GateFailure(reason, prompt, log_file, on_epic=True)
-                log_file = next_log(run.run_dir, "merge-gate", ".log")
-                command = self.config.merge_gate
-                if not self.gate(
-                    command, epic, self.config.stack_env(EPIC_SLOT, self.epic_key), log_file, key
-                ):
-                    reason = f"The merge gate `{' '.join(command)}` failed on the Epic branch."
-                    prompt = (
-                        f"The merge gate `{' '.join(command)}` failed on the Epic branch with this branch "
-                        "merged in. Fix the cause and commit the fix.\n"
-                        f"The end of the log:\n\n{tail(log_file.read_text())}"
-                    )
-                    return GateFailure(reason, prompt, log_file, on_epic=True)
-                commit = out(epic, "rev-parse", "HEAD")
-                git(epic, "branch", "--force", self.epic_branch, commit)
-                self.log(key, "land", "landed", commit=commit)
-                # On origin, the landed work outlives this host. A failed push is logged, and the run goes on.
-                self.push(epic, self.epic_branch, key)
-            finally:
-                git(epic, "reset", "--hard", "--quiet")
-                git(epic, "switch", "--quiet", self.epic_branch)
+            failure = self.merge_into_epic(run)
+        if failure:
+            return failure
         if run.ui_touched:
             shots = screenshots(run.run_dir)
             self.track(key, "attach", lambda: self.tracker.attach(key, shots))
@@ -737,7 +466,52 @@ class EpicRun:
         self.stack_down(run.worktree, run.slot, key, volumes=True)
         with self._repo_lock:
             git(self.repo, "worktree", "remove", "--force", str(run.worktree), check=False)
-        return "landed"
+        return None
+
+    def merge_into_epic(self, run: TicketRun) -> GateFailure | None:
+        """Merges the ticket branch on a detached HEAD, runs the merge gate, and moves the Epic branch.
+
+        The Epic branch moves only when the merge gate passes, so the frontier never counts a merge that the
+        gate can still undo.
+        """
+        key = run.ticket.key
+        epic = self.epic_worktree
+        git(epic, "switch", "--quiet", "--detach", self.epic_branch)
+        try:
+            message = f"merge({key}): {run.ticket.summary}"
+            merge = git(epic, "merge", "--no-ff", run.branch, "-m", message, check=False)
+            if merge.returncode != 0:
+                log_file = run.run_dir / "merge.log"
+                log_file.write_text(merge.stdout + merge.stderr)
+                git(epic, "merge", "--abort", check=False)
+                self.log(key, "land", "conflict", detail=str(log_file))
+                prompt = (
+                    f"Another ticket landed on the Epic branch `{self.epic_branch}`, "
+                    "and this branch no longer merges into it."
+                )
+                return GateFailure(
+                    "The merge into the Epic branch has a conflict.", prompt, log_file, on_epic=True
+                )
+            log_file = next_log(run.run_dir, "merge-gate", ".log")
+            command = self.config.merge_gate
+            if not self.gate(command, epic, self.config.stack_env(EPIC_SLOT, self.epic_key), log_file, key):
+                gate = " ".join(command)
+                prompt = (
+                    f"The merge gate `{gate}` failed on the Epic branch with this branch merged in. "
+                    f"Fix the cause and commit the fix.\nThe end of the log:\n\n{tail(log_file.read_text())}"
+                )
+                return GateFailure(
+                    f"The merge gate `{gate}` failed on the Epic branch.", prompt, log_file, on_epic=True
+                )
+            commit = out(epic, "rev-parse", "HEAD")
+            git(epic, "branch", "--force", self.epic_branch, commit)
+            self.log(key, "land", "landed", commit=commit)
+            # On origin, the landed work outlives this host. A failed push is logged, and the run goes on.
+            self.push(epic, self.epic_branch, key)
+            return None
+        finally:
+            git(epic, "reset", "--hard", "--quiet")
+            git(epic, "switch", "--quiet", self.epic_branch)
 
     def merge_epic(self, run: TicketRun, failure: GateFailure) -> GateFailure:
         """Merges the Epic branch into the ticket branch, so the agent fixes the code the Epic branch gets.
@@ -832,18 +606,43 @@ class EpicRun:
         return f"Builds the Epic {key}: {self.epic_summary}.\n\n{table}\n"
 
     def open_pr(self, failing: tuple[str, Path] | None, body: str) -> int:
+        """Opens the Epic PR, or updates the one an earlier run opened. Unfinished work makes it a draft."""
         key = self.epic_key
-        command = [
-            "gh", "pr", "list", "--head", self.epic_branch, "--state", "open",
-            "--json", "url", "--jq", ".[].url",
-        ]  # fmt: skip
-        existing = self.command(command, self.epic_worktree).stdout.strip()
-        # Merging the Epic PR can close the Epic and all of its children in the tracker.
-        children = self.tracker.children(key)
         unfinished = [
-            self.ticket_label(ticket) for ticket in children if self.ticket_result(ticket) in UNFINISHED
+            self.ticket_label(ticket)
+            for ticket in self.tracker.children(key)
+            if self.ticket_result(ticket) in UNFINISHED
         ]
         draft = bool(failing or unfinished)
+        body_file = self.home / "runs" / key / "pr-body.md"
+        body_file.write_text(self.pr_notes(failing, unfinished) + body)
+        state = "pr-draft" if draft else "pr-open"
+        listed = ["gh", "pr", "list", "--head", self.epic_branch, "--state", "open", "--json", "url"]
+        existing = self.command([*listed, "--jq", ".[].url"], self.epic_worktree).stdout.strip()
+        if existing:
+            self.command(["gh", "pr", "edit", existing, "--body-file", str(body_file)], self.epic_worktree)
+            ready = ["gh", "pr", "ready", existing, *(["--undo"] if draft else [])]
+            self.command(ready, self.epic_worktree)
+            self.log(key, "pr", state, detail=existing)
+            self.notify(f"{key} {state}")
+            return 0
+        summary = self.epic_summary[:1].lower() + self.epic_summary[1:]
+        create = [
+            "gh", "pr", "create", "--base", self.config.main_branch, "--head", self.epic_branch,
+            "--title", f"feat({key}): {summary}", "--body-file", str(body_file),
+            *(["--draft"] if draft else []),
+        ]  # fmt: skip
+        created = self.command(create, self.epic_worktree)
+        if created.returncode != 0:
+            self.log(key, "pr", "fail", detail=created.stderr.strip()[-300:])
+            self.notify(f"{key} stopped")
+            return 1
+        self.log(key, "pr", state, detail=created.stdout.strip())
+        self.notify(f"{key} {state}")
+        return 0
+
+    def pr_notes(self, failing: tuple[str, Path] | None, unfinished: list[str]) -> str:
+        """What KC reads first in the Epic PR: the unfinished tickets, the failing gate, the decisions."""
         lines: list[str] = []
         if unfinished:
             lines += [f"**Unfinished tickets:** {', '.join(unfinished)}.", ""]
@@ -852,32 +651,7 @@ class EpicRun:
         if self.decisions:
             items = [f"- {self.ticket_label(ticket)}: {item}" for ticket, item in self.decisions]
             lines += ["**Decisions to check:**", *items, ""]
-        body_file = self.home / "runs" / key / "pr-body.md"
-        body_file.write_text("\n".join(lines) + body)
-        state = "pr-draft" if draft else "pr-open"
-        if existing:
-            # A PR from an earlier run gets the new body and the new draft state.
-            self.command(["gh", "pr", "edit", existing, "--body-file", str(body_file)], self.epic_worktree)
-            ready = ["gh", "pr", "ready", existing, *(["--undo"] if draft else [])]
-            self.command(ready, self.epic_worktree)
-            self.log(key, "pr", state, detail=existing)
-            self.notify(f"{key} {state}")
-            return 0
-        summary = self.epic_summary[:1].lower() + self.epic_summary[1:]
-        command = [
-            "gh", "pr", "create", "--base", self.config.main_branch, "--head", self.epic_branch,
-            "--title", f"feat({key}): {summary}", "--body-file", str(body_file),
-        ]  # fmt: skip
-        if draft:
-            command.append("--draft")
-        created = self.command(command, self.epic_worktree)
-        if created.returncode != 0:
-            self.log(key, "pr", "fail", detail=created.stderr.strip()[-300:])
-            self.notify(f"{key} stopped")
-            return 1
-        self.log(key, "pr", state, detail=created.stdout.strip())
-        self.notify(f"{key} {state}")
-        return 0
+        return "\n".join(lines)
 
     def ticket_label(self, ticket: Ticket) -> str:
         """The key, or the summary of a ticket that did not land when `name_landed_keys_only` is on."""
@@ -941,6 +715,44 @@ class EpicRun:
         # A minute past the reset, so the limit is surely clear.
         pause(max(0.0, reset - time.time()) + 60)
 
+    def agent_command(
+        self,
+        run: TicketRun,
+        prompt: str,
+        session: str | None,
+        name: str,
+        schema: str,
+        model: str | None,
+        effort: str | None,
+    ) -> list[str]:
+        command = [
+            "timeout",
+            "--kill-after=60",
+            f"{self.config.agent_timeout_minutes}m",
+            "claude",
+            "-p",
+            prompt,
+        ]
+        if session:
+            command += ["--resume", session]
+        if model:
+            command += ["--model", model]
+        if effort:
+            command += ["--effort", effort]
+        # Each worktree is a new folder, where nobody approved the project `.mcp.json`, so the flag keeps the
+        # run from waiting on that approval. The strict flag leaves out the host's plugin servers and
+        # claude.ai connectors, whose tools and instructions every turn would send again.
+        mcp = run.worktree / ".mcp.json"
+        if mcp.exists():
+            command += ["--mcp-config", str(mcp), "--strict-mcp-config"]
+        command += [
+            "--permission-mode", "auto", "--permission-prompts", "none",
+            "--output-format", "stream-json", "--verbose", "--json-schema", schema, "-n", name,
+            "--agents", json.dumps(tiers.load()), "--append-system-prompt", DISPATCH.read_text(),
+            "--settings", self.settings,
+        ]  # fmt: skip
+        return command
+
     def agent_run(
         self,
         run: TicketRun,
@@ -951,26 +763,7 @@ class EpicRun:
         model: str | None,
         effort: str | None,
     ) -> AgentResult:
-        limit = f"{self.config.agent_timeout_minutes}m"
-        command = ["timeout", "--kill-after=60", limit, "claude", "-p", prompt]
-        if session:
-            command += ["--resume", session]
-        if model:
-            command += ["--model", model]
-        if effort:
-            command += ["--effort", effort]
-        # Each worktree is a new folder, where nobody approved the project `.mcp.json`. With the flag,
-        # the loop does not depend on how `claude -p` treats a server that waits for approval. The strict
-        # flag leaves out the host's plugin servers and claude.ai connectors, whose tools and instructions
-        # every turn would send again.
-        if (run.worktree / ".mcp.json").exists():
-            command += ["--mcp-config", str(run.worktree / ".mcp.json"), "--strict-mcp-config"]
-        command += [
-            "--permission-mode", "auto", "--permission-prompts", "none",
-            "--output-format", "stream-json", "--verbose", "--json-schema", schema, "-n", name,
-            "--agents", json.dumps(tiers.load()), "--append-system-prompt", DISPATCH.read_text(),
-            "--settings", self.settings,
-        ]  # fmt: skip
+        command = self.agent_command(run, prompt, session, name, schema, model, effort)
         env = {
             **self.child_env(),
             **self.config.stack_env(run.slot, run.ticket.key),
@@ -979,7 +772,6 @@ class EpicRun:
         }
         run.agent_log = next_log(run.run_dir, "agent", ".jsonl")
         errors_log = run.agent_log.with_suffix(".err")
-        # The output streams to the logs, so a run can be followed while it lasts.
         with run.agent_log.open("w") as stdout, errors_log.open("w") as stderr:
             process = subprocess.Popen(command, cwd=run.worktree, env=env, stdout=stdout, stderr=stderr)
             returncode, cut_short = self.wait_for_agent(process, run.agent_log, name)

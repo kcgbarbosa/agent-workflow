@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from loop import tiers
-from loop.run import DISPATCH
+from loop.prompts import DISPATCH
 
 EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 

@@ -28,8 +28,9 @@ from pathlib import Path
 from . import config as config_file
 from . import report
 from . import watch as watch_page
+from .claude import MIN_CLAUDE, claude_version
 from .config import Config, ConfigError
-from .run import MIN_CLAUDE, claude_version, run
+from .run import run
 from .tracker import TrackerError
 from .update import Stale, source_checkout, update
 
