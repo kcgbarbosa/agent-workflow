@@ -452,6 +452,25 @@ def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the
     assert "A UI review saves" not in ticket
 
 
+def test_a_restart_skips_the_code_review_and_passes_on_the_findings_not_yet_fixed(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    finding = "a.txt:1 holds the wrong letter."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}}, {"error": "usage"}],
+            "DEMO-2-review": [{"findings": [finding]}],
+        }
+    )
+    # The run stops at a usage limit during the fix of the findings.
+    assert world.run() == 1
+
+    assert world.run() == 0
+
+    restart = world.calls("DEMO-2")[2]
+    assert RESTART_PROMPT in restart["prompt"] and finding in restart["prompt"]
+    assert len(world.calls("DEMO-2-review")) == 1
+
+
 def test_a_code_review_fix_is_not_a_fix_attempt(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC, status="In Progress")
     sh(world.repo, "git", "branch", "feat/DEMO-2-first-part")
@@ -528,6 +547,49 @@ def test_a_restart_keeps_the_screenshots_of_the_same_commit(world: World) -> Non
 
     assert len(world.calls("DEMO-2-ui")) == 1
     assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
+
+
+def test_a_later_commit_that_changes_no_ui_code_needs_no_new_ui_review(world: World) -> None:
+    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
+    world.plan(
+        {
+            "DEMO-2": [
+                {"write": {"frontend/src/home.tsx": "x"}},
+                {"error": "usage"},
+                {"write": {"notes.txt": "n"}},
+            ],
+            "DEMO-2-ui": [{"screenshot": True}],
+        }
+    )
+    (world.fakes / "merge-gate-fails").touch()
+    assert world.run() == 1
+    (world.fakes / "merge-gate-fails").unlink()
+
+    assert world.run() == 0
+
+    assert len(world.calls("DEMO-2-ui")) == 1
+    assert world.epic_file("notes.txt").exists()
+
+
+def test_a_later_commit_that_changes_ui_code_gets_a_new_ui_review(world: World) -> None:
+    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
+    world.plan(
+        {
+            "DEMO-2": [
+                {"write": {"frontend/src/home.tsx": "x"}},
+                {"error": "usage"},
+                {"write": {"frontend/src/home.tsx": "y"}},
+            ],
+            "DEMO-2-ui": [{"screenshot": True}, {"screenshot": True}],
+        }
+    )
+    (world.fakes / "merge-gate-fails").touch()
+    assert world.run() == 1
+    (world.fakes / "merge-gate-fails").unlink()
+
+    assert world.run() == 0
+
+    assert len(world.calls("DEMO-2-ui")) == 2
 
 
 def test_a_change_to_a_frontend_test_file_needs_no_screenshots(world: World) -> None:
