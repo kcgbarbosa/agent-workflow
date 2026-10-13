@@ -698,6 +698,9 @@ class EpicRun:
         conflicts = out(run.worktree, "diff", "--name-only", "--diff-filter=U")
         result = "conflict" if conflicts else "ok"
         self.log(run.ticket.key, "merge-epic", result, detail=conflicts.replace("\n", " "))
+        # The merge can bring in migrations that run before ones this database already holds, and the next
+        # start of the stack then skips them. A new volume builds the database from the whole chain.
+        self.stack_down(run.worktree, run.slot, run.ticket.key, volumes=True)
         if conflicts:
             merged = (
                 "The loop started a merge of the Epic branch into this branch. Resolve the conflicts "

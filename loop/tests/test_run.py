@@ -279,6 +279,9 @@ def test_a_failed_merge_gate_goes_back_to_the_session_with_the_epic_branch_merge
     assert not world.jira.issues["DEMO-3"].flagged
     assert "merge(DEMO-3): Break the end to end tests" in world.epic_log()
     assert "a.txt" in sh(world.repo, "git", "ls-tree", "--name-only", "feat/DEMO-3-early-work").split()
+    # One down with volumes is the Epic merge, which drops the database, and one is the land.
+    wiped = [r for r in world.records("docker") if r["project"] == "demo-demo-3" and "--volumes" in r["args"]]
+    assert len(wiped) == 2
 
 
 def test_each_land_pushes_the_epic_branch(world: World) -> None:
