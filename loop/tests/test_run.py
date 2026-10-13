@@ -14,7 +14,8 @@ from conftest import EPIC, World, sh
 
 from loop import run as loop_run
 from loop import tiers
-from loop.run import DISPATCH, RESTART_PROMPT, REVIEW_EFFORT, REVIEW_MODEL, USAGE_RESUME_PROMPT
+from loop.claude import REVIEW_EFFORT, REVIEW_MODEL
+from loop.prompts import DISPATCH, RESTART_PROMPT, USAGE_RESUME_PROMPT
 
 
 def test_the_frontier_runs_blockers_first_and_lands_each_ticket(world: World) -> None:
