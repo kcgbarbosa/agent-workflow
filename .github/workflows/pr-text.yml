@@ -1,0 +1,27 @@
+name: pr-text
+
+# Its own workflow, because an edit to the title or the body must run it again, and the repo check must not.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  pr-text:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The text goes in through env, so a crafted title or body cannot inject shell code.
+      - run: .github/scripts/check-pr-title.sh
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+      - run: |
+          base=$(git merge-base "origin/$BASE_REF" "$HEAD")
+          printf '%s\n%s\n' "$TITLE" "$BODY" | .github/scripts/check-pr-keys.sh "$base..$HEAD"
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
