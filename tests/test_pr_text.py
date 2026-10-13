@@ -66,5 +66,5 @@ def test_a_title_needs_a_type() -> None:
 
 
 def test_an_em_dash_in_the_title_or_the_body_fails() -> None:
-    assert title(f"fix(loop): stop it {{DASH}} now").returncode == 1
-    assert title("fix(loop): stop it", f"It stops {{DASH}} now.").returncode == 1
+    assert title(f"fix(loop): stop it {DASH} now").returncode == 1
+    assert title("fix(loop): stop it", f"It stops {DASH} now.").returncode == 1
