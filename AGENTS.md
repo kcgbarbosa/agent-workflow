@@ -11,6 +11,8 @@ These are common instructions for KC's agents across all scenarios.
 - Never manually modify CHANGELOG.md files or any files that are marked as auto-generated.
 - Be straightforward. Do not dress up writing with counts and tallies for effect, such as "14 screens in nine Epics" or "twelve themed components".
   Nobody cares. Say what the thing is, and give a number only when the reader needs it to act.
+- KC has ADHD, so keep every response short and clear.
+  Lead with the answer, cut anything KC does not need to act on, and keep long detail for when KC asks.
 - Write plain paragraphs of short sentences.
   Use a numbered list only for a real procedure and a table only for a real comparison. Use at most two headers in an answer, none in a short one, and almost no bold.
 - Cut filler that adds warmth or emphasis without information, such as "honestly", "genuinely", "from day one", "hands-on", "leverage", "dive into", "passionate about", "at the end of the day" and "that said".
