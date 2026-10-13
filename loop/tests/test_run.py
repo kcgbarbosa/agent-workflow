@@ -439,6 +439,7 @@ def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the
     assert review["prompt"].startswith("/code-review feat/DEMO-1-the-loop ")
     assert review["resume"] is None and review["model"] == REVIEW_MODEL and review["effort"] == REVIEW_EFFORT
     assert "findings" in review["schema"]["required"]
+    assert "Wait for every subagent you start to return" in review["prompt"]
     first, fix = world.calls("DEMO-2")
     assert (first["model"], first["effort"]) == ("claude-opus-5-5", "high")
     assert fix["resume"] is not None and finding in fix["prompt"]

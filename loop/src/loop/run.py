@@ -59,7 +59,8 @@ REVIEW_MODEL = "claude-opus-5-5"
 REVIEW_EFFORT = "medium"
 REVIEW_RULES = (
     "Change no file, and do not commit or push. Return each problem that needs a change in `findings`. "
-    "Leave out a judgement call that you would not change."
+    "Leave out a judgement call that you would not change. "
+    "Wait for every subagent you start to return before you give your result, which ends the session."
 )
 CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. " + REVIEW_RULES
 UI_REVIEW_PROMPT = "/{skill} The run folder is {run_dir}. The base is `{base}`. " + REVIEW_RULES
