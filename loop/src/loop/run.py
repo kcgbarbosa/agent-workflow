@@ -63,7 +63,13 @@ REVIEW_RULES = (
     "Wait for every subagent you start to return before you give your result, which ends the session."
 )
 CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. " + REVIEW_RULES
-UI_REVIEW_PROMPT = "/{skill} The run folder is {run_dir}. The base is `{base}`. " + REVIEW_RULES
+UI_REVIEW_PROMPT = (
+    "/{skill} The run folder is {run_dir}. The base is `{base}`. "
+    + REVIEW_RULES
+    + " When the environment lacks something that a screen needs, such as a bucket name, that is not a block:"
+    " check the rest, return `done`, and list in `decisions` each screen or part that you could not check,"
+    " with the reason, so that KC reviews it by hand."
+)
 REVIEW_FIX_PROMPT = (
     "The {review} found these problems:\n\n{findings}\n\nFix each one that is a real problem, and commit the "
     "fixes with {key} as the commit scope. Give each one you leave as it is in `decisions`, with the reason."
