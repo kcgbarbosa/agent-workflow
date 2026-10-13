@@ -58,8 +58,9 @@ REVIEW_SCHEMA = json.dumps(
 REVIEW_MODEL = "claude-opus-5-5"
 REVIEW_EFFORT = "medium"
 REVIEW_RULES = (
-    "Change no file, and do not commit or push. Return each problem that needs a change in `findings`. "
-    "Leave out a judgement call that you would not change. "
+    "Change no file, and do not commit or push. Return in `findings` each problem that breaks the behaviour, "
+    "the ticket, or a documented standard. List polish that blocks nothing, such as a name or a spacing, in "
+    "`decisions` instead, so that KC fixes it by hand. Leave out a judgement call that you would not change. "
     "Wait for every subagent you start to return before you give your result, which ends the session."
 )
 CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. " + REVIEW_RULES
@@ -93,6 +94,9 @@ USAGE_LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 # The commit that the screenshots in a run folder show.
 UI_COMMIT_FILE = "ui-review.commit"
+# A UI review's faults go back to the head agent this many times. A fault still there after that lands with
+# the ticket and goes to KC as a decision, because it costs less to fix by hand than to review again.
+UI_FIX_ROUNDS = 1
 # A ticket gets one code review. The first file marks it done. The second holds the fix prompt of its findings
 # until the head agent has had a run, so that a restart before the fix still passes the findings on.
 CODE_REVIEWED_FILE = "code-review.done"
@@ -164,6 +168,7 @@ class TicketRun:
     restart: bool
     agent_log: Path | None = None
     ui_touched: bool = False
+    ui_fix_rounds: int = 0
 
 
 @dataclass
@@ -631,14 +636,23 @@ class EpicRun:
         skill = self.config.ui_skill
         prompt = UI_REVIEW_PROMPT.format(skill=skill, run_dir=run.run_dir, base=self.epic_branch)
         review = self.review_agent(run, prompt, f"{key}-ui")
-        if review.findings:
+        if review.findings and run.ui_fix_rounds < UI_FIX_ROUNDS:
+            run.ui_fix_rounds += 1
             self.log(key, "ui-gate", "fail", detail=f"{len(review.findings)} faults")
             fix = self.fix_prompt("UI review", review.findings, key)
-            return GateFailure("The UI review found faults.", fix, run.agent_log or run.run_dir)
+            return GateFailure(
+                "The UI review found faults.", fix, run.agent_log or run.run_dir, attempt=False
+            )
         if not screenshots(run.run_dir):
             raise AgentFailed(f"The UI review saved no screenshots in {run.run_dir}.")
         reviewed.write_text(head + "\n")
-        self.log(key, "ui-gate", "pass", commit=head)
+        if review.findings:
+            self.log(key, "ui-gate", "unfixed", commit=head, detail=f"{len(review.findings)} faults")
+            self.record_decisions(
+                run.ticket, [f"UI fault left unfixed: {fault}" for fault in review.findings]
+            )
+        else:
+            self.log(key, "ui-gate", "pass", commit=head)
         return None
 
     def ui_diff(self, run: TicketRun, rev: str) -> str:
@@ -1000,15 +1014,18 @@ class EpicRun:
         self.log(
             name, "agent", status, commit=commit, session=session_id, detail=reason, usage=cost, plan=plan
         )
-        decisions = [str(item) for item in output.get("decisions", [])]
-        if decisions:
-            key = run.ticket.key
-            self.decisions += [(run.ticket, item) for item in decisions]
-            bullets = "\n".join(f"- {item}" for item in decisions)
-            text = f"{DECISIONS_COMMENT}\n{bullets}"
-            self.track(key, "comment", lambda: self.tracker.comment(key, text))
+        self.record_decisions(run.ticket, [str(item) for item in output.get("decisions", [])])
         findings = [str(item) for item in output.get("findings", [])]
         return AgentResult(status, reason, session_id, findings)
+
+    def record_decisions(self, ticket: Ticket, decisions: list[str]) -> None:
+        """Comments the decisions on the ticket, and keeps them for the Epic PR."""
+        if not decisions:
+            return
+        self.decisions += [(ticket, item) for item in decisions]
+        bullets = "\n".join(f"- {item}" for item in decisions)
+        text = f"{DECISIONS_COMMENT}\n{bullets}"
+        self.track(ticket.key, "comment", lambda: self.tracker.comment(ticket.key, text))
 
     def wait_for_agent(self, process: subprocess.Popen[bytes], log: Path, name: str) -> tuple[int, bool]:
         """Waits for the agent to exit. Returns its exit code, and whether the loop stopped it.

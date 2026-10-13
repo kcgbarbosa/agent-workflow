@@ -520,6 +520,31 @@ def test_a_ui_fault_goes_back_to_the_agent_and_the_fixed_commit_gets_a_new_revie
     assert gates == ["fail", "pass"]
 
 
+def test_a_ui_fault_that_is_still_there_after_one_fix_lands_with_the_ticket_as_a_decision(
+    world: World,
+) -> None:
+    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
+    fault = "home--intermediary--webkit-es.png shows English text."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}, {"write": {"frontend/src/home.tsx": "y"}}],
+            "DEMO-2-ui": [
+                {"screenshot": True, "findings": [fault]},
+                {"screenshot": True, "findings": [fault]},
+            ],
+        }
+    )
+
+    assert world.run() == 0
+
+    assert len(world.calls("DEMO-2")) == 2 and len(world.calls("DEMO-2-ui")) == 2
+    gates = [line["result"] for line in world.decisions() if line["step"] == "ui-gate"]
+    assert gates == ["fail", "unfixed"]
+    assert not world.jira.issues["DEMO-2"].flagged
+    assert f"UI fault left unfixed: {fault}" in world.jira.issues["DEMO-2"].comments[-1]
+    assert f"DEMO-2: UI fault left unfixed: {fault}" in world.records("gh")[-1]["body"]
+
+
 def test_a_ui_review_that_saves_no_screenshots_makes_the_ticket_stuck(world: World) -> None:
     world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}]})
