@@ -78,7 +78,7 @@ Settles the UI paths, the review skill, the browser, sign-in, and what the revie
 
 ### Agent
 
-Settles what the head agent runs on. `[agent]` gives `model` and `effort`, and the defaults are `claude-opus-5-5` and `high`. Effort is the setting to change to cut cost: at every cost, Opus 5.5 scores at or above Sonnet 5.5. `context_tokens` is the window that every agent run compacts at, passed as `--autocompact`, and it defaults to 200000. Each turn sends the whole context again, so the cost of a ticket grows with how large its sessions get: in PITCH-13, sessions that reached 190K to 330K tokens cost two to three times as much per turn as sessions under 110K.
+Settles what the head agent runs on. `[agent]` gives `model` and `effort`, and the defaults are `claude-opus-5-5` and `high`. Effort is the setting to change to cut cost: at every cost, Opus 5.5 scores at or above Sonnet 5.5. `context_tokens` is the window that every agent run compacts at, passed as `--autocompact`, and it defaults to 200000. Each turn sends the whole context again, so the cost of a ticket grows with how large its sessions get: in the last Epic run, sessions that reached 190K to 330K tokens cost two to three times as much per turn as sessions under 110K.
 
 ### Connectors
 
