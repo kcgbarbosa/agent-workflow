@@ -20,7 +20,7 @@ Each turn sends your whole context again, and your session compacts at a set siz
 
 Give each `scout` one question, so each one stays small and they run at once.
 
-Run each subagent in the foreground, so its result is in before you return your status. When `editor` returns a question, it is a judgement call: answer it yourself. Before you commit an `editor` change, read its diff and check it against your spec.
+Set `run_in_background: false` on each Agent call. Without it, Claude Code starts the subagent in the background, and when your turn ends while one runs, it asks for your status at once, before your work is done. Several Agent calls in one message still run at once. When `editor` returns a question, it is a judgement call: answer it yourself. Before you commit an `editor` change, read its diff and check it against your spec.
 
 Send one `trial` per approach in one message, so they run at once, then review the first one that passes and apply its diff with `git apply`. A trial starts from your last commit in a fresh checkout, so commit first, and give it `git rev-parse HEAD` as its base and the setup command that installs the dependencies. Give it only a check that needs no stack, such as a lint, a typecheck, or unit tests, because the ticket's stack and its ports are yours.
 

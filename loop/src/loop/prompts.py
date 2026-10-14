@@ -56,6 +56,11 @@ REVIEW_FIX_PROMPT = (
 )
 RESTART_PROMPT = "A previous run was interrupted. Check the diff against the ticket and continue."
 USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work."
+EARLY_STATUS_PROMPT = (
+    "Claude Code asked for your status while subagents that you started still ran, so it came before "
+    "your work was done. Continue the work from where you stopped. Send again each subagent whose report "
+    "you do not have, and set `run_in_background: false` on each Agent call."
+)
 PR_PROMPT = (
     "/pr Write the body of the Epic pull request for the diff `{merge_base}..HEAD` to the file "
     "`{body_file}`. Do not commit, push, or open the pull request. In Evidence, give this ticket "

@@ -24,6 +24,7 @@ from .prompts import (
     CODE_REVIEW_PROMPT,
     DECISIONS_COMMENT,
     DISPATCH,
+    EARLY_STATUS_PROMPT,
     LANDED_KEYS_PROMPT,
     PR_PROMPT,
     RESTART_PROMPT,
@@ -34,7 +35,7 @@ from .prompts import (
     USAGE_RESUME_PROMPT,
 )
 from .repo import git, out
-from .stream import agent_plan, agent_status, agent_usage, json_lines, usage_reset
+from .stream import agent_plan, agent_status, agent_usage, json_lines, subagents_at_status, usage_reset
 from .tracker import Ticket, TrackerError
 from .watch import BOARD
 
@@ -81,6 +82,8 @@ class AgentResult:
     reason: str
     session: str
     findings: list[str] = field(default_factory=list)
+    # The subagents still running when the status came, which Claude Code then asked for too early.
+    subagents_running: int = 0
 
 
 @dataclass
@@ -730,18 +733,27 @@ class EpicRun:
     ) -> AgentResult:
         """Runs `claude -p` with an empty context, or resumes a session.
 
-        A usage limit that resets soon pauses the run, and the session then resumes where it stopped.
+        A usage limit that resets soon pauses the run, and the session then resumes where it stopped. A
+        `blocked` status that came while subagents still ran resumes the session once, so it can finish.
         """
         name = name or run.ticket.key
+        resumed = False
         while True:
             try:
-                return self.agent_run(run, prompt, session, name, schema, model, effort)
+                result = self.agent_run(run, prompt, session, name, schema, model, effort)
             except UsageLimit as error:
                 if error.reset is None or error.reset - time.time() > MAX_USAGE_WAIT_SECONDS:
                     raise
                 self.pause_until(error.reset, name)
                 if error.session:
                     prompt, session = USAGE_RESUME_PROMPT, error.session
+                continue
+            if result.status == "blocked" and result.subagents_running and not resumed:
+                detail = f"The status came while {result.subagents_running} subagents still ran."
+                self.log(name, "agent", "early-status", session=result.session, detail=detail)
+                prompt, session, resumed = EARLY_STATUS_PROMPT, result.session, True
+                continue
+            return result
 
     def pause_until(self, reset: float, name: str) -> None:
         """Waits for the usage limit to reset. Parallel runs that hit the same limit notify once."""
@@ -849,7 +861,7 @@ class EpicRun:
         )
         self.record_decisions(run.ticket, [str(item) for item in output.get("decisions", [])])
         findings = [str(item) for item in output.get("findings", [])]
-        return AgentResult(status, reason, session_id, findings)
+        return AgentResult(status, reason, session_id, findings, subagents_at_status(events))
 
     def record_decisions(self, ticket: Ticket, decisions: list[str]) -> None:
         """Comments the decisions on the ticket, and keeps them for the Epic PR."""
