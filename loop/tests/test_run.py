@@ -807,6 +807,57 @@ def test_the_epic_pr_is_a_draft_when_a_gate_still_fails(world: World) -> None:
     assert world.jira.notifications == [f"{EPIC} pr-draft"]
 
 
+DEMO = '\n[demo]\ncommand = ["make", "demo", "branch={branch}"]\nurl = "https://demo.example.ts.net"\n'
+
+
+def test_the_finish_points_the_demo_at_the_epic_branch_and_the_epic_pr_starts_with_its_address(
+    world: World,
+) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run(extra=DEMO) == 0
+
+    demo = [call for call in world.records("make") if call["targets"][0] == "demo"]
+    assert [(call["targets"], call["cwd"]) for call in demo] == [
+        (["demo", f"branch=feat/{EPIC}-the-loop"], str(world.state / EPIC / "worktrees" / EPIC))
+    ]
+    create = world.records("gh")[-1]
+    assert "--draft" not in create["args"]
+    assert create["body"].startswith("**Demo:** https://demo.example.ts.net\n\n")
+    steps = [(line["step"], line["result"]) for line in world.decisions() if line["step"] == "demo"]
+    assert steps == [("demo", "ok")]
+
+
+def test_a_failed_demo_command_makes_the_epic_pr_a_draft_and_names_its_log(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+    (world.fakes / "demo-fails").write_text("")
+
+    assert world.run(extra=DEMO) == 0
+
+    log = world.state / EPIC / "runs" / EPIC / "finish-demo.log"
+    assert "the demo did not start" in log.read_text()
+    create = world.records("gh")[-1]
+    assert "--draft" in create["args"]
+    assert create["body"].startswith(
+        f"**Demo failed:** `make demo branch=feat/{EPIC}-the-loop`. The log is `{log}`.\n"
+    )
+    assert "**Demo:**" not in create["body"]
+    assert world.jira.notifications == [f"{EPIC} pr-draft"]
+
+
+def test_without_a_demo_table_the_finish_runs_no_demo(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run() == 0
+
+    assert not [call for call in world.records("make") if call["targets"][0] == "demo"]
+    assert "Demo" not in world.records("gh")[-1]["body"]
+    assert not [line for line in world.decisions() if line["step"] == "demo"]
+
+
 def test_an_epic_with_nothing_landed_opens_no_pr(world: World) -> None:
     world.jira.add("DEMO-2", "Done before", parent=EPIC, status="Done")
 

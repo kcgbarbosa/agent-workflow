@@ -636,8 +636,20 @@ class EpicRun:
         if not self.gate(command, self.epic_worktree, self.config.stack_env(EPIC_SLOT, key), log_file, key):
             failing = (" ".join(command), log_file)
         self.push(self.epic_worktree, self.epic_branch, key)
+        demo_failing = self.point_demo(run_dir)
         body = self.pr_body(run, merge_base)
-        return self.open_pr(failing, body)
+        return self.open_pr(failing, body, demo_failing)
+
+    def point_demo(self, run_dir: Path) -> tuple[str, Path] | None:
+        """Points the always-on demo at the Epic branch. Returns the command and its log when it fails."""
+        demo = self.config.demo
+        if demo is None:
+            return None
+        command = tuple(item.replace("{branch}", self.epic_branch) for item in demo.command)
+        log_file = run_dir / "finish-demo.log"
+        passed = self.limited(command, self.epic_worktree, self.child_env(), log_file, "demo command") == 0
+        self.log(self.epic_key, "demo", "ok" if passed else "fail", detail=str(log_file))
+        return None if passed else (" ".join(command), log_file)
 
     def pr_body(self, run: TicketRun, merge_base: str) -> str:
         """The body an agent writes with the `pr` skill, or a table of the tickets when it writes none."""
@@ -668,7 +680,9 @@ class EpicRun:
         self.log(key, "pr-body", "fallback")
         return f"Builds the Epic {key}: {self.epic_summary}.\n\n{table}\n"
 
-    def open_pr(self, failing: tuple[str, Path] | None, body: str) -> int:
+    def open_pr(
+        self, failing: tuple[str, Path] | None, body: str, demo_failing: tuple[str, Path] | None = None
+    ) -> int:
         """Opens the Epic PR, or updates the one an earlier run opened. Unfinished work makes it a draft."""
         key = self.epic_key
         unfinished = [
@@ -677,9 +691,10 @@ class EpicRun:
             if self.ticket_result(ticket) in UNFINISHED
         ]
         ui_open = self.ui_open()
-        draft = bool(failing or unfinished or ui_open)
+        draft = bool(failing or demo_failing or unfinished or ui_open)
         body_file = self.home / "runs" / key / "pr-body.md"
-        body_file.write_text(self.pr_notes(failing, unfinished, ui_open) + body)
+        demo = f"**Demo:** {self.config.demo.url}\n\n" if self.config.demo and not demo_failing else ""
+        body_file.write_text(demo + self.pr_notes(failing, unfinished, ui_open, demo_failing) + body)
         state = "pr-draft" if draft else "pr-open"
         listed = ["gh", "pr", "list", "--head", self.epic_branch, "--state", "open", "--json", "url"]
         existing = self.command([*listed, "--jq", ".[].url"], self.epic_worktree).stdout.strip()
@@ -706,9 +721,14 @@ class EpicRun:
         return 0
 
     def pr_notes(
-        self, failing: tuple[str, Path] | None, unfinished: list[str], ui_open: Mapping[str, int]
+        self,
+        failing: tuple[str, Path] | None,
+        unfinished: list[str],
+        ui_open: Mapping[str, int],
+        demo_failing: tuple[str, Path] | None = None,
     ) -> str:
-        """What stops the Epic PR from being ready: unfinished tickets, a failing gate, open UI items.
+        """What stops the Epic PR from being ready: unfinished tickets, a failing gate, a failed demo command,
+        open UI items.
 
         A PR with none of these has no notes, because it is ready to merge. The agents' decisions and notes
         stay in the ticket comments.
@@ -718,6 +738,8 @@ class EpicRun:
             lines += [f"**Unfinished tickets:** {', '.join(unfinished)}.", ""]
         if failing:
             lines += [f"**Failing gate:** `{failing[0]}`. The log is `{failing[1]}`.", ""]
+        if demo_failing:
+            lines += [f"**Demo failed:** `{demo_failing[0]}`. The log is `{demo_failing[1]}`.", ""]
         if ui_open:
             counts = ", ".join(f"{label} ({count})" for label, count in ui_open.items())
             lines += [f"**UI review left open:** {counts}. The ticket comment lists each item.", ""]
@@ -950,17 +972,23 @@ class EpicRun:
             # A container from a start that failed, such as on a port that was in use, can start later
             # with no published port. A gate on new containers does not depend on an earlier start.
             self.command(["docker", "compose", "down"], cwd, stack)
+        passed = self.limited(command, cwd, env, log_file, "gate") == 0
+        commit = out(cwd, "rev-parse", "HEAD")
+        self.log(key, " ".join(command), "pass" if passed else "fail", commit=commit, detail=str(log_file))
+        return passed
+
+    def limited(
+        self, command: tuple[str, ...], cwd: Path, env: dict[str, str], log_file: Path, what: str
+    ) -> int:
+        """Runs a command under `timeout` at the gate timeout, with its output in the log file."""
         limit = f"{self.config.gate_timeout_minutes}m"
         with log_file.open("w") as log:
             wrapped = ["timeout", "--kill-after=60", limit, *command]
             result = subprocess.run(wrapped, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT)
         if result.returncode == TIMED_OUT:
             with log_file.open("a") as log:
-                log.write(f"The gate ran past {self.config.gate_timeout_minutes} minutes.\n")
-        passed = result.returncode == 0
-        commit = out(cwd, "rev-parse", "HEAD")
-        self.log(key, " ".join(command), "pass" if passed else "fail", commit=commit, detail=str(log_file))
-        return passed
+                log.write(f"The {what} ran past {self.config.gate_timeout_minutes} minutes.\n")
+        return result.returncode
 
     def push(self, worktree: Path, branch: str, key: str) -> None:
         result = git(worktree, "push", "--set-upstream", "origin", branch, check=False)
