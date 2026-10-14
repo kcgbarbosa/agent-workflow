@@ -5,13 +5,15 @@ Every run gets a temp HOME and a fake uv, so nothing is installed for real and t
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
-BASE_REF_WARNING = '"worktree": {"baseRef": "head"}'
+BASE_REF_WARNING = "baseRef"
+SHARED_FILES = ("settings.json", "statusline.sh", "keybindings.json", "notify.sh")
 
 
 @pytest.fixture
@@ -117,14 +119,78 @@ def test_skips_real_files_and_names_them(run, home: Path, repo: Path) -> None:
         assert name in stderr
 
 
-def test_warns_when_base_ref_is_missing(run) -> None:
-    assert BASE_REF_WARNING in run().stderr
+def test_links_the_shared_files_into_the_repo(run, home: Path, repo: Path) -> None:
+    run()
+    for name in SHARED_FILES:
+        link = home / ".claude" / name
+        assert link.is_symlink() and link.resolve() == (repo / "config" / name).resolve(), name
 
 
-def test_no_warning_when_base_ref_is_set(run, home: Path) -> None:
-    (home / ".claude").mkdir()
-    (home / ".claude" / "settings.json").write_text('{"worktree": {"baseRef": "head"}}\n')
+def test_backs_up_a_real_file_and_links(run, home: Path, repo: Path) -> None:
+    claude = home / ".claude"
+    claude.mkdir()
+    for name in SHARED_FILES:
+        (claude / name).write_text(f"my {name}")
+
+    stderr = run().stderr
+
+    for name in SHARED_FILES:
+        assert (claude / name).is_symlink()
+        assert (claude / name).resolve() == (repo / "config" / name).resolve()
+        assert (claude / f"{name}.bak").read_text() == f"my {name}"
+        assert f"moved {claude / name} to {claude / name}.bak" in stderr
+
+
+def test_keeps_an_old_backup_and_uses_a_timestamp(run, home: Path) -> None:
+    claude = home / ".claude"
+    claude.mkdir()
+    (claude / "settings.json.bak").write_text("first")
+    (claude / "settings.json").write_text("second")
+
+    run()
+
+    assert (claude / "settings.json.bak").read_text() == "first"
+    stamped = [p for p in claude.glob("settings.json.bak.*")]
+    assert len(stamped) == 1 and stamped[0].read_text() == "second"
+    assert (claude / "settings.json").is_symlink()
+
+
+def test_leaves_a_link_to_somewhere_else(run, home: Path, tmp_path: Path) -> None:
+    claude = home / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").symlink_to(tmp_path / "elsewhere.json")
+
+    stderr = run().stderr
+
+    assert os.readlink(claude / "settings.json") == str(tmp_path / "elsewhere.json")
+    assert "skipped settings.json" in stderr
+    assert not list(claude.glob("settings.json.bak*"))
+
+
+def test_replaces_a_repo_link_without_a_backup(run, home: Path, repo: Path) -> None:
+    claude = home / ".claude"
+    claude.mkdir()
+    (claude / "notify.sh").symlink_to(repo / "config" / "gone.sh")
+
+    stderr = run().stderr
+
+    assert (claude / "notify.sh").resolve() == (repo / "config" / "notify.sh").resolve()
+    assert not list(claude.glob("notify.sh.bak*"))
+    assert "notify.sh" not in stderr
+
+
+def test_does_not_warn_about_base_ref(run) -> None:
     assert BASE_REF_WARNING not in run().stderr
+
+
+def test_shared_settings_set_base_ref_to_head(repo: Path) -> None:
+    settings = json.loads((repo / "config" / "settings.json").read_text())
+    assert settings["worktree"]["baseRef"] == "head"
+
+
+def test_shared_scripts_are_executable(repo: Path) -> None:
+    for name in ("statusline.sh", "notify.sh"):
+        assert os.access(repo / "config" / name, os.X_OK), name
 
 
 def test_second_run_changes_nothing(run, home: Path) -> None:
@@ -133,3 +199,14 @@ def test_second_run_changes_nothing(run, home: Path) -> None:
     second = run()
     assert snapshot(home) == before
     assert second.stderr == first.stderr
+    assert not list((home / ".claude").glob("*.bak*"))
+
+
+def test_second_run_after_a_backup_changes_nothing(run, home: Path) -> None:
+    (home / ".claude").mkdir()
+    (home / ".claude" / "settings.json").write_text("mine")
+    run()
+    before = snapshot(home)
+    second = run()
+    assert snapshot(home) == before
+    assert "moved" not in second.stderr
