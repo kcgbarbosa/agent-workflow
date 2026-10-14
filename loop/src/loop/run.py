@@ -122,8 +122,11 @@ def tail(text: str, lines: int = LOG_TAIL_LINES) -> str:
 
 
 class EpicRun:
-    def __init__(self, epic_key: str, config: Config, secrets: Mapping[str, str]) -> None:
+    def __init__(
+        self, epic_key: str, config: Config, secrets: Mapping[str, str], base: str | None = None
+    ) -> None:
         self.epic_key = epic_key
+        self.base = base or config.main_branch
         self.config = config
         self.secrets = dict(secrets)
         self.repo = config.repo
@@ -164,11 +167,13 @@ class EpicRun:
         self.epic_branch = repo.find_branch(self.repo, self.epic_key) or (
             f"feat/{self.epic_key}-{repo.slug(epic.summary)}"
         )
+        if not self.base_exists():
+            return 1
         with self._repo_lock:
-            repo.add_worktree(
-                self.repo, self.epic_worktree, self.epic_branch, f"origin/{self.config.main_branch}"
-            )
+            repo.add_worktree(self.repo, self.epic_worktree, self.epic_branch, f"origin/{self.base}")
         self.log(self.epic_key, "start", "ok", detail=self.epic_branch, setup=run_setup(self.config))
+        if not self.sync_base():
+            return 1
         for ticket in self.tracker.children(self.epic_key):
             if self.ticket_result(ticket) == NOT_LANDED:
                 self.log(ticket.key, "start", "done-not-landed")
@@ -180,6 +185,38 @@ class EpicRun:
             self.notify(f"{self.epic_key} stopped")
             return 1
         return self.finish()
+
+    def base_exists(self) -> bool:
+        """Whether the base branch is on origin. A merged Epic PR usually deletes its branch."""
+        if repo.has_ref(self.repo, f"refs/remotes/origin/{self.base}"):
+            return True
+        self.log(self.epic_key, "base", "missing", detail=self.base)
+        self.notify(f"{self.epic_key} stopped")
+        return False
+
+    def sync_base(self) -> bool:
+        """Merges the base branch into a stacked Epic branch, so a fix to the base reaches the work on top.
+
+        A merge keeps the Epic's own commits, so a change to the base never makes them useless. Returns
+        False, with the branch as it was, when the base is gone or does not merge.
+        """
+        if self.base == self.config.main_branch:
+            return True
+        key = self.epic_key
+        git(self.repo, "fetch", "--prune", "origin")
+        ref = f"origin/{self.base}"
+        if not self.base_exists():
+            return False
+        if repo.is_ancestor(self.epic_worktree, ref, "HEAD"):
+            return True
+        merged = git(self.epic_worktree, "merge", "--no-ff", "--no-edit", ref, check=False)
+        if merged.returncode != 0:
+            git(self.epic_worktree, "merge", "--abort", check=False)
+            self.log(key, "base", "conflict", detail=tail(merged.stdout + merged.stderr))
+            self.notify(f"{key} stopped")
+            return False
+        self.log(key, "base", "merged", detail=self.base)
+        return True
 
     def build_frontier(self) -> str | None:
         """Runs every ticket on the frontier. Returns the reason the loop stopped early."""
@@ -324,7 +361,7 @@ class EpicRun:
 
         A trial removes its own change when it reports, and Claude Code then removes its worktree.
         """
-        base = f"origin/{self.config.main_branch}"
+        base = f"origin/{self.base}"
         with self._repo_lock:
             removed = repo.remove_trials(self.repo, TRIALS, run.branch, base)
         if removed:
@@ -554,7 +591,9 @@ class EpicRun:
     def finish(self) -> int:
         """Runs the merge gate on the Epic branch and opens the Epic PR."""
         key = self.epic_key
-        base = f"origin/{self.config.main_branch}"
+        if not self.sync_base():
+            return 1
+        base = f"origin/{self.base}"
         if out(self.epic_worktree, "rev-list", "--count", f"{base}..HEAD") == "0":
             self.log(key, "finish", "nothing-landed")
             self.notify(f"{key} stopped")
@@ -628,7 +667,7 @@ class EpicRun:
             return 0
         summary = self.epic_summary[:1].lower() + self.epic_summary[1:]
         create = [
-            "gh", "pr", "create", "--base", self.config.main_branch, "--head", self.epic_branch,
+            "gh", "pr", "create", "--base", self.base, "--head", self.epic_branch,
             "--title", f"feat({key}): {summary}", "--body-file", str(body_file),
             *(["--draft"] if draft else []),
         ]  # fmt: skip
@@ -674,7 +713,7 @@ class EpicRun:
         if branch is None:
             return False
         ref = branch if repo.has_ref(self.repo, f"refs/heads/{branch}") else f"origin/{branch}"
-        bases = (f"origin/{self.config.main_branch}", self.epic_branch)
+        bases = (f"origin/{self.base}", self.epic_branch)
         return all(repo.adds_to(self.repo, ref, base) for base in bases)
 
     # --- Commands ---
@@ -1035,6 +1074,6 @@ def screenshots(run_dir: Path) -> list[Path]:
     return sorted(path for path in run_dir.rglob("*") if path.suffix.lower() in IMAGE_SUFFIXES)
 
 
-def run(epic_key: str, config: Config, secrets: Mapping[str, str]) -> int:
+def run(epic_key: str, config: Config, secrets: Mapping[str, str], base: str | None = None) -> int:
     """The run entry. It returns 0 when the Epic PR is open, and 1 when the loop stopped early."""
-    return EpicRun(epic_key, config, secrets).run()
+    return EpicRun(epic_key, config, secrets, base).run()

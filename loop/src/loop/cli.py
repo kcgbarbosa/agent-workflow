@@ -53,6 +53,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--against", metavar="<Epic key>", help="report: compare with this Epic's latest run instead"
     )
+    parser.add_argument(
+        "--on",
+        metavar="<branch>",
+        help="start, run: stack the Epic on this branch, such as an Epic PR that is not merged yet",
+    )
     parser.add_argument("--json", action="store_true", help="report: print JSON")
     parser.add_argument("--repo", type=Path, help="the main checkout. Defaults to the one around this folder")
     arguments = sys.argv[1:] if argv is None else argv
@@ -76,12 +81,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "report":
             return print_report(config, args.epic, args.against, args.json)
         if args.command == "start":
-            return start(args.epic, config)
+            return start(args.epic, config, args.on)
         check_tools(config)
         secrets = read_secrets(config)
         check_services(config, secrets)
         with one_run(config.state_dir, args.epic), awake(config.name, args.epic):
-            return run(args.epic, config, secrets)
+            return run(args.epic, config, secrets, args.on)
     except (Refused, ConfigError, Stale) as error:
         print(f"The loop refuses to run. {error}", file=sys.stderr)
         return 2
@@ -245,7 +250,7 @@ def awake(name: str, epic_key: str) -> Iterator[None]:
         inhibitor.terminate()
 
 
-def start(epic_key: str, config: Config) -> int:
+def start(epic_key: str, config: Config, base: str | None = None) -> int:
     """Starts `loop run` in its own tmux session, so the run outlives the agent or shell that starts it."""
     bw_session = os.environ.get("BW_SESSION")
     if not bw_session and not secrets_file(config).exists():
@@ -261,7 +266,8 @@ def start(epic_key: str, config: Config) -> int:
             _tmux(["kill-session", "-t", f"={session}"])
         else:
             raise Refused(f"A loop run is active. See it with `tmux attach -t {session}`.")
-    command = shlex.join([sys.executable, "-m", "loop", "run", epic_key, "--repo", str(config.repo)])
+    on = ["--on", base] if base else []
+    command = shlex.join([sys.executable, "-m", "loop", "run", epic_key, "--repo", str(config.repo), *on])
     repo = str(config.repo)
     _tmux(["new-session", "-d", "-s", session, "-c", repo])
     _tmux(["set-option", "-p", "-t", target, "remain-on-exit", "on"])
