@@ -944,24 +944,31 @@ function fillForecast() {
     const figs = [
       h("div", { title: "The share of the window per landed ticket. The range is the lowest and the highest run." }, h("b", {}, range(e.five_hour)), "of a 5-hour window per ticket"),
       h("div", {}, h("b", {}, range(e.seven_day)), "of a weekly window per ticket"),
-      h("div", {}, h("b", {}, `About ${num(c.five_hour_by_usage)}`), "tickets fit in a 5-hour window by usage"),
-      h("div", { title: "5 hours over the median time from a ticket's start to its landing, less waits for a usage limit, times the parallel tickets." }, h("b", {}, c.five_hour_by_time ? `About ${num(c.five_hour_by_time)}` : "-"), "tickets the loop lands in 5 hours by time"),
+      h("div", { title: "At the share per ticket above. The range is the dearest and the cheapest run." }, h("b", {}, `About ${num(c.five_hour_by_usage)}`),
+        `tickets fit in a 5-hour window by usage${c.five_hour_most !== null ? ` (${num(c.five_hour_fewest)} to ${num(c.five_hour_most)})` : ""}`),
+      h("div", { title: "The tickets the runs landed over their hours of running, less the waits for a usage limit. The range is the slowest and the fastest run." },
+        h("b", {}, c.five_hour_by_time !== null ? `About ${num(c.five_hour_by_time)}` : "-"),
+        `tickets the loop lands in 5 hours of running${e.landed_per_window.low !== null ? ` (${num(e.landed_per_window.low)} to ${num(e.landed_per_window.high)})` : ""}`),
       h("div", {}, h("b", {}, c.week_tickets ? `About ${num(c.week_tickets, 0)}` : "-"), "tickets fit in a weekly window"),
       h("div", {}, h("b", {}, c.weeks_for_backlog !== null ? num(c.weeks_for_backlog, 2) : "-"), "weekly windows the open tickets need"),
     ];
     if (c.week_left_tickets !== null) figs.push(h("div", {}, h("b", {}, `About ${num(c.week_left_tickets, 0)}`), "more tickets fit in this week's window"));
     parts.push(h("div", { class: "figs" }, figs));
-    const basis = `From ${plural(e.tickets, "landed ticket", "landed tickets")} in ${plural(e.runs, "run", "runs")}, ${day(e.from)} to ${day(e.to)}. Confidence ${e.confidence}.`;
-    parts.push(h("div", { class: "fine" }, basis, e.scaled ? ` ${plan} has fewer than ${f.min_tickets} landed tickets of its own, so the other plans' runs count too, scaled by Anthropic's stated multiples.` : ""));
+    const basis = `From ${plural(e.tickets, "landed ticket", "landed tickets")} in ${plural(e.runs, "run", "runs")}, ${day(e.from)} to ${day(e.to)}. Confidence ${e.confidence}: ${plan} has ${plural(e.own_tickets, "landed ticket", "landed tickets")} of its own.`;
+    parts.push(h("div", { class: "fine" }, basis, e.scaled ? ` That is fewer than ${f.min_tickets}, so the other plans' runs count too, scaled by Anthropic's stated multiples.` : "",
+      " The weekly meter reads in whole percents, so one run's weekly share is only good to a point either way."));
     for (const u of c.upgrades) {
       parts.push(h("h3", {}, `${u.name}, $${u.price_more} a month more`));
       parts.push(h("div", { class: "figs" },
         h("div", {}, h("b", {}, `About ${num(u.five_hour_tickets)}`), "tickets would fit in a 5-hour window by usage"),
-        h("div", {}, h("b", {}, u.gain ? `${num(u.gain)}x` : "-"), "the tickets the loop would land per 5-hour window, against now"),
+        h("div", {}, h("b", {}, u.gain === null ? "-" : Math.abs(u.gain_high - u.gain_low) < 0.05 ? `${num(u.gain)}x` : `${num(u.gain_low)}x to ${num(u.gain_high)}x`), "the tickets the loop would land per 5-hour window, against now"),
         h("div", {}, h("b", {}, u.week_tickets ? `About ${num(u.week_tickets, 0)}` : "-"), "tickets would fit in a weekly window")));
-      parts.push(h("div", { class: "fine" }, c.plan_limits
-        ? `The loop's time caps the gain: more allowance helps only up to the tickets it lands in 5 hours.`
-        : `${plan} already fits more than the loop lands in 5 hours, so more allowance would add room you do not use. It would help only if the weekly window or your own use runs out.`));
+      parts.push(h("div", { class: "fine" }, {
+        plan: `The loop's pace caps the gain. More allowance helps only up to the tickets it lands in 5 hours of running.`,
+        loop: `${plan} already fits more than the loop lands in 5 hours, so more allowance would add room you do not use. It would help only if the weekly window or your own use runs out.`,
+        unclear: `The gain depends on whether ${plan} or the loop's pace is the limit, which the data cannot tell yet.`,
+        unknown: "No run time to compare with yet.",
+      }[c.limit]));
     }
   }
 
@@ -975,10 +982,13 @@ function fillForecast() {
       row("Runs", (p) => `${p.runs}, ${day(p.from)} to ${day(p.to)}`),
       row("Tickets landed", (p) => `${p.landed}`),
       row("Landed on their first ticket gate", (p) => (p.first_pass_rate === null ? "-" : `${Math.round(p.first_pass_rate * 100)}%`)),
-      row("Ticket gate failures per landed ticket", (p) => num(p.gate_failures_per_landed)),
-      row("Stuck", (p) => `${p.stuck}`),
+      row("Ticket gate failures per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.ticket_gate, 2) : "-")),
+      row("Merge gate failures per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.merge_gate, 2) : "-")),
+      row("Code reviews with findings per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.code_review, 2) : "-")),
+      row("UI reviews with faults per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.ui_review, 2) : "-")),
+      row("Tickets stuck", (p) => `${p.stuck}`),
       row("Median time to land, less waits", (p) => (p.median_minutes === null ? "-" : length(p.median_minutes))),
-      row("Waits for a usage limit", (p) => `${p.waits}${p.waits ? `, ${num(p.waited_hours)} h` : ""}`),
+      row("Usage limits hit, and hours a run waited", (p) => `${p.waits}${p.waits ? `, ${num(p.waited_hours)} h` : ""}`),
       row("Landed tickets with a meter reading", (p) => `${p.metered_tickets}`),
       row("5-hour window per ticket, own plan", (p) => range(p.five_hour)),
       row("Weekly window per ticket, own plan", (p) => range(p.seven_day)),
