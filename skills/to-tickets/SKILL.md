@@ -1,20 +1,20 @@
 ---
 name: to-tickets
-description: Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker (edges as text in one file per ticket locally, or native blocking links on a real tracker).
+description: Break a spec into a set of tracer-bullet Jira tickets under its Epic, each naming the story IDs it delivers and declaring its blocking edges as native Jira links.
 disable-model-invocation: true
 ---
 
 # To Tickets
 
-Break a plan, spec, or conversation into a set of **tickets**: tracer-bullet vertical slices, each declaring the tickets that **block** it.
+Break a spec into a set of **tickets**: tracer-bullet vertical slices, each declaring the tickets that **block** it.
 
-The issue tracker and triage label vocabulary should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
+The tickets are Jira Tasks under the feature's Epic. Read `docs/agents/issue-tracker.md` for the project, the board fields and the ticket body. Read `docs/agents/domain.md` for the spec folder. If either file is missing, tell the user to run `/setup-repo`. Where `docs/agents/issue-tracker.md` differs from this skill, the file wins.
 
 ## Process
 
 ### 1. Gather context
 
-Work from whatever is already in the conversation context. If the user passes a reference (a spec path, an issue number or URL) as an argument, fetch it and read its full body and comments.
+Work from the spec, the file `/to-spec` wrote. If the user passes a spec path or an Epic key, use it. Otherwise find the spec in the conversation. Read the whole spec, and read the Epic and its comments through the Atlassian connector. The Epic holds the PRD, so do not edit it.
 
 ### 2. Explore the codebase (optional)
 
@@ -43,9 +43,12 @@ Give each ticket its **blocking edges**: the other tickets that must complete be
 
 Present the proposed breakdown as a numbered list. For each ticket, show:
 
-- **Title**: short descriptive name
+- **Title**: a plain outcome, for example "Answer a question on the Product page"
+- **Stories**: the spec's story group and the story IDs this ticket delivers
 - **Blocked by**: which other tickets (if any) must complete first
 - **What it delivers**: the end-to-end behaviour this ticket makes work
+
+Then check every story ID of the spec against the list. Flag each story that no ticket delivers, and ask whether a new ticket, an existing ticket or Out of Scope takes it. Do not continue while a story has no home.
 
 Ask the user:
 
@@ -55,51 +58,32 @@ Ask the user:
 
 Iterate until the user approves the breakdown.
 
-### 5. Publish the tickets to the configured tracker
+### 5. Publish the tickets to Jira
 
-Publish the approved tickets. **How** depends on the tracker `/setup-matt-pocock-skills` configured; the tickets are the same either way, only the shape of the blocking edges changes:
-
-- **Local files** → write one file per ticket under `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` in dependency order (blockers first). Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below: one ticket per file, never a single combined file.
-- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking / sub-issue relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. Apply the `ready-for-agent` triage label unless instructed otherwise; the tickets are agent-grabbable by construction.
+Publish the approved tickets through the Atlassian connector, one Jira Task per ticket, with the Epic as its parent. Publish in dependency order (blockers first) so each ticket's blocking edges can reference real keys. Write each blocking edge as Jira's native "Blocks" link and nowhere else: no "Blocked by" line in the body. Leave priority at the Jira default and leave the other board fields empty, as `docs/agents/issue-tracker.md` says.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 
-Do NOT close or modify any parent issue.
+Do NOT close or modify the Epic.
 
-<local-ticket-template>
+<ticket-template>
 
-# <NN>: <Ticket title>
+Title: a plain outcome, for example "Answer a question on the Product page"
 
-**What to build:** the end-to-end behaviour this ticket makes work, from the user's perspective, not a layer-by-layer implementation list.
+**Goal.** One sentence from the user's side, with half a sentence on why.
 
-**Blocked by:** the numbers/titles of the tickets that gate this one, or "None (can start immediately)".
+**Stories.** The spec's story group and the IDs this ticket delivers.
 
-**Status:** ready-for-agent
+**What the user sees.** Plain checks, one line each. Acceptance of the deployed result uses these.
 
-- [ ] Acceptance criterion 1
-- [ ] Acceptance criterion 2
+**Technical checks.** Schema, routes, events, tests. For the agent.
 
-</local-ticket-template>
+**Spec.** A link, and the sections used.
 
-<issue-template>
+**ADRs.** The files this work has to obey.
 
-## Parent
+**Not in this ticket.** What a reader might assume is included and is not.
 
-A reference to the parent issue on the tracker (if the source was an existing issue, otherwise omit this section).
+</ticket-template>
 
-## What to build
-
-The end-to-end behaviour this ticket makes work, from the user's perspective, not layer-by-layer implementation.
-
-## Acceptance criteria
-
-- [ ] Criterion 1
-- [ ] Criterion 2
-
-## Blocked by
-
-- A reference to each blocking ticket, or "None (can start immediately)".
-
-</issue-template>
-
-In either form, avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
+Avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
