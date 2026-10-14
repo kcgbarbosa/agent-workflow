@@ -13,15 +13,15 @@ If one of these files does not exist, proceed. `/domain-modeling` creates them w
 
 Write it in one file only.
 
-| What you have                                                | File                                        |
-| ------------------------------------------------------------ | ------------------------------------------- |
-| A decision that is hard to reverse and came from a trade-off | `docs/adr/`                                 |
-| A user, a constraint, a scope cut, or a go-live item         | `README.md`, in the Users table for a user  |
-| A term the project has settled on                            | `GLOSSARY.md`                               |
-| How the agents work                                          | `AGENTS.md` and `docs/agents/`              |
-| The spec of a feature whose Epic is not merged               | `docs/product/specs/<feature>.md`           |
-| The baselines and targets                                    | The Confluence page `<Metrics page title>`  |
-| The personas                                                 | The Confluence page `<Personas page title>` |
+| What you have                                                | File                                       |
+| ------------------------------------------------------------ | ------------------------------------------ |
+| A decision that is hard to reverse and came from a trade-off | `docs/adr/`                                |
+| A user, a constraint, a scope cut, or a go-live item         | `README.md`, in the Users table for a user |
+| A term the project has settled on                            | `GLOSSARY.md`                              |
+| How the agents work                                          | `AGENTS.md` and `docs/agents/`             |
+| The spec of a feature whose Epic is not merged               | `docs/product/specs/<feature>.md`          |
+| The baselines and targets                                    | `<Metrics file path>`                      |
+| The personas                                                 | `<Personas file path>`                     |
 
 The PRD is the description of the Jira Epic. It is not a file in this repo. `docs/agents/issue-tracker.md` gives how it is written.
 When the Epic merges, the owner moves the spec to Confluence. `docs/agents/issue-tracker.md` gives where it goes and how Jira links to it. The tests hold its acceptance criteria.
