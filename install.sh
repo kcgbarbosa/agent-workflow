@@ -53,6 +53,12 @@ else
   ln -sfn "$repo/AGENTS.md" "$dest/CLAUDE.md"
 fi
 
+# User-scope MCP servers live in ~/.claude.json, which no repo can track. Each one signs in with OAuth on first use.
+if command -v claude >/dev/null 2>&1; then
+  claude mcp get workos >/dev/null 2>&1 || claude mcp add --scope user --transport http workos https://mcp.workos.com/mcp
+  claude mcp get aws-mcp >/dev/null 2>&1 || claude mcp add --scope user --transport http aws-mcp https://aws-mcp.us-east-1.api.aws/mcp
+fi
+
 # An editable install, so a git pull updates the loop command too.
 if command -v uv >/dev/null 2>&1; then
   uv tool install --quiet --editable "$repo/loop" || echo "agent-workflow: the loop command did not install" >&2
