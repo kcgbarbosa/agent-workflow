@@ -58,7 +58,7 @@ For each flag, name the **proper fix**: the change at the root cause, made where
 Then decide who makes the proper fix:
 
 - **I can do it** when the fix is a change to code, config, or docs that you can make, test, and open as a pull request.
-- **You're needed** when the fix needs something only KC holds: a product or scope decision, a spend, an account, a secret, an admin control such as WorkOS roles, or a merge.
+- **You're needed** when the fix needs something only KC holds: a product or scope decision, a spend, an account, a secret, an admin control such as identity-provider roles, or a merge.
 - **No fix needed** when the loop handles it by design, such as a pause for the plan limit. Name the rule.
 
 Done when every flag has its proper fix and a verdict.

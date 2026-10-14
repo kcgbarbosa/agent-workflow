@@ -79,7 +79,7 @@ Before you show it, check every line of the draft against the rules:
 
 - Each number traces to a row of the metrics file. Remove any that does not.
 - Each persona is in the personas file. Each scenario name is a story group name of the spec.
-- No ADR number, ticket key, story ID, em dash, or real name remains.
+- No ADR number, ticket key, story ID, or em dash remains, and no real name remains except the Owner line.
 
 ### 4. Show the draft and wait
 

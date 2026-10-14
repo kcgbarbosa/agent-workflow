@@ -25,7 +25,7 @@ Clone to `~/dev/agent-workflow`, run `./install.sh`. On a machine that `chezmoi`
 - Change a skill or `AGENTS.md`: edit here, commit, push. Other computers `git pull`; the links make it live.
 - Add or remove a skill or a tier: add or remove its folder or file, run `./install.sh` again.
 - Linux needs `notify-send` (package `libnotify-bin`) for notifications. Without it, the hook does nothing.
-- `config/settings.json` is public. Never put a token in it.
+- `config/settings.json` is public, and `~/.claude/settings.json` is a link to it. Never put a token in it. Claude Code can write to it through the link, for example when you choose "always allow", so check `git diff config/` before you commit.
 - Project repos use `AGENTS.md`. Never create `CLAUDE.md` or `CLAUDE.local.md` in one, because either hides `AGENTS.md`.
 - Change the loop: edit `loop/`. `loop/CLAUDE.md` gives the rules. `loop start` fast-forwards each computer's clone, so a merged change reaches every host on its next run.
 - After a rename or move of a linked file, run `./install.sh` again on every computer.
@@ -39,10 +39,10 @@ git clone --depth 1 https://github.com/kcgbarbosa/agent-workflow.git "$HOME/agen
 
 curl -fsSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
   | tar -xz -C /usr/local/bin gitleaks
-apt-get install -y fd-find tree && ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+apt-get update && apt-get install -y fd-find tree jq && ln -sf "$(command -v fdfind)" /usr/local/bin/fd
 ```
 
 - Clones with no token, so the repo must stay public.
 - A session gets the version pushed before it started, not later pushes.
 - The environment's allowed domains must include the hosts the downloads use: `github.com`, `release-assets.githubusercontent.com` and the Ubuntu package mirror.
-- Verified: the `gitleaks` download and unpack (reports 8.30.1), and the `fd-find` and `tree` install with the `fd` link, on Ubuntu 24.04 as root. Unverified: the clone and `install.sh` lines in the cloud, and whether the script runs as root there. Without root, put `sudo` before `apt-get` and use a writable folder on `PATH` for the other two commands.
+- Verified: the `gitleaks` download and unpack (reports 8.30.1), and the `fd-find` and `tree` install with the `fd` link, on Ubuntu 24.04 as root. Unverified: the `apt-get update` and the `jq` install, the clone and `install.sh` lines in the cloud, and whether the script runs as root there. Without root, put `sudo` before `apt-get` and use a writable folder on `PATH` for the other two commands.
