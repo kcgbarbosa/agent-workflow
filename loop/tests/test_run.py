@@ -15,7 +15,7 @@ from conftest import EPIC, World, sh
 from loop import run as loop_run
 from loop import tiers
 from loop.claude import REVIEW_EFFORT, REVIEW_MODEL
-from loop.prompts import DISPATCH, RESTART_PROMPT, USAGE_RESUME_PROMPT
+from loop.prompts import DISPATCH, EARLY_STATUS_PROMPT, RESTART_PROMPT, USAGE_RESUME_PROMPT
 
 
 def test_the_frontier_runs_blockers_first_and_lands_each_ticket(world: World) -> None:
@@ -348,6 +348,28 @@ def test_a_usage_limit_with_no_reset_soon_stops_the_loop_and_a_restart_continues
     run_dir = world.state / EPIC / "runs" / "DEMO-2"
     assert "usage limit" in (run_dir / "agent-1.jsonl").read_text()
     assert (run_dir / "agent-2.jsonl").exists()
+
+
+def test_a_blocked_status_that_came_while_subagents_ran_resumes_the_session_once(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.jira.add("DEMO-3", "Add the second part", parent=EPIC)
+    early = {"status": "blocked", "reason": "Asked for the status first.", "subagents_running": 2}
+    world.plan(
+        {
+            "DEMO-2": [early, {"write": {"a.txt": "a"}}],
+            "DEMO-3": [early, {**early, "subagents_running": 1}],
+        }
+    )
+
+    assert world.run() == 0
+
+    first, resumed = world.calls("DEMO-2")[:2]
+    assert resumed["prompt"] == EARLY_STATUS_PROMPT and resumed["resume"] is not None
+    assert "merge(DEMO-2): Add the first part" in world.epic_log()
+    assert ("DEMO-2", "early-status") in [(line["ticket"], line["result"]) for line in world.decisions()]
+    # A second early status is the agent's answer, so the ticket is stuck.
+    assert len(world.calls("DEMO-3")) == 2
+    assert world.jira.issues["DEMO-3"].flagged
 
 
 def test_a_usage_limit_that_resets_soon_pauses_and_resumes_the_session(
