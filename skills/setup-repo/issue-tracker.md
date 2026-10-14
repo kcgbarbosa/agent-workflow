@@ -4,21 +4,21 @@ Tickets live in Jira, project `<KEY>`. They are not files in this repo.
 
 ## Documents
 
-| Document | Where it lives                                                          | Written by                     |
-| -------- | ----------------------------------------------------------------------- | ------------------------------ |
-| PRD      | The description of the Jira Epic                                        | `/to-prd`                      |
-| Spec     | `docs/product/specs/<feature>.md` in this repo                          | `/to-spec`                     |
-| Ticket   | A Jira Task under the Epic                                              | `/to-tickets`                  |
-| Metrics  | The Confluence page `<Metrics page title>`, space `<Confluence space>`  | The owner                      |
-| Personas | The Confluence page `<Personas page title>`, space `<Confluence space>` | The owner, drafted by an agent |
+| Document | Where it lives                                 | Written by                     |
+| -------- | ---------------------------------------------- | ------------------------------ |
+| PRD      | The description of the Jira Epic               | `/to-prd`                      |
+| Spec     | `docs/product/specs/<feature>.md` in this repo | `/to-spec`                     |
+| Ticket   | A Jira Task under the Epic                     | `/to-tickets`                  |
+| Metrics  | `<Metrics file path>` in this repo             | The owner                      |
+| Personas | `<Personas file path>` in this repo            | The owner, drafted by an agent |
 
-The Epic is the PRD. `/to-prd` writes the whole description from the spec, the Metrics page, the Personas page and the README Users table. A re-run overwrites it. Nobody edits it by hand. A change to the PRD goes into the spec or the Metrics page, and `/to-prd` runs again.
+The Epic is the PRD. `/to-prd` writes the whole description from the spec, the metrics file, the personas file and the README Users table. A re-run overwrites it. Nobody edits it by hand. A change to the PRD goes into the spec or the metrics file, and `/to-prd` runs again.
 The PRD owner shown on the PRD is `<PRD owner>`.
 
 The brief is not a ticket. It lives at `README.md`.
 The spec is the source of truth for the build, the tests and the tickets. A ticket links the spec and cites story IDs. It does not copy the spec.
 
-When the Epic merges, the owner moves the spec to a child of the Confluence page `<Specs archive page title>`. The Epic keeps the PRD. Then `/to-prd` runs again so that the Spec link names the Confluence page, and each ticket links that page and no repo path that the move removed.
+When the Epic merges, the owner moves the spec to a child of the Confluence page `<Specs archive page title>`, space `<Confluence space>`. The Epic keeps the PRD. Then `/to-prd` runs again so that the Spec link names the Confluence page, and each ticket links that page and no repo path that the move removed.
 Open a Confluence page only from a link in an issue. The current decisions are in the repo.
 
 ## The board
