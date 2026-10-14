@@ -61,6 +61,20 @@ class Jira:
             if data.get("isLast", True) or not token:
                 return tickets
 
+    def search(self, jql: str, fields: list[str]) -> list[dict[str, Any]]:
+        """The raw issues a JQL query finds, every page. The forecast reads Jira only through this."""
+        issues: list[dict[str, Any]] = []
+        token: str | None = None
+        while True:
+            body: dict[str, Any] = {"jql": jql, "fields": fields, "maxResults": 100}
+            if token:
+                body["nextPageToken"] = token
+            data = self._request("POST", SEARCH, body)
+            issues += data.get("issues", [])
+            token = data.get("nextPageToken")
+            if data.get("isLast", True) or not token:
+                return issues
+
     def comments(self, key: str) -> list[str]:
         texts: list[str] = []
         while True:

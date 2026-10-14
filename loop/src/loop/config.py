@@ -8,6 +8,7 @@ from __future__ import annotations
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,19 @@ class Stack:
 
 
 @dataclass(frozen=True)
+class PlanSpan:
+    """The Claude plan from `since` on. A date with no time leaves the runs of that day to either plan."""
+
+    plan: str
+    since: datetime
+    exact: bool
+
+
+# The plans `[watch]` `plans` may name. `forecast.PLANS` holds what each one gives and costs.
+PLAN_KEYS = ("pro", "max-5x", "max-20x")
+
+
+@dataclass(frozen=True)
 class Config:
     """The defaults live in `_parse`, so the file is the one place a value comes from."""
 
@@ -64,6 +78,8 @@ class Config:
     agent_hint: str
     tools: tuple[str, ...]
     watch_port: int
+    backlog_minutes: int
+    plans: tuple[PlanSpan, ...]
     stack: Stack | None
     secrets: Mapping[str, Secret]
     state_dir: Path
@@ -149,6 +165,8 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         agent_hint=top.text("agent_hint", ""),
         tools=top.texts("tools", ()),
         watch_port=watch.number("port", 8790),
+        backlog_minutes=watch.number("backlog_minutes", 5),
+        plans=_plans(watch.tables("plans")),
         stack=stack,
         secrets=secrets,
         state_dir=state_dir or Path.home() / ".local/state" / f"{name}-loop",
@@ -156,6 +174,23 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
     for table in (top, tracker, gates, limits, notify, ui, stack_table, watch, agent, secrets_table):
         table.done()
     return config
+
+
+def _plans(entries: list[_Table]) -> tuple[PlanSpan, ...]:
+    spans = []
+    for entry in entries:
+        plan = entry.text("plan")
+        if plan not in PLAN_KEYS:
+            raise ValueError(f"{entry.path}plan must be one of {', '.join(PLAN_KEYS)}")
+        since = entry._get("since", _REQUIRED, (str, date))
+        entry.done()
+        if isinstance(since, str):
+            since = datetime.fromisoformat(since) if "T" in since else date.fromisoformat(since)
+        if isinstance(since, datetime):
+            spans.append(PlanSpan(plan, since if since.tzinfo else since.replace(tzinfo=UTC), True))
+        else:
+            spans.append(PlanSpan(plan, datetime(since.year, since.month, since.day, tzinfo=UTC), False))
+    return tuple(sorted(spans, key=lambda span: span.since))
 
 
 _REQUIRED: Any = object()
@@ -210,6 +245,11 @@ class _Table:
         if not all(isinstance(item, str) for item in value):
             raise TypeError(f"{self.path}{key} must be a list of strings")
         return tuple(value)
+
+    def tables(self, key: str) -> list[_Table]:
+        """An optional array of tables, such as `plans = [{ ... }]`."""
+        value = self._get(key, [], list)
+        return [_Table(item, f"{self.path}{key}[{number}].") for number, item in enumerate(value)]
 
     def table(self, key: str, optional: bool = False) -> _Table:
         value = self._get(key, {} if optional else _REQUIRED, dict)

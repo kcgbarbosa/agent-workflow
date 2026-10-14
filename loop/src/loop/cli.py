@@ -30,6 +30,7 @@ from . import report
 from . import watch as watch_page
 from .claude import MIN_CLAUDE, claude_version
 from .config import Config, ConfigError
+from .forecast import Forecaster
 from .run import run
 from .tracker import TrackerError
 from .update import Stale, source_checkout, update
@@ -296,15 +297,17 @@ def start(epic_key: str, config: Config, base: str | None = None) -> int:
 
 
 def watch(config: Config) -> int:
-    """Serves the page until the process stops. It reads the state folder and changes nothing."""
+    """Serves the page until the process stops. It changes nothing the loop reads."""
+    forecast = Forecaster(config)
     try:
-        servers = watch_page.serve(config.state_dir, config.watch_port)
+        servers = watch_page.serve(config.state_dir, config.watch_port, forecast=forecast)
     except OSError as error:
         raise Refused(f"loop watch cannot listen on port {config.watch_port}: {error}") from error
     for server in servers:
         host = str(server.server_address[0])
         print(f"loop watch serves the {config.name} runs at http://{host}:{config.watch_port}/")
     sys.stdout.flush()
+    forecast.start()
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
