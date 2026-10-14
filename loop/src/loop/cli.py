@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(arguments)
     if args.command in ("start", "run") and not re.fullmatch(r"[A-Z]+-\d+", args.epic or ""):
-        print("Usage: loop start <Epic key>, for example loop start PITCH-42", file=sys.stderr)
+        print("Usage: loop start <Epic key>, for example loop start TIDE-42", file=sys.stderr)
         return 2
     try:
         repo = args.repo.resolve() if args.repo else main_checkout()
