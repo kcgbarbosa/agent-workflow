@@ -37,6 +37,8 @@ class FakeJira:
         self.errors: list[int] = []
         # When True, a read of the comments gets HTTP 403, as for a token that may not see them.
         self.refuse_comments = False
+        # Each request as its method and path, so a test can tell a read from a write.
+        self.requests: list[tuple[str, str]] = []
         self.lock = threading.Lock()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -70,6 +72,7 @@ class FakeJira:
                 "issuetype": {"name": issue.issue_type},
                 "description": description,
                 "issuelinks": links,
+                "parent": {"key": issue.parent} if issue.parent else None,
                 FLAGGED: [{"value": "Impediment"}] if issue.flagged else None,
             },
         }
@@ -83,6 +86,27 @@ class FakeJira:
             for text in issue.comments[start : start + COMMENT_PAGE]
         ]
         return {"startAt": start, "maxResults": COMMENT_PAGE, "total": len(issue.comments), "comments": page}
+
+    def _search(self, jql: str) -> list[dict[str, Any]]:
+        """The three queries the loop and the forecast send: one Epic's children, the open Epics of some
+        projects, and the children of some Epics."""
+        if parent := re.match(r"parent = ([A-Z]+-\d+)", jql):
+            found = [i for i in self.issues.values() if i.parent == parent[1]]
+        elif parents := re.match(r"parent in \(([^)]*)\)", jql):
+            keys = {key.strip() for key in parents[1].split(",")}
+            found = [i for i in self.issues.values() if i.parent in keys]
+        elif projects := re.match(
+            r"project in \(([^)]*)\) AND issuetype = Epic AND statusCategory != Done", jql
+        ):
+            names = {name.strip() for name in projects[1].split(",")}
+            found = [
+                i
+                for i in self.issues.values()
+                if i.issue_type == "Epic" and i.key.split("-")[0] in names and CATEGORY[i.status] != "done"
+            ]
+        else:
+            raise AssertionError(f"the fake Jira does not know this query: {jql}")
+        return [self._json(i) for i in sorted(found, key=lambda i: int(i.key.split("-")[1]))]
 
     @staticmethod
     def _status(name: str) -> dict[str, Any]:
@@ -110,6 +134,7 @@ class FakeJira:
 
             def _busy(self) -> bool:
                 with fake.lock:
+                    fake.requests.append((self.command, self.path.split("?")[0]))
                     code = fake.errors.pop(0) if fake.errors else None
                 if code is not None:
                     self._send({"errorMessages": ["busy"]}, code)
@@ -149,10 +174,8 @@ class FakeJira:
                         fake.notifications.append(body.decode())
                         return self._send({})
                     if path == "/rest/api/3/search/jql":
-                        parent = re.match(r"parent = ([A-Z]+-\d+)", json.loads(body)["jql"])
-                        assert parent
-                        issues = [fake._json(i) for i in fake.issues.values() if i.parent == parent[1]]
-                        return self._send({"issues": issues, "isLast": True})
+                        jql = json.loads(body)["jql"]
+                        return self._send({"issues": fake._search(jql), "isLast": True})
                     match = re.fullmatch(
                         r"/rest/api/3/issue/([A-Z]+-\d+)/(transitions|comment|attachments)", path
                     )

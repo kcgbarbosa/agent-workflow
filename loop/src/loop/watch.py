@@ -1,7 +1,8 @@
 """`loop watch`: a read-only web page of the runs on this host.
 
 It reads only what the run writes to the state folder: `decisions.jsonl`, `board.json`, the agent logs, the
-gate logs, and the screenshots. It changes nothing, so it can run while a run lasts, after it, or without one.
+gate logs, and the screenshots. It changes nothing the loop reads, so it can run while a run lasts, after it,
+or without one. The capacity forecast (`forecast.py`) writes its own Jira snapshot, which no run reads.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import report
@@ -454,19 +455,10 @@ def ticket_stats(columns: list[dict[str, Any]], by_ticket: dict[str, list[dict[s
     """
     names = ("landed", "running", "stuck", "waiting", "done")
     counts = {name: sum(1 for ticket in columns if ticket["column"] == name) for name in names}
-    landed_here, first_pass, minutes = 0, 0, []
-    for lines in by_ticket.values():
-        land = next(
-            (line for line in lines if line.get("step") == "land" and line.get("result") == "landed"), None
-        )
-        if land is None:
-            continue
-        landed_here += 1
-        gates = [line for line in lines if _is_gate(line, "ticket")]
-        first_pass += bool(gates) and gates[0].get("result") == "pass"
-        start = next((line for line in lines if line.get("step") == "start"), None)
-        if start:
-            minutes.append((_time(land) - _time(start)) / 60)
+    landed = landings(by_ticket)
+    landed_here = len(landed)
+    first_pass = sum(item["first_pass"] for item in landed)
+    minutes = [item["minutes"] for item in landed if item["minutes"] is not None]
     return {
         "landed": counts["landed"],
         "total": len(columns) - counts["done"],
@@ -476,6 +468,32 @@ def ticket_stats(columns: list[dict[str, Any]], by_ticket: dict[str, list[dict[s
         "first_pass_rate": first_pass / landed_here if landed_here else None,
         "median_land_minutes": statistics.median(minutes) if minutes else None,
     }
+
+
+def landings(by_ticket: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Each ticket that landed in a run, from its lines in that run: whether its first ticket gate passed,
+    how many of its ticket gates failed, and its start and landing times with the minutes between them.
+    """
+    found = []
+    for key, lines in by_ticket.items():
+        land = next(
+            (line for line in lines if line.get("step") == "land" and line.get("result") == "landed"), None
+        )
+        if land is None:
+            continue
+        gates = [line for line in lines if _is_gate(line, "ticket")]
+        start = next((line for line in lines if line.get("step") == "start"), None)
+        found.append(
+            {
+                "key": key,
+                "first_pass": bool(gates) and gates[0].get("result") == "pass",
+                "gate_failures": sum(1 for line in gates if line.get("result") == "fail"),
+                "start": _time(start) if start else None,
+                "land": _time(land),
+                "minutes": (_time(land) - _time(start)) / 60 if start else None,
+            }
+        )
+    return found
 
 
 def plan_view(breakdown: dict[str, Any]) -> dict[str, Any]:
@@ -867,9 +885,18 @@ def _log_meter(path: Path) -> dict[str, dict[str, Any]]:
 # --- Server ---
 
 
+class Forecast(Protocol):
+    """The capacity forecast, which `loop watch` wires in from `forecast.py`."""
+
+    def view(self) -> dict[str, Any]: ...
+
+    def refresh(self) -> bool: ...
+
+
 class Watch:
-    def __init__(self, state_dir: Path) -> None:
+    def __init__(self, state_dir: Path, forecast: Forecast | None = None) -> None:
         self.state_dir = state_dir
+        self.forecast = forecast
 
     def masker(self) -> Masker:
         # Read for each request, so a new `loop secrets` takes effect without a restart.
@@ -886,6 +913,8 @@ class Watch:
             return self.json(project_list(self.state_dir))
         if parts == ["api", "usage"]:
             return self.json(plan_meter(self.state_dir))
+        if parts == ["api", "forecast"]:
+            return self.json(self.forecast.view() if self.forecast else None)
         name = query.get("project", [""])[0]
         state_dir = projects(self.state_dir).get(name) if name else self.state_dir
         if state_dir is None:
@@ -911,6 +940,12 @@ class Watch:
             return self.file(state_dir / parts[1], "/".join(parts[2:]))
         return self.missing()
 
+    def post(self, url: str) -> tuple[HTTPStatus, str, bytes]:
+        """The one request that does something: read the backlog from Jira now. No run reads the result."""
+        if urlparse(url).path.rstrip("/") == "/api/forecast/refresh" and self.forecast:
+            return self.json({"started": self.forecast.refresh()})
+        return self.missing()
+
     def json(self, data: Any) -> tuple[HTTPStatus, str, bytes]:
         body = json.dumps(self.masker().data(data)).encode()
         return HTTPStatus.OK, "application/json", body
@@ -933,7 +968,12 @@ class Watch:
 def handler(watch: Watch) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - the name http.server calls.
-            status, kind, body = watch.handle(self.path)
+            self.reply(*watch.handle(self.path))
+
+        def do_POST(self) -> None:  # noqa: N802 - the name http.server calls.
+            self.reply(*watch.post(self.path))
+
+        def reply(self, status: HTTPStatus, kind: str, body: bytes) -> None:
             self.send_response(status)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(body)))
@@ -964,9 +1004,11 @@ def addresses() -> list[str]:
     return found
 
 
-def serve(state_dir: Path, port: int, hosts: list[str] | None = None) -> list[ThreadingHTTPServer]:
+def serve(
+    state_dir: Path, port: int, hosts: list[str] | None = None, forecast: Forecast | None = None
+) -> list[ThreadingHTTPServer]:
     """Starts one server for each address, each in its own thread, and returns them."""
-    watch = Watch(state_dir)
+    watch = Watch(state_dir, forecast)
     servers = []
     for host in hosts or addresses():
         try:
