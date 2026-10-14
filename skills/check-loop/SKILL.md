@@ -39,7 +39,7 @@ Check every item. Each one that holds is a flag.
 - **Slow**: an agent past `agent_timeout_minutes`, a gate past `gates.timeout_minutes`, or `recent` repeating the same tool call.
 - **Stuck**: a stuck ticket, a `blocked` agent, or stuck tickets in a row near `circuit_breaker`.
 - **Denied**: a tool call that auto mode denied. `/api/agent/<Epic key>/<ticket key>/<n>` marks each one `"denied": true`. Check the newest agent log of the running ticket.
-- **Plan**: `plan.now.five_hour.utilization` above 0.8, or `plan.fits.five_hour` at 0. The loop pauses at the limit and resumes at `resets_at` (rule 8).
+- **Plan**: `five_hour.utilization` of `/api/usage`, the newest meter reading on the host, above 0.8, or `plan.fits.five_hour` at 0. The loop pauses at the limit and resumes at `resets_at` (rule 8).
 - **Paused**: a ticket's `step.paused` is true.
 - **Errors**: a traceback in the tmux pane, or an `agent-*.err` with content.
 - **Drift**: the run does something the design from step 1 says it should not. Name the rule.

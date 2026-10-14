@@ -329,7 +329,7 @@ def print_report(config: Config, epic_key: str | None, against: str | None, as_j
 
 def open_watch(config: Config, epic_key: str) -> str:
     """Starts `loop watch` when nothing answers on its port, opens the page, and returns its address."""
-    page = watch_page.url(config.watch_port, epic_key)
+    page = watch_page.url(config.watch_port, epic_key, project=config.name)
     if not watch_answers(config.watch_port):
         session = f"{config.name}-watch"
         # A session whose server does not answer is left from a watch that failed.
@@ -347,7 +347,7 @@ def open_watch(config: Config, epic_key: str) -> str:
             [opener, page], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
         )
     # 127.0.0.1 opens only on this host. The tailnet address also opens on the phone and the other host.
-    return watch_page.url(config.watch_port, epic_key, watch_page.addresses()[-1])
+    return watch_page.url(config.watch_port, epic_key, watch_page.addresses()[-1], config.name)
 
 
 def watch_answers(port: int) -> bool:

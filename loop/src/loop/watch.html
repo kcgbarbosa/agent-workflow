@@ -2,239 +2,330 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Loop Watch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap">
 <style>
+/* The look follows the Pitchridge design system (its ADR 0045): a warm off-white ground, fine type, and much
+   space. Light only. Tokens are named by role. One accent, here the neutral one, marks the active tab, links,
+   focus rings, and selection. The category colors fill only a small status tile, never a button or a link. */
 :root {
-  --bg: #f6f7f9; --panel: #ffffff; --line: #e3e6eb; --text: #1b1f24; --muted: #5d6673; --faint: #8a93a0;
-  --accent: #2f6fde; --ok: #1f8a4c; --ok-bg: #e5f5ec; --bad: #c8322b; --bad-bg: #fde9e7;
-  --warn: #9a6400; --warn-bg: #fdf3dc; --run: #2f6fde; --run-bg: #e6eefc; --code-bg: #f1f3f6;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #111418; --panel: #181c21; --line: #2a3038; --text: #e6e9ed; --muted: #a0a8b3; --faint: #6e7782;
-    --accent: #6ea0ff; --ok: #4cc283; --ok-bg: #16301f; --bad: #ff7b72; --bad-bg: #3a1d1b;
-    --warn: #e3b341; --warn-bg: #352a12; --run: #6ea0ff; --run-bg: #1a2a45; --code-bg: #0d1014;
-  }
+  color-scheme: light;
+  --ground: #f6f5f2;
+  --stage: #ecebe7;
+  --surface: #ffffff;
+  --fill: #edece8;
+  --text: #1b1b19;
+  --text-muted: #6b6a65;
+  --line: #e2e1dc;
+  --line-strong: #8a8984;
+  --danger: #c42b1c;
+  --run: #2856c8; --run-soft: #e7eefc;
+  --warn: #9a5800; --warn-soft: #fbefdb;
+  --bad: #b8203f; --bad-soft: #fbe4e9;
+  --confirm: #14632f; --confirm-soft: #e6f4ea;
+  --accent-text: #1b1b19;
+  --accent-focus: #1b1b19;
+  --accent-soft: #f0f0ed;
+  --sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --radius-sm: 10px; --radius-md: 14px; --radius-full: 999px;
+  --shadow-md: 0 2px 6px rgba(27, 27, 25, 0.06), 0 8px 24px rgba(27, 27, 25, 0.1);
+  --column: 1120px;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-button, select { font: inherit; color: inherit; }
-.mono { font-family: var(--mono); font-size: 12.5px; }
-.muted { color: var(--muted); }
-.faint { color: var(--faint); }
+html, body { margin: 0; background: var(--ground); color: var(--text); font: 400 14px/20px var(--sans); -webkit-font-smoothing: antialiased; }
+:focus-visible { outline: 2px solid var(--accent-focus); outline-offset: 2px; }
+::selection { background: var(--accent-soft); color: var(--text); }
+a { color: var(--accent-text); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--text); }
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+code { font-family: var(--code); font-size: 12.5px; background: var(--fill); padding: 1px 6px; border-radius: 6px; color: var(--text); }
+.muted { color: var(--text-muted); }
+.wrap { max-width: var(--column); margin: 0 auto; padding-left: 24px; padding-right: 24px; }
+@media (max-width: 1023px) { .wrap { padding-left: 16px; padding-right: 16px; } }
+@media (prefers-reduced-motion: reduce) { *, ::before, ::after { transition: none !important; animation: none !important; } }
 
-/* --- Header --- */
-header {
-  position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
-  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+/* --- Top bar: the project, the Epic, the views, and the run --- */
+header { position: sticky; top: 0; z-index: 5; background: var(--ground); border-bottom: 1px solid transparent; transition: border-color 160ms; }
+header.scrolled { border-bottom-color: var(--line); }
+.bar { display: flex; align-items: center; gap: 16px; height: 56px; }
+.ctx { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; }
+.ctx .slash { color: var(--line-strong); }
+.picker { position: relative; display: inline-flex; min-width: 0; border-radius: var(--radius-sm); }
+.picker:hover { background: var(--fill); }
+.picker select { field-sizing: content; appearance: none; -webkit-appearance: none; background: transparent; border: 0; border-radius: var(--radius-sm); padding: 6px 26px 6px 10px; font-weight: 550; min-width: 0; max-width: 100%; text-overflow: ellipsis; cursor: pointer; }
+.picker select:disabled { cursor: default; opacity: 1; }
+.picker::after { content: ""; position: absolute; right: 11px; top: 50%; width: 5px; height: 5px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: translateY(-70%) rotate(45deg); pointer-events: none; }
+.picker.project { flex: none; }
+.picker.single:hover { background: none; }
+.picker.single::after { display: none; }
+.picker.single select { padding-right: 10px; }
+.compact-title { display: none; }
+nav.tabs { display: flex; gap: 4px; flex: 1; }
+nav.tabs a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: var(--radius-full); color: var(--text-muted); text-decoration: none; font-weight: 500; white-space: nowrap; }
+nav.tabs a:hover { color: var(--text); background: var(--fill); }
+nav.tabs a.on { color: var(--accent-text); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--line); }
+nav.tabs svg { width: 18px; height: 18px; }
+.run { display: flex; align-items: center; gap: 12px; margin-left: auto; color: var(--text-muted); font-size: 13px; white-space: nowrap; }
+@media (max-width: 1023px) {
+  .bar { height: 52px; gap: 8px; }
+  .run .last, .run .pr { display: none; }
+  /* The large title has scrolled away, so the bar names the page. */
+  header.scrolled .ctx { display: none; }
+  header.scrolled .compact-title { display: block; flex: 1; min-width: 0; font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A floating, opaque pill with a static shadow, and no backdrop-filter. */
+  nav.tabs { position: fixed; z-index: 6; left: 50%; transform: translateX(-50%); bottom: calc(12px + env(safe-area-inset-bottom)); flex: none; gap: 2px; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-full); box-shadow: var(--shadow-md); }
+  nav.tabs a { flex-direction: column; gap: 2px; min-width: 72px; padding: 6px 10px; font-size: 11px; line-height: 14px; letter-spacing: .01em; }
+  nav.tabs a.on { box-shadow: none; }
+  nav.tabs svg { width: 22px; height: 22px; }
 }
-header select { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px; font-family: var(--mono); font-size: 12.5px; }
-header .title { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 220px; }
-header .title b { font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#state { display: inline-flex; align-items: center; gap: 6px; flex: none; }
-header .meta { display: flex; gap: 4px 14px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; flex-wrap: wrap; flex-basis: 100%; }
-@media (min-width: 1024px) { header .meta { flex-basis: auto; } }
 
-.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
-.pill.running, .pill.run { background: var(--run-bg); color: var(--run); }
-.pill.landed, .pill.pass, .pill.ok, .pill.done, .pill.pr-open, .pill.new { background: var(--ok-bg); color: var(--ok); }
-.pill.stuck, .pill.fail, .pill.stopped, .pill.error, .pill.conflict, .pill.blocked, .pill.timeout, .pill.loop-error { background: var(--bad-bg); color: var(--bad); }
-.pill.waiting, .pill.idle, .pill.restart, .pill.pr-draft, .pill.usage-limit, .pill.usage-pause, .pill.paused, .pill.findings { background: var(--warn-bg); color: var(--warn); }
-.pill.neutral { background: var(--code-bg); color: var(--muted); }
-.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--run); flex: none; }
-.dot.live { animation: pulse 1.6s infinite; }
-@keyframes pulse { 50% { opacity: .3; } }
+/* --- Page --- */
+main.wrap { padding-top: 8px; padding-bottom: 48px; display: grid; gap: 24px; }
+@media (max-width: 1023px) { main.wrap { padding-bottom: 112px; gap: 16px; } }
+.pagehead { padding: 16px 0 4px; }
+.pagehead .over { color: var(--text-muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pagehead h1 { margin: 4px 0 0; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+@media (max-width: 1023px) { .pagehead h1 { font-size: 34px; line-height: 40px; font-weight: 650; letter-spacing: -0.02em; } }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); min-width: 0; }
+.phead { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 20px 24px 0; }
+.phead h2 { margin: 0; font-size: 17px; line-height: 22px; font-weight: 600; }
+.phead .aside { color: var(--text-muted); }
+.pbody { padding: 16px 24px 24px; }
+@media (max-width: 1023px) { .phead { padding: 16px 16px 0; } .pbody { padding: 12px 16px 16px; } }
+.empty { padding: 32px 16px; text-align: center; color: var(--text-muted); }
 
-#alerts { padding: 0 16px; }
-.alert { margin-top: 10px; padding: 8px 12px; border-radius: 8px; background: var(--bad-bg); color: var(--text); border: 1px solid color-mix(in srgb, var(--bad) 35%, transparent); overflow-wrap: anywhere; }
-.alert b { color: var(--bad); }
+/* A status tile: the only place a category color shows. */
+.tile { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: var(--radius-full); font-size: 12px; line-height: 18px; font-weight: 500; white-space: nowrap; background: var(--fill); color: var(--text-muted); }
+.tile.dot::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.tile.run { background: var(--run-soft); color: var(--run); }
+.tile.ok { background: var(--confirm-soft); color: var(--confirm); }
+.tile.warn { background: var(--warn-soft); color: var(--warn); }
+.tile.bad { background: var(--bad-soft); color: var(--bad); }
+.tile.plain { background: var(--fill); color: var(--text); }
 
-/* --- Layout: one column on a phone, in reading order; from 1024 px a main column and a side column --- */
-main { display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 24px; }
-.col { display: contents; }
-#plan { order: 1; } #stats { order: 2; } #running { order: 3; } #boardwrap { order: 4; } #recent { order: 5; }
-#progress { display: none; }
-@media (min-width: 1024px) {
-  main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; gap: 16px; padding: 16px; }
-  .col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-  #progress { display: block; }
-}
-@media (min-width: 1400px) { main { grid-template-columns: minmax(0, 1fr) 360px; } }
+/* --- Overview: the figures --- */
+.metrics { display: grid; gap: 16px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 759px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; } .metrics > :first-child { grid-column: 1 / -1; } }
+.metric { padding: 20px 24px; display: flex; flex-direction: column; gap: 8px; }
+@media (max-width: 759px) { .metric { padding: 16px; } }
+.metric h2 { margin: 0; font-size: 14px; line-height: 20px; font-weight: 500; color: var(--text-muted); }
+.figure { font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.figure b { font-size: 28px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); margin-right: 6px; }
+.figure.na b { font-size: 17px; line-height: 32px; color: var(--text-muted); }
+.track { height: 4px; border-radius: var(--radius-full); background: var(--fill); overflow: hidden; }
+.track > span { display: block; height: 100%; border-radius: var(--radius-full); background: var(--text); }
+.track > span.warn { background: var(--warn); } .track > span.bad { background: var(--danger); }
+.metric .sub { font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
-.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 12px 14px 0; }
-.card-head h2 { margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
-.card-body { padding: 10px 14px 14px; }
-.note { font-size: 12px; color: var(--faint); margin-top: 10px; }
-
-/* Stat cards: 2 by 2 on a phone, one row from 1024 px */
-#stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-@media (min-width: 1024px) { #stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; } }
-.stat { padding: 12px 14px; }
-.stat .label { font-size: 12px; color: var(--muted); }
-.stat .value { font-size: 26px; font-weight: 650; line-height: 1.2; margin-top: 2px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-.stat .value small { font-size: 14px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
-.stat .sub { font-size: 12px; color: var(--faint); margin-top: 2px; }
-.segbar { display: flex; height: 6px; border-radius: 999px; overflow: hidden; background: var(--code-bg); margin-top: 8px; }
-.segbar span { display: block; height: 100%; }
-.seg-landed { background: var(--ok); } .seg-running { background: var(--run); } .seg-stuck { background: var(--bad); } .seg-waiting { background: color-mix(in srgb, var(--warn) 55%, var(--line)); }
-
-/* Plan meter */
-.meter + .meter { margin-top: 12px; }
-.meter .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.meter .name { font-weight: 600; }
-.meter .pct { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
-.meter .track { height: 8px; border-radius: 999px; background: var(--code-bg); overflow: hidden; margin: 4px 0 3px; }
-.meter .fill { height: 100%; border-radius: 999px; background: var(--accent); }
-.meter .fill.warn { background: var(--warn); } .meter .fill.bad { background: var(--bad); }
-.meter .when { font-size: 12px; color: var(--muted); }
-.figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
-.figures div { font-size: 12px; color: var(--muted); }
-.figures b { display: block; font-size: 16px; color: var(--text); font-variant-numeric: tabular-nums; }
-
-/* Running now */
-.runcards { display: grid; gap: 10px; }
-@media (min-width: 1024px) { .runcards { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); } }
-.runcard { display: block; width: 100%; text-align: left; cursor: pointer; padding: 12px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
-.runcard:hover { border-color: var(--faint); }
-.runcard .top { display: flex; align-items: center; gap: 8px; }
-.runcard .key { font-family: var(--mono); font-size: 12px; color: var(--muted); }
-.runcard .sum { margin: 2px 0 10px; font-weight: 550; overflow-wrap: anywhere; }
+/* --- Overview: the work queue and the screenshots --- */
+.work { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+@media (min-width: 1024px) { .work { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); } }
+@media (max-width: 1023px) { .work { gap: 16px; } }
+.group + .group { margin-top: 24px; }
+.group > h3 { margin: 0 0 8px; font-size: 14px; font-weight: 500; color: var(--text-muted); }
+.current { display: block; width: 100%; text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 16px; transition: border-color 160ms; }
+.current + .current { margin-top: 12px; }
+.current:hover { border-color: var(--line-strong); }
+.current .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.key { color: var(--text-muted); font-variant-numeric: tabular-nums; font-weight: 500; }
+.current .title { font-size: 16px; line-height: 22px; font-weight: 550; margin: 4px 0 14px; overflow-wrap: anywhere; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 14px 0 0; }
+.facts dt { color: var(--text-muted); }
+.facts dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.facts .toolname { color: var(--text-muted); font-weight: 500; margin-right: 6px; }
+.why { margin-top: 12px; color: var(--warn); }
 .stepper { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
-.stepper .st { font-size: 11px; color: var(--faint); text-align: center; }
-.stepper .st::before { content: ""; display: block; height: 4px; border-radius: 999px; background: var(--line); margin-bottom: 4px; }
-.stepper .st.past::before { background: var(--ok); }
-.stepper .st.now { color: var(--run); font-weight: 600; }
-.stepper .st.now::before { background: var(--run); }
+.stepper .st { font-size: 12px; line-height: 16px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stepper .st::before { content: ""; display: block; height: 3px; border-radius: var(--radius-full); background: var(--fill); margin-bottom: 6px; }
+.stepper .st.past::before { background: var(--line-strong); }
+.stepper .st.now { color: var(--text); font-weight: 500; }
+.stepper .st.now::before { background: var(--text); }
 .stepper .st.now.paused { color: var(--warn); }
 .stepper .st.now.paused::before { background: var(--warn); }
-.runcard .elapsed { font-size: 12px; color: var(--muted); margin-top: 8px; font-variant-numeric: tabular-nums; }
-.runcard .lines { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; display: grid; gap: 3px; }
-.runcard .line { display: flex; gap: 6px; font-size: 12.5px; min-width: 0; }
-.runcard .line .name { font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--code-bg); border-radius: 4px; padding: 0 5px; flex: none; }
-.runcard .line .what { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.idle-note { padding: 14px; color: var(--faint); font-size: 13px; }
+@media (max-width: 520px) { .stepper .st { font-size: 11px; } }
+.note { padding: 16px; border-radius: var(--radius-sm); background: var(--ground); color: var(--text-muted); }
+.note b { color: var(--text); font-weight: 550; }
+.list { list-style: none; margin: 0; padding: 0; }
+.list button { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; width: 100%; text-align: left; background: none; border: 0; border-top: 1px solid var(--line); padding: 12px 4px; min-height: 44px; }
+.list li:first-child button { border-top: 0; }
+.list button:hover .what > div:first-child { text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.list .n { color: var(--text-muted); font-variant-numeric: tabular-nums; text-align: right; }
+.list .what { min-width: 0; }
+.list .what > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .rowreason { margin-top: 2px; color: var(--text-muted); white-space: normal !important; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.more { margin-top: 8px; color: var(--text-muted); }
 
-/* Progress ring */
-.ring { --size: 120px; width: var(--size); height: var(--size); border-radius: 50%; display: grid; place-items: center; flex: none; }
-.ring .hole { width: calc(var(--size) - 26px); height: calc(var(--size) - 26px); border-radius: 50%; background: var(--panel); display: grid; place-items: center; text-align: center; }
-.ring .hole b { font-size: 22px; font-variant-numeric: tabular-nums; display: block; line-height: 1.1; }
-.ring .hole span { font-size: 11px; color: var(--faint); }
-.progress { display: flex; align-items: center; gap: 16px; }
-.legend { display: grid; gap: 4px; font-size: 13px; }
-.legend div { display: flex; align-items: center; gap: 8px; }
-.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
-.legend b { margin-left: auto; font-variant-numeric: tabular-nums; padding-left: 12px; }
+/* Screenshots */
+.proof-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.proof-head .who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); }
+.thumbs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
+.thumbs.wide { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.thumb { display: block; padding: 0; border: 0; background: none; text-align: left; min-width: 0; }
+.thumb img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; object-position: top; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--stage); transition: border-color 160ms; }
+.thumb:hover img { border-color: var(--line-strong); }
+.thumb span { display: block; margin-top: 6px; font-size: 12px; line-height: 16px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Recent activity */
-.events { list-style: none; margin: 0; padding: 0; }
-.events li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; padding: 7px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
-.events li:last-child { border-bottom: 0; }
-.events .t { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
-.events .w { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.events .k { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-right: 6px; }
+/* --- Tickets --- */
+table.tickets { width: 100%; border-collapse: collapse; }
+table.tickets th { text-align: left; font-size: 12px; line-height: 16px; font-weight: 500; color: var(--text-muted); padding: 0 12px 10px; border-bottom: 1px solid var(--line); }
+table.tickets td { padding: 14px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.tickets tr:last-child td { border-bottom: 0; }
+table.tickets tbody tr { cursor: pointer; }
+table.tickets tbody tr:hover td { background: var(--ground); }
+table.tickets td.t { overflow-wrap: anywhere; font-weight: 500; }
+table.tickets td.t .key { display: block; }
+@media (max-width: 760px) { table.tickets .opt { display: none; } }
 
-/* Board and detail */
-#boardwrap { display: grid; gap: 14px; }
-@media (min-width: 1024px) { #boardwrap { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); align-items: start; gap: 16px; } }
-.board { display: flex; flex-direction: column; gap: 14px; }
-.group h3 { margin: 0 0 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
-.card {
-  display: block; width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  padding: 8px 10px; margin-bottom: 6px; cursor: pointer;
-}
-.card:hover { border-color: var(--faint); }
-.card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-.card .row { display: flex; align-items: center; gap: 8px; }
-.card .key { font-family: var(--mono); font-size: 12px; color: var(--muted); }
-.card .sum { margin: 2px 0; }
-.card .sub { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
-.card.epic { background: transparent; border-style: dashed; }
-
-#detail > .head { padding: 12px 14px; border-bottom: 1px solid var(--line); }
-#detail > .head h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
-.reason { margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--bad-bg); white-space: pre-wrap; overflow-wrap: anywhere; }
-.tabs { display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--line); overflow-x: auto; }
-.tabs button { background: none; border: 0; padding: 9px 10px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; }
-.tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
-.body { padding: 10px 14px 14px; }
-
-.runs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
-.runs button { background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; cursor: pointer; font-size: 12px; }
-.runs button.on { border-color: var(--accent); color: var(--accent); }
-.runs label { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; gap: 4px; align-items: center; }
-
-.feed { max-height: calc(100vh - 220px); overflow-y: auto; border-top: 1px solid var(--line); }
+/* --- Ticket and run detail --- */
+.detail-head { padding: 20px 24px; display: grid; gap: 16px; }
+@media (max-width: 1023px) { .detail-head { padding: 16px; } }
+.facts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px 24px; margin: 0; }
+.facts-grid div { min-width: 0; }
+.facts-grid dt { color: var(--text-muted); }
+.facts-grid dd { margin: 2px 0 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.reason { padding: 12px 16px; border-radius: var(--radius-sm); background: var(--bad-soft); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.segments { display: flex; gap: 4px; padding: 0 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.segments button { background: none; border: 0; padding: 12px 8px; color: var(--text-muted); border-bottom: 2px solid transparent; white-space: nowrap; font-weight: 500; }
+.segments button:hover { color: var(--text); }
+.segments button.on { color: var(--accent-text); border-bottom-color: var(--accent-text); }
+.body { padding: 16px 24px 24px; }
+@media (max-width: 1023px) { .body { padding: 12px 16px 16px; } }
+.runs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.runs button { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-full); padding: 4px 12px; font-size: 13px; }
+.runs button.on { background: var(--accent-soft); border-color: var(--accent-text); }
+.runs label { margin-left: auto; color: var(--text-muted); display: flex; gap: 6px; align-items: center; }
+.runs input { accent-color: var(--text); }
+.feed { max-height: calc(100vh - 300px); min-height: 200px; overflow-y: auto; border-top: 1px solid var(--line); }
 @media (max-width: 1023px) { .feed { max-height: 70vh; } }
-.item { border-bottom: 1px solid var(--line); padding: 5px 2px; }
-.item.sub { margin-left: 18px; padding-left: 8px; border-left: 2px solid var(--line); }
-.tool { display: flex; gap: 8px; align-items: baseline; cursor: pointer; min-width: 0; }
-.tool .name { font-family: var(--mono); font-size: 11.5px; color: var(--muted); background: var(--code-bg); border-radius: 4px; padding: 0 5px; flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item { border-bottom: 1px solid var(--line); padding: 7px 2px; }
+.item.sub { margin-left: 18px; padding-left: 10px; border-left: 2px solid var(--line); }
+.tool { display: flex; gap: 10px; align-items: baseline; cursor: pointer; min-width: 0; }
+.tool .name { color: var(--text-muted); font-weight: 500; flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool .mark { flex: none; font-size: 12px; width: 16px; text-align: center; }
-.mark.ok { color: var(--ok); } .mark.bad { color: var(--bad); } .mark.wait { color: var(--faint); }
-.item.denied { background: var(--bad-bg); }
-.item.denied .what::before { content: "Denied by auto mode: "; color: var(--bad); font-weight: 600; }
-pre.detail { margin: 6px 0 2px; padding: 8px; background: var(--code-bg); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 var(--mono); max-height: 360px; overflow: auto; }
+.tool .mark { flex: none; width: 16px; text-align: center; }
+.mark.ok { color: var(--confirm); } .mark.bad { color: var(--danger); } .mark.wait { color: var(--line-strong); }
+.item.denied { background: var(--bad-soft); }
+.item.denied .what::before { content: "Denied by auto mode: "; color: var(--bad); font-weight: 550; }
+pre.detail { margin: 8px 0 2px; padding: 10px 12px; background: var(--ground); border: 1px solid var(--line); border-radius: var(--radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/18px var(--code); max-height: 360px; overflow: auto; }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .text.open { display: block; }
-.divider { font-size: 12px; color: var(--faint); padding: 6px 2px; border-bottom: 1px solid var(--line); }
-.status { margin: 6px 0; padding: 8px 10px; border-radius: 6px; background: var(--ok-bg); }
-.status.blocked { background: var(--bad-bg); }
-.status ul { margin: 6px 0 0; padding-left: 18px; }
-
+.divider { font-size: 12px; color: var(--text-muted); padding: 8px 2px; border-bottom: 1px solid var(--line); }
+.verdict { margin: 8px 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--confirm-soft); }
+.verdict.blocked { background: var(--bad-soft); }
+.verdict ul { margin: 6px 0 0; padding-left: 18px; }
 .steps { width: 100%; border-collapse: collapse; }
-.steps td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
-.steps td.t { white-space: nowrap; color: var(--faint); font-variant-numeric: tabular-nums; font-size: 12px; }
-.steps td.k { white-space: nowrap; font-family: var(--mono); font-size: 12px; color: var(--muted); }
-.steps td.d { color: var(--muted); overflow-wrap: anywhere; font-size: 12.5px; }
-@media (max-width: 820px) { .steps td.k { display: none; } }
+.steps td { padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.steps tr:last-child td { border-bottom: 0; }
+.steps td.t { white-space: nowrap; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.steps td.k { white-space: nowrap; color: var(--text-muted); }
+.steps td.s { white-space: nowrap; }
+.steps td.s b { font-weight: 550; margin-right: 6px; }
+.steps td.d { color: var(--text-muted); overflow-wrap: anywhere; }
+@media (max-width: 820px) { .steps td.k { display: none; } .steps td.s { white-space: normal; } }
 .cost td.n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.cost td.n.text { white-space: normal; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
-.cost tr.sec td { padding-top: 14px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
-.cost td.up { color: var(--bad); } .cost td.down { color: var(--ok); }
-@media (max-width: 520px) { .cost td { padding: 5px 3px; font-size: 12.5px; } .cost tr.sec td { white-space: normal; } }
+.cost td.n.txt { white-space: normal; overflow-wrap: anywhere; }
+.cost tr.sec td { padding-top: 20px; font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.cost td.up { color: var(--danger); } .cost td.down { color: var(--confirm); }
+@media (max-width: 520px) { .cost td { padding: 8px 4px; font-size: 13px; } }
+.files a { display: block; padding: 4px 0; overflow-wrap: anywhere; }
 
-.shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
-.shots a { display: block; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
-.shots img { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; object-position: top; border: 1px solid var(--line); border-radius: 6px; background: var(--code-bg); }
-.files a { display: block; padding: 3px 0; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
-.empty { padding: 30px 10px; text-align: center; color: var(--faint); }
+/* --- Usage --- */
+.usage-grid { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 900px) { .usage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1023px) { .usage-grid { gap: 16px; } }
+.figs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 16px; }
+.figs div { color: var(--text-muted); }
+.figs b { display: block; font-size: 22px; line-height: 28px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.figs + .figs { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
+.meter + .meter { margin-top: 20px; }
+.meter .row1 { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+.meter .row1 b { font-weight: 550; }
+.meter .when { margin-top: 6px; color: var(--text-muted); font-size: 13px; }
+.fine { margin-top: 16px; color: var(--text-muted); font-size: 13px; }
+
+/* --- Screenshot viewer --- */
+.viewer { position: fixed; inset: 0; z-index: 20; background: var(--ground); display: flex; flex-direction: column; }
+.viewer[hidden] { display: none; }
+.vbar { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 10px 24px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.vbar .name { min-width: 0; flex: 1 1 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vbar .name b { font-weight: 550; }
+.vbar .name span { color: var(--text-muted); }
+.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 14px; background: var(--fill); border: 0; border-radius: var(--radius-full); color: var(--text); font-weight: 500; text-decoration: none; }
+.btn:hover { background: var(--stage); }
+.btn.primary { background: var(--text); color: var(--surface); }
+.btn.primary:hover { background: #33332f; }
+.vbar select { min-height: 36px; background: var(--fill); border: 0; border-radius: var(--radius-full); padding: 0 12px; font-weight: 500; }
+.vstage { flex: 1; min-height: 0; overflow: auto; display: flex; justify-content: center; align-items: flex-start; padding: 24px; background: var(--stage); }
+.vstage img { max-width: min(100%, 1400px); height: auto; border-radius: var(--radius-sm); background: var(--surface); box-shadow: var(--shadow-md); }
+.vstrip { display: flex; gap: 8px; overflow-x: auto; padding: 10px 24px; background: var(--surface); border-top: 1px solid var(--line); }
+.vstrip button { flex: none; width: 84px; padding: 0; border: 2px solid transparent; border-radius: 8px; overflow: hidden; background: var(--stage); }
+.vstrip button.on { border-color: var(--accent-text); }
+.vstrip img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; object-position: top; }
 </style>
 </head>
 <body>
-<header>
-  <select id="epic" aria-label="Epic"></select>
-  <div class="title"><b id="title">Loop Watch</b><span id="state"></span></div>
-  <div class="meta" id="meta"></div>
+<header id="top">
+  <div class="wrap bar">
+    <div class="ctx">
+      <label class="picker project"><select id="project" aria-label="Project"></select></label>
+      <span class="slash">/</span>
+      <label class="picker epic"><select id="epic" aria-label="Epic"></select></label>
+    </div>
+    <div class="compact-title" id="compact"></div>
+    <nav class="tabs" id="views" aria-label="Views"></nav>
+    <div class="run" id="run"></div>
+  </div>
 </header>
-<section id="alerts"></section>
-<main>
-  <div class="col">
-    <section id="stats"></section>
-    <section id="running"></section>
-    <section id="boardwrap">
-      <nav class="board" id="board"></nav>
-      <section class="panel" id="detail"></section>
-    </section>
-  </div>
-  <div class="col">
-    <section class="panel" id="progress"></section>
-    <section class="panel" id="plan"></section>
-    <section class="panel" id="recent"></section>
-  </div>
-</main>
+<main class="wrap" id="main"></main>
+<div class="viewer" id="viewer" hidden></div>
 <script>
 "use strict";
 const POLL_MS = 3000;
-const ORDER = [["running", "Running"], ["stuck", "Stuck"], ["waiting", "Waiting"], ["landed", "Landed"], ["done", "Done before this run"]];
-const ui = { epic: null, ticket: null, tab: "activity", agent: null, follow: true, view: null, feed: null, report: null };
+// A poll redraws the page when its data changes, and at least this often, so each age stays current.
+const AGE_MS = 15000;
+const KEY = /^[A-Z][A-Z0-9]*-\d+$/;
+// Phosphor icons (MIT), Regular and Fill: the Fill weight marks the active tab.
+const ICONS = {
+  "": ["M104,40H56A16,16,0,0,0,40,56v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V56A16,16,0,0,0,104,40Zm0,64H56V56h48v48Zm96-64H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,64H152V56h48v48Zm-96,32H56a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,104,136Zm0,64H56V152h48v48Zm96-64H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,200,136Zm0,64H152V152h48v48Z",
+    "M120,56v48a16,16,0,0,1-16,16H56a16,16,0,0,1-16-16V56A16,16,0,0,1,56,40h48A16,16,0,0,1,120,56Zm80-16H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm-96,96H56a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,104,136Zm96,0H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,200,136Z"],
+  "tickets": ["M224,128a8,8,0,0,1-8,8H128a8,8,0,0,1,0-16h88A8,8,0,0,1,224,128ZM128,72h88a8,8,0,0,0,0-16H128a8,8,0,0,0,0,16Zm88,112H128a8,8,0,0,0,0,16h88a8,8,0,0,0,0-16ZM82.34,42.34,56,68.69,45.66,58.34A8,8,0,0,0,34.34,69.66l16,16a8,8,0,0,0,11.32,0l32-32A8,8,0,0,0,82.34,42.34Zm0,64L56,132.69,45.66,122.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Zm0,64L56,196.69,45.66,186.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z",
+    "M208,32H48A16,16,0,0,0,32,48V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V48A16,16,0,0,0,208,32ZM117.66,149.66l-32,32a8,8,0,0,1-11.32,0l-16-16a8,8,0,0,1,11.32-11.32L80,164.69l26.34-26.35a8,8,0,0,1,11.32,11.32Zm0-64-32,32a8,8,0,0,1-11.32,0l-16-16A8,8,0,0,1,69.66,90.34L80,100.69l26.34-26.35a8,8,0,0,1,11.32,11.32ZM192,168H144a8,8,0,0,1,0-16h48a8,8,0,0,1,0,16Zm0-64H144a8,8,0,0,1,0-16h48a8,8,0,0,1,0,16Z"],
+  "diagnostics": ["M240,128a8,8,0,0,1-8,8H204.94l-37.78,75.58A8,8,0,0,1,160,216h-.4a8,8,0,0,1-7.08-5.14L95.35,60.76,63.28,131.31A8,8,0,0,1,56,136H24a8,8,0,0,1,0-16H50.85L88.72,36.69a8,8,0,0,1,14.76.46l57.51,151,31.85-63.71A8,8,0,0,1,200,120h32A8,8,0,0,1,240,128Z",
+    "M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm-8,96H188.64L159,188a8,8,0,0,1-6.95,4h-.46a8,8,0,0,1-6.89-4.84L103,89.92,79,132a8,8,0,0,1-7,4H48a8,8,0,0,1,0-16H67.36L97.05,68a8,8,0,0,1,14.3.82L153,166.08l24-42.05a8,8,0,0,1,6.95-4h24a8,8,0,0,1,0,16Z"],
+  "usage": ["M207.06,72.67A111.24,111.24,0,0,0,128,40h-.4C66.07,40.21,16,91,16,153.13V176a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V152A111.25,111.25,0,0,0,207.06,72.67ZM224,176H119.71l54.76-75.3a8,8,0,0,0-12.94-9.42L99.92,176H32V153.13c0-3.08.15-6.12.43-9.13H56a8,8,0,0,0,0-16H35.27c10.32-38.86,44-68.24,84.73-71.66V80a8,8,0,0,0,16,0V56.33A96.14,96.14,0,0,1,221,128H200a8,8,0,0,0,0,16h23.67c.21,2.65.33,5.31.33,8Z",
+    "M240,152v24a16,16,0,0,1-16,16H115.93a4,4,0,0,1-3.24-6.35L174.27,101a8.21,8.21,0,0,0-1.37-11.3,8,8,0,0,0-11.37,1.61l-72,99.06A4,4,0,0,1,86.25,192H32a16,16,0,0,1-16-16V153.13c0-1.79,0-3.57.13-5.33a4,4,0,0,1,4-3.8H48a8,8,0,0,0,8-8.53A8.17,8.17,0,0,0,47.73,128H23.92a4,4,0,0,1-3.87-5c12-43.84,49.66-77.13,95.52-82.28a4,4,0,0,1,4.43,4V72a8,8,0,0,0,8.53,8A8.17,8.17,0,0,0,136,71.73V44.67a4,4,0,0,1,4.43-4A112.18,112.18,0,0,1,236.23,123a4,4,0,0,1-3.88,5H208.27a8.17,8.17,0,0,0-8.25,7.47,8,8,0,0,0,8,8.53h27.92a4,4,0,0,1,4,3.86C240,149.23,240,150.61,240,152Z"],
+};
+const VIEWS = [["", "Overview"], ["tickets", "Tickets"], ["diagnostics", "Diagnostics"], ["usage", "Usage"]];
+const STEPS = [["agent", "Implementation"], ["ticket-gate", "Ticket gate"], ["code-review", "Code review"], ["ui-review", "UI review"], ["land", "Landing"]];
+const STATUS = { running: ["Running", "run"], paused: ["Paused", "warn"], completed: ["Completed", "ok"], failed: ["Failed", "bad"], blocked: ["Blocked", "bad"], stopped: ["Stopped", "warn"], idle: ["Idle", ""] };
+const HEALTH = { "on-track": ["On track", "ok"], attention: ["Needs attention", "warn"], blocked: ["Blocked", "bad"] };
+const COLUMN = { landed: ["Landed", "ok"], running: ["Running", "run"], stuck: ["Stuck", "bad"], waiting: ["Up next", ""], done: ["Done before this run", "ok"] };
+const QUEUE = { ready: ["Ready", "plain"], waiting: ["Waiting", ""], blocked: ["Blocked", "bad"] };
+const VERDICT = {
+  passed: ["UI review passed", "ok"], unfixed: ["Passed with faults left unfixed", "warn"],
+  faults: ["UI review found faults", "bad"], unreviewed: ["Not reviewed yet", ""],
+};
+const RESULT = { pass: "ok", landed: "ok", ok: "ok", done: "ok", "pr-open": "ok", fail: "bad", stuck: "bad", error: "bad", "loop-error": "bad", conflict: "bad", timeout: "bad", findings: "warn", "usage-pause": "warn", unfixed: "warn", restart: "warn" };
+const STOPPED = {
+  "circuit-breaker": "The run stopped after stuck tickets in a row (the circuit breaker).",
+  "usage-limit": "The run stopped at a usage limit that resets too late to wait for.",
+  "nothing-landed": "The run ended with nothing landed.",
+  "loop-error": "The loop itself failed.",
+};
+const WINDOWS = [["five_hour", "5-hour usage", "5-hour window"], ["seven_day", "Weekly usage", "weekly window"]];
+const QUEUE_SHOWN = 3;
+const PROOF_SHOWN = 4;
+const ui = {
+  project: null, epic: null, page: "", ticket: null, tab: null, agent: null, follow: true, version: null, drawn: null,
+  projects: [], epics: [], view: null, usage: {}, feed: null, report: null, reportWrap: null, viewer: null,
+};
 
+// --- Helpers ---
 function h(tag, props, ...children) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(props || {})) {
@@ -246,252 +337,462 @@ function h(tag, props, ...children) {
   for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) el.append(c instanceof Node ? c : String(c));
   return el;
 }
-const pill = (text, kind) => h("span", { class: `pill ${kind || text}` }, text);
+const tile = ([text, tone], dot) => h("span", { class: `tile ${tone || ""}${dot ? " dot" : ""}` }, text);
+function icon(path) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 256 256");
+  svg.setAttribute("fill", "currentColor");
+  svg.setAttribute("aria-hidden", "true");
+  const p = document.createElementNS(ns, "path");
+  p.setAttribute("d", path);
+  svg.append(p);
+  return svg;
+}
 const money = (n) => (typeof n === "number" ? `$${n.toFixed(2)}` : "");
+const pct = (n) => (typeof n === "number" ? `${n.toFixed(1)}%` : "-");
 function ago(iso) {
   if (!iso) return "";
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
-  if (s < 60) return `${Math.round(s)}s ago`;
+  if (s < 45) return "just now";
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   if (s < 86400) return `${Math.round(s / 3600)}h ago`;
   return `${Math.round(s / 86400)}d ago`;
 }
-function span(fromIso, toIso) {
-  if (!fromIso) return "";
-  const m = Math.round(((toIso ? Date.parse(toIso) : Date.now()) - Date.parse(fromIso)) / 60000);
-  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
+function length(minutes) {
+  const m = Math.max(0, Math.round(minutes));
+  if (m < 60) return `${m}m`;
+  if (m < 1440) return `${Math.floor(m / 60)}h ${m % 60}m`;
+  const days = Math.round(m / 1440);
+  return `${days} ${days === 1 ? "day" : "days"}`;
 }
-const clock = (iso) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "");
-const fileUrl = (rel) => `/files/${ui.epic}/${rel.split("/").map(encodeURIComponent).join("/")}`;
+const since = (iso) => (iso ? length((Date.now() - Date.parse(iso)) / 60000) : "");
+const clock = (iso) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" }) : "");
+const when = (iso) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+const at = (epoch) => new Date(epoch * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+const lastStep = (last) => (last.step === last.result ? last.step : `${last.step} ${last.result}`);
+const runs = (n) => (n ? ` · ${n} ${n === 1 ? "run" : "runs"}` : "");
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const stepName = (name) => (STEPS.find(([k]) => k === name) || [name, name])[1];
+function api(path) {
+  return `${path}${path.includes("?") ? "&" : "?"}project=${encodeURIComponent(ui.project || "")}`;
+}
+const fileUrl = (rel, version) => api(`/files/${ui.epic}/${rel.split("/").map(encodeURIComponent).join("/")}`) + (version ? `&v=${encodeURIComponent(version)}` : "");
 async function getJson(url) {
   const res = await fetch(url, { cache: "no-store" });
+  // The page on disk changed, as after `loop` updates: load the new one.
+  const version = res.headers.get("X-Page-Version");
+  if (version) {
+    if (ui.version && version !== ui.version) location.reload();
+    ui.version = version;
+  }
   if (!res.ok) throw new Error(`${res.status} ${url}`);
   return res.json();
 }
-
-// --- Routing: #/<Epic>/<ticket> ---
-function readHash() {
-  const [epic, ticket] = location.hash.replace(/^#\/?/, "").split("/");
-  ui.epic = epic || null;
-  ui.ticket = ticket || null;
+// A screenshot is fetched once and moved between renders, so a poll never reloads it.
+const images = new Map();
+function image(src, alt) {
+  if (!images.has(src)) images.set(src, h("img", { src, alt, loading: "lazy" }));
+  return images.get(src);
 }
-function go(epic, ticket) {
-  const hash = `#/${epic || ""}${ticket ? `/${ticket}` : ""}`;
+function shotName(path) {
+  const file = path.split("/").pop().replace(/\.[a-z]+$/i, "");
+  return file.replace(/-?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-?/gi, "-").replace(/-{2,}/g, " · ").replace(/^[-· ]+|[-· ]+$/g, "");
+}
+
+// --- Routing: #/<project>/<Epic>/<view or ticket> ---
+function readHash() {
+  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
+  // An address from before projects names the Epic first.
+  if (parts[0] && KEY.test(parts[0])) parts.unshift("");
+  const [project, epic, page] = parts;
+  ui.project = project || null;
+  ui.epic = epic || null;
+  ui.ticket = page && KEY.test(page) ? page : null;
+  ui.page = ui.ticket ? "ticket" : VIEWS.some(([k]) => k === page) ? page : "";
+}
+const hashFor = (project, epic, page) => `#/${[project, epic, page].filter(Boolean).map(encodeURIComponent).join("/")}`;
+function go(page, project = ui.project, epic = ui.epic) {
+  const hash = hashFor(project, epic, page);
   if (location.hash !== hash) location.hash = hash; else route();
 }
 window.addEventListener("hashchange", route);
 
 async function route() {
-  const before = `${ui.epic}/${ui.ticket}`;
+  const before = `${ui.project}/${ui.epic}/${ui.page}/${ui.ticket}`;
   readHash();
-  if (`${ui.epic}/${ui.ticket}` !== before) { ui.agent = null; ui.feed = null; }
+  if (`${ui.project}/${ui.epic}/${ui.page}/${ui.ticket}` !== before) { ui.agent = null; ui.feed = null; ui.tab = null; window.scrollTo(0, 0); }
+  ui.drawn = null;
   await refresh();
 }
 
-// --- Data ---
+// --- Data: every figure comes from one poll, and a poll redraws only when something changed ---
 async function refresh() {
-  let epics = [];
-  try { epics = await getJson("/api/epics"); } catch { return; }
-  const select = document.getElementById("epic");
-  select.replaceChildren(...epics.map((e) => h("option", { value: e.key, selected: e.key === ui.epic }, `${e.running ? "● " : ""}${e.key}`)));
-  select.onchange = () => go(select.value, null);
-  if (!epics.length) {
-    document.getElementById("detail").replaceChildren(h("div", { class: "empty" }, "No runs on this host yet. `loop start <Epic key>` starts one."));
+  let projects;
+  try { [projects, ui.usage] = await Promise.all([getJson("/api/projects"), getJson("/api/usage")]); } catch { return; }
+  ui.projects = projects;
+  if (!ui.project || !projects.some((p) => p.name === ui.project)) { go("", projects[0].name, ui.epic); return; }
+  try { ui.epics = await getJson(api("/api/epics")); } catch { return; }
+  renderContext();
+  if (!ui.epics.length) {
+    ui.view = null;
+    document.getElementById("run").replaceChildren();
+    document.getElementById("views").replaceChildren();
+    document.getElementById("main").replaceChildren(h("div", { class: "panel empty" }, "No runs of this project on this host yet. ", h("code", {}, "loop start <Epic key>"), " starts one."));
     return;
   }
-  if (!ui.epic || !epics.some((e) => e.key === ui.epic)) { go(epics[0].key, null); return; }
-  try { ui.view = await getJson(`/api/epic/${ui.epic}`); } catch { return; }
-  render();
+  if (!ui.epic || !ui.epics.some((e) => e.key === ui.epic)) {
+    const running = ui.epics.find((e) => e.running);
+    go("", ui.project, (running || ui.epics[0]).key);
+    return;
+  }
+  try { ui.view = await getJson(api(`/api/epic/${ui.epic}`)); } catch { return; }
+  if (ui.page === "usage") loadReport();
+  const drawn = JSON.stringify([ui.view, ui.usage, ui.page, ui.ticket, Math.floor(Date.now() / AGE_MS)]);
+  if (drawn !== ui.drawn) { ui.drawn = drawn; render(); }
+  else if (ui.feed && ui.feed.live) pollFeed();
+}
+
+function renderContext() {
+  const project = document.getElementById("project");
+  project.replaceChildren(...ui.projects.map((p) => h("option", { value: p.name, selected: p.name === ui.project }, p.name)));
+  project.disabled = ui.projects.length < 2;
+  project.parentElement.classList.toggle("single", ui.projects.length < 2);
+  project.onchange = () => go("", project.value, null);
+  const epic = document.getElementById("epic");
+  epic.replaceChildren(...ui.epics.map((e) => h("option", { value: e.key, selected: e.key === ui.epic },
+    `${e.key}${e.summary ? ` · ${e.summary}` : ""}${e.running ? " (running)" : ""}`)));
+  epic.onchange = () => go("", ui.project, epic.value);
 }
 
 function render() {
   const v = ui.view;
-  document.title = `${v.key} ${v.state} · Loop Watch`;
-  document.getElementById("title").textContent = `${v.key}${v.summary ? ` · ${v.summary}` : ""}`;
-  const stateLabel = v.state === "stopped" && v.stop_reason ? `stopped: ${v.stop_reason}` : v.state;
-  document.getElementById("state").replaceChildren(
-    v.state === "running" ? h("span", { class: "dot live" }) : "", " ", pill(stateLabel, v.state));
-  document.getElementById("meta").replaceChildren(
-    v.started ? h("span", {}, `Started ${when(v.started)}`) : "",
-    v.started ? h("span", {}, `${span(v.started, v.state === "running" ? null : v.updated)} ${v.state === "running" ? "so far" : "long"}`) : "",
-    h("span", { class: "faint" }, `last step ${ago(v.updated)}`),
-    v.pr_url ? h("a", { href: v.pr_url, target: "_blank" }, "Epic PR") : "");
-
-  const alerts = v.tickets.filter((t) => t.column === "stuck").map((t) =>
-    h("div", { class: "alert" }, h("b", {}, `${t.key} is stuck. `), (t.stuck_reason || "The ticket is flagged.").slice(0, 300)));
-  if (v.state === "stopped") alerts.unshift(h("div", { class: "alert" }, h("b", {}, "The run stopped: "), v.stop_reason));
-  document.getElementById("alerts").replaceChildren(...alerts);
-
-  renderStats(v);
-  renderPlan(v);
-  renderRunning(v);
-  renderProgress(v);
-  renderRecent(v);
-  renderBoard(v);
-  renderDetail(v);
+  document.title = `${v.key} ${(STATUS[v.status] || [v.status])[0]} · Loop Watch`;
+  renderRun(v);
+  const active = ui.page === "ticket" ? "tickets" : ui.page;
+  document.getElementById("views").replaceChildren(...VIEWS.map(([k, label]) =>
+    h("a", { href: hashFor(ui.project, ui.epic, k), class: active === k ? "on" : "", "aria-current": active === k ? "page" : null },
+      icon(ICONS[k][active === k ? 1 : 0]), label)));
+  const main = document.getElementById("main");
+  if (ui.page === "ticket") renderTicket(v);
+  else if (ui.page === "tickets") main.replaceChildren(pageHead(v, "Tickets"), ticketList(v));
+  else if (ui.page === "diagnostics") renderDiagnostics(v);
+  else if (ui.page === "usage") main.replaceChildren(pageHead(v, "Usage"), usageView(v));
+  else main.replaceChildren(pageHead(v, v.summary || v.key), metrics(v), h("div", { class: "work" }, workQueue(v), proof(v)));
+  if (ui.viewer) drawViewer();
+  watchTitle();
 }
 
-// --- Overview: figures from the logs only ---
-const PROGRESS = [["landed", "Landed", "seg-landed"], ["running", "Running", "seg-running"], ["stuck", "Stuck", "seg-stuck"], ["waiting", "Waiting", "seg-waiting"]];
-const WINDOWS = [["five_hour", "Five-hour"], ["seven_day", "Seven-day"]];
-const STEPS = [["agent", "Agent"], ["ticket-gate", "Ticket gate"], ["code-review", "Code review"], ["ui-review", "UI review"], ["land", "Land"]];
-const points = (n) => (typeof n === "number" ? `${n.toFixed(1)}` : "-");
-const when = (iso) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
-const resetAt = (epoch) => {
-  const d = new Date(epoch * 1000);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return d.toLocaleString([], sameDay ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" });
-};
-const duration = (minutes) => (minutes < 60 ? `${Math.round(minutes)}` : `${Math.floor(minutes / 60)}h ${Math.round(minutes % 60)}`);
-
-function stat(label, value, unit, sub, extra) {
-  return h("div", { class: "panel stat" }, h("div", { class: "label" }, label),
-    h("div", { class: "value" }, value, unit ? h("small", {}, ` ${unit}`) : ""), h("div", { class: "sub" }, sub), extra || "");
+function pageHead(v, title, over) {
+  return h("div", { class: "pagehead" },
+    h("div", { class: "over" }, over || [h("span", { class: "key" }, v.key), v.summary && title !== v.summary ? h("span", {}, v.summary) : ""]),
+    h("h1", { id: "title" }, title));
 }
 
-function renderStats(v) {
-  const s = v.stats;
-  const total = Math.max(s.total, 1);
-  const bar = h("div", { class: "segbar", title: PROGRESS.map(([k, label]) => `${label} ${s[k]}`).join(", ") },
-    PROGRESS.map(([k, , cls]) => (s[k] ? h("span", { class: cls, style: `width:${(s[k] / total) * 100}%` }) : "")));
-  const each = v.plan.per_landed || {};
-  document.getElementById("stats").replaceChildren(
-    stat("Tickets", `${s.landed}`, `of ${s.total} landed`, `${s.running} running · ${s.stuck} stuck · ${s.waiting} waiting`, bar),
-    stat("First-pass rate", s.first_pass_rate === null ? "-" : `${Math.round(s.first_pass_rate * 100)}%`, "",
-      "landed on the first ticket gate"),
-    stat("Time to land", s.median_land_minutes === null ? "-" : duration(s.median_land_minutes),
-      s.median_land_minutes === null ? "" : "min", "median per ticket"),
-    stat("Plan points", points(each.five_hour), each.five_hour === undefined ? "" : "pt",
-      each.seven_day === undefined ? "five-hour, per landed ticket" : `five-hour per landed ticket · ${points(each.seven_day)} pt seven-day`));
+// The large title shrinks into the bar once it scrolls away.
+let titleWatch = null;
+function watchTitle() {
+  const title = document.getElementById("title");
+  document.getElementById("compact").textContent = title ? title.textContent : "";
+  if (titleWatch) titleWatch.disconnect();
+  if (!title) return;
+  titleWatch = new IntersectionObserver(([entry]) => {
+    document.getElementById("top").classList.toggle("scrolled", !entry.isIntersecting && entry.boundingClientRect.top < 60);
+  }, { rootMargin: "-56px 0px 0px 0px" });
+  titleWatch.observe(title);
 }
 
-function renderPlan(v) {
-  const p = v.plan;
-  const meters = WINDOWS.filter(([w]) => p.now[w]).map(([w, label]) => {
-    const now = p.now[w];
-    const pct = Math.round(now.utilization * 100);
-    const tone = pct >= 90 ? "bad" : pct >= 70 ? "warn" : "";
-    const reset = now.resets_at ? (now.past ? `Reset at ${resetAt(now.resets_at)}. The run has not read the meter since.` : `Resets at ${resetAt(now.resets_at)}`) : "";
-    return h("div", { class: "meter" },
-      h("div", { class: "row" }, h("span", { class: "name" }, label), h("span", { class: "pct" }, `${pct}%`)),
-      h("div", { class: "track" }, h("div", { class: `fill ${tone}`, style: `width:${Math.min(pct, 100)}%` })),
-      h("div", { class: "when" }, reset));
-  });
-  const figures = WINDOWS.filter(([w]) => p.used[w] !== undefined).map(([w, label]) =>
-    h("div", {}, h("b", {}, `${points(p.used[w])} pt`), `${label} points this run`));
-  const fits = WINDOWS.filter(([w]) => p.fits[w] !== undefined).map(([w, label]) =>
-    h("div", {}, h("b", {}, `${p.fits[w]}`), `more tickets fit in the ${label.toLowerCase()} window`));
-  document.getElementById("plan").replaceChildren(
-    h("div", { class: "card-head" }, h("h2", {}, "Plan usage")),
-    h("div", { class: "card-body" },
-      meters.length ? meters : h("div", { class: "muted" }, "No agent run of this run has logged the plan meter yet."),
-      figures.length || fits.length ? h("div", { class: "figures" }, figures, fits) : "",
-      h("div", { class: "note" }, "The meter covers all use of the account, not only the loop.")));
+function pauseUntil(v) {
+  const pause = v.events.slice().reverse().find((e) => e.result === "usage-pause");
+  const match = pause && /resets at (\S+?)\.?$/.exec(pause.detail || "");
+  return match ? new Date(match[1]).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
 }
 
-function renderRunning(v) {
-  const running = v.tickets.filter((t) => t.column === "running");
-  const cards = running.map((t) => {
-    const step = t.step || { name: "agent", since: null, paused: false };
-    const at = STEPS.findIndex(([k]) => k === step.name);
-    return h("button", { class: "runcard", onclick: () => go(ui.epic, t.key) },
-      h("div", { class: "top" }, h("span", { class: step.paused ? "dot" : "dot live" }), h("span", { class: "key" }, t.key),
-        step.paused ? pill("paused", "paused") : ""),
-      h("div", { class: "sum" }, t.summary || ""),
-      h("div", { class: "stepper" }, STEPS.map(([k, label], i) =>
-        h("div", { class: `st${i < at ? " past" : ""}${i === at ? " now" : ""}${i === at && step.paused ? " paused" : ""}` }, label))),
-      h("div", { class: "elapsed" }, step.since ? `${STEPS[at] ? STEPS[at][1] : step.name} for ${span(step.since, null)}${step.paused ? ", waiting for the usage limit to reset" : ""}` : ""),
-      t.recent && t.recent.length ? h("div", { class: "lines" }, t.recent.map((item) =>
-        h("div", { class: "line" }, h("span", { class: "name" }, item.kind === "tool" ? item.tool : "Text"),
-          h("span", { class: "what" }, item.summary || item.text || "")))) : "");
-  });
-  document.getElementById("running").replaceChildren(
-    h("div", { class: "card-head", style: "padding:0 2px 8px" }, h("h2", {}, `Running now · ${running.length}`)),
-    cards.length ? h("div", { class: "runcards" }, cards) : h("div", { class: "panel idle-note" }, v.state === "running" ? "No ticket runs at the moment." : "The run is not running."));
+function renderRun(v) {
+  const last = v.events[v.events.length - 1];
+  const until = v.status === "paused" ? pauseUntil(v) : null;
+  const [label, tone] = STATUS[v.status] || [v.status, ""];
+  document.getElementById("run").replaceChildren(
+    last ? h("span", { class: "last", title: `${last.ticket} ${last.step} ${last.result}` }, `Last step ${ago(last.time)}`) : "",
+    v.pr_url ? h("a", { class: "pr", href: v.pr_url, target: "_blank", rel: "noopener" }, v.state === "pr-draft" ? "Draft PR" : "Epic PR") : "",
+    h("span", { title: v.stop_reason || "" }, tile([until ? `${label} until ${until}` : label, tone], true)));
 }
 
-function renderProgress(v) {
-  const s = v.stats;
-  const total = Math.max(s.total, 1);
-  let at = 0;
-  const stops = PROGRESS.map(([k, , cls]) => {
-    const color = { "seg-landed": "var(--ok)", "seg-running": "var(--run)", "seg-stuck": "var(--bad)", "seg-waiting": "color-mix(in srgb, var(--warn) 55%, var(--line))" }[cls];
-    const from = at; at += (s[k] / total) * 100;
-    return `${color} ${from}% ${at}%`;
-  });
-  const ring = h("div", { class: "ring", style: `background: conic-gradient(${stops.join(", ")}, var(--code-bg) ${at}% 100%)` },
-    h("div", { class: "hole" }, h("div", {}, h("b", {}, `${s.landed}/${s.total}`), h("span", {}, "landed"))));
-  const legend = h("div", { class: "legend" }, PROGRESS.map(([k, label, cls]) =>
-    h("div", {}, h("i", { class: cls }), label, h("b", {}, String(s[k])))));
-  document.getElementById("progress").replaceChildren(
-    h("div", { class: "card-head" }, h("h2", {}, "Progress")),
-    h("div", { class: "card-body" }, h("div", { class: "progress" }, ring, legend)));
+// --- Overview: the figures ---
+function metric(label, value, extra) {
+  return h("section", { class: "panel metric" }, h("h2", {}, label), value, extra);
 }
 
-function renderRecent(v) {
-  const events = v.events.slice(-8).reverse();
-  document.getElementById("recent").replaceChildren(
-    h("div", { class: "card-head" }, h("h2", {}, "Recent activity")),
-    h("div", { class: "card-body" }, events.length ? h("ul", { class: "events" }, events.map((e) =>
-      h("li", {}, h("span", { class: "t" }, clock(e.time)),
-        h("span", { class: "w", title: e.detail || "" }, h("span", { class: "k" }, e.ticket), e.step),
-        pill(e.result, e.result)))) : h("div", { class: "muted" }, "No steps yet.")));
+function metrics(v) {
+  const { complete, total } = v.progress;
+  const share = total ? Math.round((complete / total) * 100) : 0;
+  const progress = metric("Epic progress",
+    h("div", { class: "figure" }, h("b", {}, String(complete)), `of ${plural(total, "ticket", "tickets")}`),
+    [h("div", { class: "track" }, h("span", { style: `width:${share}%` })),
+      h("div", { class: "sub", title: "A ticket is complete when it has landed on the Epic branch, or was done in the tracker before." }, `${share}% complete`)]);
+  return h("div", { class: "metrics" }, progress, ...WINDOWS.map(([w, label]) => usageCard(label, ui.usage[w])));
 }
 
-function renderBoard(v) {
-  const groups = [h("button", { class: `card epic${ui.ticket ? "" : " selected"}`, onclick: () => go(v.key, null) },
-    h("div", { class: "row" }, h("b", {}, "Whole run"), h("span", { class: "faint" }, `${v.events.length} steps`)))];
-  for (const [column, label] of ORDER) {
-    const tickets = v.tickets.filter((t) => t.column === column);
-    if (!tickets.length) continue;
-    groups.push(h("div", { class: "group" }, h("h3", {}, `${label} · ${tickets.length}`), tickets.map((t) => card(t))));
+function usageCard(label, reading) {
+  if (!reading) {
+    return metric(label, h("div", { class: "figure na" }, h("b", {}, "Unavailable")),
+      h("div", { class: "sub" }, "No agent on this host has reported the plan meter yet. The API cost does not stand in for it."));
   }
-  document.getElementById("board").replaceChildren(...groups);
+  if (reading.past) {
+    return metric(label, h("div", { class: "figure na" }, h("b", {}, "Unknown since reset")),
+      h("div", { class: "sub" }, `The window reset ${at(reading.resets_at)}, and no agent has read the meter since.`));
+  }
+  const used = Math.round(reading.utilization * 100);
+  const tone = used >= 90 ? "bad" : used >= 70 ? "warn" : "";
+  const reset = typeof reading.resets_at === "number" ? `resets in ${length((reading.resets_at * 1000 - Date.now()) / 60000)}` : "";
+  return metric(label, h("div", { class: "figure" }, h("b", {}, `${used}%`), "used"), [
+    h("div", { class: "track" }, h("span", { class: tone, style: `width:${Math.min(used, 100)}%` })),
+    h("div", { class: "sub", title: `Read ${ago(reading.read)}. The meter covers all use of the account, not only the loop.${typeof reading.resets_at === "number" ? ` It resets ${at(reading.resets_at)}.` : ""}` },
+      [`${Math.max(0, 100 - used)}% left`, reset].filter(Boolean).join(" · "))]);
 }
 
-function card(t) {
-  const waits = (t.blockers || []).filter((b) => !b.done).map((b) => b.key);
-  return h("button", { class: `card${ui.ticket === t.key ? " selected" : ""}`, onclick: () => go(ui.epic, t.key) },
-    h("div", { class: "row" }, t.column === "running" ? h("span", { class: "dot live" }) : "", h("span", { class: "key" }, t.key)),
-    h("div", { class: "sum" }, t.summary || ""),
-    h("div", { class: "sub" },
-      t.last ? h("span", {}, t.last.step === t.last.result ? t.last.step : `${t.last.step} ${t.last.result}`) : "",
-      t.last ? h("span", { class: "faint" }, ago(t.last.time)) : "",
-      t.cost ? h("span", { title: "list price (API)" }, `${money(t.cost)} list`) : "",
-      waits.length ? h("span", {}, `waits on ${waits.join(", ")}`) : ""));
+// --- Overview: the work queue ---
+function workQueue(v) {
+  const working = v.tickets.filter((t) => t.column === "running");
+  const stuck = v.tickets.filter((t) => t.column === "stuck");
+  const byKey = Object.fromEntries(v.tickets.map((t) => [t.key, t]));
+  const groups = [h("div", { class: "group" }, h("h3", {}, "Currently working"), working.length ? working.map(currentCard) : stateNote(v))];
+  if (stuck.length) {
+    groups.push(h("div", { class: "group" }, h("h3", {}, "Needs you"), h("ul", { class: "list" }, stuck.map((t) =>
+      h("li", {}, h("button", { onclick: () => go(t.key) }, h("span", { class: "n" }, ""),
+        h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, t.key), " ", t.summary),
+          h("div", { class: "rowreason" }, t.stuck_reason || "The ticket is flagged in the tracker.")),
+        tile(COLUMN.stuck)))))));
+  }
+  if (v.queue.length) {
+    groups.push(h("div", { class: "group" }, h("h3", {}, "Up next"), h("ul", { class: "list" }, v.queue.slice(0, QUEUE_SHOWN).map((q, i) => {
+      const t = byKey[q.key];
+      const label = q.state === "ready" ? "Ready" : `${q.state === "blocked" ? "Blocked by" : "Waits on"} ${q.waits_on.join(", ")}`;
+      return h("li", {}, h("button", { onclick: () => go(q.key) }, h("span", { class: "n" }, `${i + 1}`),
+        h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, q.key), " ", t.summary)),
+        tile([label, QUEUE[q.state][1]])));
+    })), v.queue.length > QUEUE_SHOWN ? h("div", { class: "more" }, `${v.queue.length - QUEUE_SHOWN} more after these`) : ""));
+  }
+  return h("section", { class: "panel" },
+    h("div", { class: "phead" }, h("h2", {}, "Work queue"), h("a", { class: "aside", href: hashFor(ui.project, ui.epic, "tickets") }, "All tickets")),
+    h("div", { class: "pbody" }, groups));
 }
 
-// --- Detail ---
-function renderDetail(v) {
-  const t = ui.ticket ? v.tickets.find((x) => x.key === ui.ticket) : null;
-  const panel = document.getElementById("detail");
-  const agents = t ? t.agents : v.epic_agents;
-  const shots = t ? t.screenshots : [];
-  const files = t ? t.files : v.epic_files;
-  const tabs = [["activity", `Activity${agents.length ? ` · ${agents.length} runs` : ""}`], ["steps", "Steps"]];
+function stepper(step) {
+  const now = STEPS.findIndex(([k]) => k === step.name);
+  return h("div", { class: "stepper" }, STEPS.map(([k, label], i) =>
+    h("div", { class: `st${i < now ? " past" : ""}${i === now ? " now" : ""}${i === now && step.paused ? " paused" : ""}` }, label)));
+}
+
+function currentCard(t) {
+  const step = t.step || { name: "agent", since: null, paused: false };
+  const health = t.health || { state: "on-track", reason: "" };
+  const latest = (t.recent || [])[t.recent.length - 1];
+  const output = t.agents.length ? t.agents[t.agents.length - 1].updated : null;
+  return h("button", { class: "current", onclick: () => go(t.key) },
+    h("div", { class: "top" }, h("span", { class: "key" }, t.key), tile(step.paused ? ["Paused", "warn"] : HEALTH[health.state], true)),
+    h("div", { class: "title" }, t.summary || ""),
+    stepper(step),
+    h("dl", { class: "facts" },
+      h("dt", {}, "Stage"), h("dd", {}, `${stepName(step.name)}${step.since ? ` · ${since(step.since)}` : ""}`),
+      h("dt", {}, "Latest activity"), h("dd", { title: latest ? latest.summary || latest.text : "" },
+        latest ? [latest.kind === "tool" ? h("span", { class: "toolname" }, latest.tool) : "", latest.summary || latest.text] : h("span", { class: "muted" }, "No agent output yet")),
+      h("dt", {}, "Last agent output"), h("dd", {}, output ? ago(output) : "-")),
+    health.reason ? h("div", { class: "why" }, health.reason) : "");
+}
+
+function stateNote(v) {
+  const said = {
+    running: "The run is between tickets. The next one starts shortly.",
+    paused: "The run is paused for the usage limit.",
+    completed: v.pr_url ? "Every ticket is complete and the Epic PR is open." : "Every ticket is complete.",
+    blocked: STOPPED[v.stop_reason] || "The run stopped. A stuck ticket needs you.",
+    failed: STOPPED["loop-error"],
+    stopped: STOPPED[v.stop_reason] || `The run stopped: ${v.stop_reason}.`,
+    idle: ["The loop is not running. ", h("code", {}, `loop start ${v.key}`), " starts it."],
+  }[v.status];
+  const stop = v.events.slice().reverse().find((e) => e.ticket === v.key && e.step === "stop");
+  return h("div", { class: "note" }, h("b", {}, said || "No ticket is running."),
+    v.status === "failed" && stop && stop.detail ? h("div", { style: "margin-top:6px" }, stop.detail.slice(0, 300)) : "");
+}
+
+// --- Overview: the screenshots ---
+const verdictTile = (t) => tile(VERDICT[t.verdict] || VERDICT.unreviewed);
+
+function shotTickets(v) {
+  // The running tickets first, then the ticket whose screenshots are newest.
+  const newest = (t) => t.screenshots.reduce((m, s) => (s.time > m ? s.time : m), "");
+  return v.tickets.filter((t) => t.screenshots.length)
+    .sort((a, b) => (b.column === "running") - (a.column === "running") || newest(b).localeCompare(newest(a)));
+}
+
+function thumb(t, i) {
+  const s = t.screenshots[i];
+  return h("button", { class: "thumb", title: `${t.key} · ${shotName(s.path)} · ${when(s.time)}`, onclick: () => openViewer(t.key, i) },
+    image(fileUrl(s.path, s.time), shotName(s.path)), h("span", {}, shotName(s.path)));
+}
+
+function proof(v) {
+  const tickets = shotTickets(v);
+  const all = tickets.reduce((n, t) => n + t.screenshots.length, 0);
+  const head = h("div", { class: "phead" }, h("h2", {}, "Visual proof"),
+    all ? h("a", { class: "aside", href: "#", onclick: (e) => { e.preventDefault(); openViewer(tickets[0].key, 0); } }, `All ${all} screenshots`) : "");
+  if (!tickets.length) {
+    return h("section", { class: "panel" }, head, h("div", { class: "pbody" }, h("div", { class: "note" }, "No screenshots yet. A UI review saves them when a ticket changes the UI.")));
+  }
+  const t = tickets[0];
+  const newest = t.screenshots.reduce((m, s) => (s.time > m ? s.time : m), "");
+  return h("section", { class: "panel" }, head, h("div", { class: "pbody" },
+    h("div", { class: "proof-head" }, h("span", { class: "who" }, h("a", { href: hashFor(ui.project, ui.epic, t.key) }, t.key), ` · ${ago(newest)}`), verdictTile(t)),
+    h("div", { class: "thumbs" }, t.screenshots.slice(0, PROOF_SHOWN).map((_, i) => thumb(t, i))),
+    t.screenshots.length > PROOF_SHOWN ? h("div", { class: "more" }, h("a", { href: "#", onclick: (e) => { e.preventDefault(); openViewer(t.key, PROOF_SHOWN); } }, `${t.screenshots.length - PROOF_SHOWN} more of ${t.key}`)) : ""));
+}
+
+// --- Screenshot viewer ---
+function openViewer(key, index) {
+  const t = ui.view.tickets.find((x) => x.key === key);
+  ui.viewer = { key, path: t && t.screenshots[index] ? t.screenshots[index].path : null };
+  drawViewer();
+}
+function closeViewer() { ui.viewer = null; document.getElementById("viewer").hidden = true; }
+function moveViewer(by) {
+  const t = ui.view.tickets.find((x) => x.key === ui.viewer.key);
+  if (!t || !t.screenshots.length) return;
+  const i = Math.max(0, t.screenshots.findIndex((s) => s.path === ui.viewer.path));
+  ui.viewer.path = t.screenshots[(i + by + t.screenshots.length) % t.screenshots.length].path;
+  drawViewer();
+}
+// A poll redraws the viewer too. It keeps the screenshot open by its path, so a new review shows at once.
+function drawViewer() {
+  const el = document.getElementById("viewer");
+  const tickets = shotTickets(ui.view);
+  const t = tickets.find((x) => x.key === ui.viewer.key) || tickets[0];
+  if (!t) return closeViewer();
+  ui.viewer.key = t.key;
+  const i = Math.max(0, t.screenshots.findIndex((s) => s.path === ui.viewer.path));
+  const s = t.screenshots[i];
+  ui.viewer.path = s.path;
+  const src = fileUrl(s.path, s.time);
+  const pick = h("select", { "aria-label": "Ticket", onchange: (e) => openViewer(e.target.value, 0) },
+    tickets.map((x) => h("option", { value: x.key, selected: x.key === t.key }, `${x.key} · ${plural(x.screenshots.length, "screenshot", "screenshots")}`)));
+  el.replaceChildren(
+    h("div", { class: "vbar" }, pick,
+      h("span", { class: "name", title: s.path }, h("b", {}, shotName(s.path)), h("span", {}, ` · ${i + 1} of ${t.screenshots.length} · ${when(s.time)}`)),
+      verdictTile(t),
+      h("button", { class: "btn", onclick: () => moveViewer(-1) }, "Previous"),
+      h("button", { class: "btn", onclick: () => moveViewer(1) }, "Next"),
+      h("a", { class: "btn", href: src, target: "_blank", rel: "noopener" }, "Original"),
+      h("button", { class: "btn primary", onclick: closeViewer }, "Close")),
+    h("div", { class: "vstage", onclick: (e) => { if (e.target === e.currentTarget) closeViewer(); } }, image(`${src}#full`, shotName(s.path))),
+    h("div", { class: "vstrip" }, t.screenshots.map((x) =>
+      h("button", { class: x.path === s.path ? "on" : "", title: shotName(x.path), onclick: () => { ui.viewer.path = x.path; drawViewer(); } }, image(fileUrl(x.path, x.time), shotName(x.path)).cloneNode()))));
+  el.hidden = false;
+}
+document.addEventListener("keydown", (e) => {
+  if (!ui.viewer) return;
+  if (e.key === "Escape") closeViewer();
+  else if (e.key === "ArrowLeft") moveViewer(-1);
+  else if (e.key === "ArrowRight") moveViewer(1);
+});
+
+// --- Tickets: every ticket of the Epic, in key order ---
+function ticketState(v, t) {
+  if (t.column === "waiting") {
+    const q = v.queue.find((x) => x.key === t.key);
+    if (q) return tile(QUEUE[q.state]);
+  }
+  if (t.column === "running" && t.step && t.step.paused) return tile(["Paused", "warn"]);
+  return tile(COLUMN[t.column] || [t.column, ""]);
+}
+
+function ticketList(v) {
+  const rows = v.tickets.map((t) => {
+    const open = (t.blockers || []).filter((b) => !b.done).map((b) => b.key);
+    const where = t.column === "running" && t.step ? `${stepName(t.step.name)} · ${since(t.step.since)}` : t.last ? lastStep(t.last) : "";
+    return h("tr", { onclick: () => go(t.key) },
+      h("td", { class: "t" }, h("span", { class: "key" }, t.key), t.summary || ""),
+      h("td", {}, ticketState(v, t)),
+      h("td", { class: "opt" }, where, t.last ? h("div", { class: "muted" }, ago(t.last.time)) : ""),
+      h("td", { class: "opt muted" }, open.length ? `Waits on ${open.join(", ")}` : (t.blockers || []).length ? "Met" : "None"));
+  });
+  return h("section", { class: "panel" },
+    h("div", { class: "pbody", style: "padding-top:20px" }, v.tickets.length ? h("table", { class: "tickets" },
+      h("thead", {}, h("tr", {}, h("th", {}, "Ticket"), h("th", {}, "State"), h("th", { class: "opt" }, "Stage or last step"), h("th", { class: "opt" }, "Dependencies"))),
+      h("tbody", {}, rows)) : h("div", { class: "empty" }, "The run has not read the Epic's tickets yet."),
+    h("div", { class: "fine" }, "A ticket is complete when it has landed on the Epic branch, or was done in the tracker before this run.")));
+}
+
+// --- Ticket detail ---
+function renderTicket(v) {
+  const t = v.tickets.find((x) => x.key === ui.ticket);
+  const main = document.getElementById("main");
+  if (!t) { main.replaceChildren(h("div", { class: "panel empty" }, `${ui.ticket} is not a ticket of ${v.key}.`)); return; }
+  const blockers = (t.blockers || []).map((b) => h("div", {}, h("span", { class: b.done ? "" : "muted" }, `${b.done ? "✓" : "○"} `), b.key));
+  const health = t.health;
+  const facts = [
+    ["Tracker status", t.status || "-"],
+    ["Depends on", blockers.length ? blockers : "None"],
+    t.step ? ["Stage", `${stepName(t.step.name)} · ${since(t.step.since)}${t.step.paused ? " · paused" : ""}`] : null,
+    t.last ? ["Last step", `${lastStep(t.last)} · ${ago(t.last.time)}`] : null,
+    ["Ticket gate", t.gate_failures ? `Failed ${t.gate_failures === 1 ? "once" : `${t.gate_failures} times`} since its last pass` : t.column === "landed" ? "Passed" : "No failure in this run"],
+    t.verdict ? ["UI review", (VERDICT[t.verdict] || VERDICT.unreviewed)[0]] : null,
+    t.cost ? ["API list price", h("span", { title: "What the API would bill. It is not the plan usage." }, `${money(t.cost)}, not plan usage`)] : null,
+  ].filter(Boolean);
+  const head = pageHead(v, t.summary || t.key, [h("a", { href: hashFor(ui.project, ui.epic, "tickets") }, "Tickets"), h("span", {}, "/"), h("span", { class: "key" }, t.key)]);
+  const top = h("div", { class: "detail-head" },
+    h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" }, ticketState(v, t), health ? tile(HEALTH[health.state], true) : ""),
+    t.step ? stepper(t.step) : "",
+    health && health.reason ? h("div", { class: "why", style: "margin:0" }, health.reason) : "",
+    t.stuck_reason ? h("div", { class: "reason" }, t.stuck_reason) : "",
+    h("dl", { class: "facts-grid" }, facts.map(([k, val]) => h("div", {}, h("dt", {}, k), h("dd", {}, val)))));
+  detailPanel(main, head, top, {
+    key: t.key, agents: t.agents, live: t.column === "running", events: v.events.filter((e) => e.ticket === t.key || String(e.ticket).startsWith(`${t.key}-`)),
+    ticket: t, files: t.files,
+  });
+}
+
+// --- Diagnostics: the whole run ---
+function renderDiagnostics(v) {
+  const facts = [
+    ["Branch", v.branch || "-"],
+    ["Started", v.started ? when(v.started) : "-"],
+    ["Length", v.started ? length(((v.state === "running" ? Date.now() : Date.parse(v.updated)) - Date.parse(v.started)) / 60000) : "-"],
+    ["Steps", String(v.events.length)],
+    v.pr_url ? ["Epic PR", h("a", { href: v.pr_url, target: "_blank", rel: "noopener" }, v.pr_url.replace(/^https?:\/\/(www\.)?/, ""))] : null,
+  ].filter(Boolean);
+  const top = h("div", { class: "detail-head" },
+    v.stop_reason ? h("div", { class: "reason" }, STOPPED[v.stop_reason] || `The run stopped: ${v.stop_reason}`) : "",
+    h("dl", { class: "facts-grid" }, facts.map(([k, val]) => h("div", {}, h("dt", {}, k), h("dd", {}, val)))));
+  detailPanel(document.getElementById("main"), pageHead(v, "Diagnostics"), top, {
+    key: v.key, agents: v.epic_agents, live: v.state === "running", events: v.events, ticket: null, files: v.epic_files, steps: true,
+  });
+}
+
+function detailPanel(main, head, top, d) {
+  const shots = d.ticket ? d.ticket.screenshots : [];
+  const tabs = d.steps ? [["steps", `Steps · ${d.events.length}`], ["activity", `Agent activity${runs(d.agents.length)}`]]
+    : [["activity", `Activity${runs(d.agents.length)}`], ["steps", `Steps · ${d.events.length}`]];
   if (shots.length) tabs.push(["shots", `Screenshots · ${shots.length}`]);
-  if (files.length) tabs.push(["files", `Files · ${files.length}`]);
-  if (!t) tabs.push(["cost", "Cost"]);
-  if (!tabs.some(([k]) => k === ui.tab)) ui.tab = "activity";
-
-  const head = h("div", { class: "head" },
-    h("div", { class: "row" }, h("h2", {}, t ? [t.key, t.summary].filter(Boolean).join(" · ") : `${v.key} · the whole run`), " ", t ? pill(t.column) : ""),
-    t && t.stuck_reason ? h("div", { class: "reason" }, t.stuck_reason) : "",
-    v.branch && !t ? h("div", { class: "muted mono" }, v.branch) : "");
-  const tabBar = h("div", { class: "tabs" }, tabs.map(([k, label]) =>
-    h("button", { class: ui.tab === k ? "on" : "", onclick: () => { ui.tab = k; renderDetail(ui.view); } }, label)));
-
+  if (d.files.length) tabs.push(["files", `Files · ${d.files.length}`]);
+  if (!ui.tab || !tabs.some(([k]) => k === ui.tab)) ui.tab = tabs[0][0];
+  const panel = main.querySelector(":scope > .panel.detail");
+  const bar = h("div", { class: "segments" }, tabs.map(([k, label]) =>
+    h("button", { class: ui.tab === k ? "on" : "", onclick: () => { ui.tab = k; ui.feed = null; render(); } }, label)));
   // The activity feed keeps its rows between polls, so an open row stays open.
-  const keep = ui.feed && ui.tab === "activity" && panel.contains(ui.feed.root);
+  if (panel && ui.feed && ui.tab === "activity" && panel.contains(ui.feed.root) && ui.feed.key === d.key) {
+    main.firstChild.replaceWith(head);
+    panel.children[0].replaceWith(top);
+    panel.children[1].replaceWith(bar);
+    if (ui.feed.live) pollFeed();
+    return;
+  }
   let body;
-  if (ui.tab === "activity") body = keep ? ui.feed.wrap : activityView(t ? t.key : v.key, agents, t ? t.column === "running" : v.state === "running");
-  else if (ui.tab === "steps") body = stepsView(v.events.filter((e) => !t || e.ticket === t.key));
-  else if (ui.tab === "cost") body = costView(v.key);
-  else if (ui.tab === "shots") body = h("div", { class: "body shots" }, shots.map((s) =>
-    h("a", { href: fileUrl(s), target: "_blank" }, h("img", { src: fileUrl(s), loading: "lazy", alt: s }), s.split("/").pop())));
-  else body = h("div", { class: "body files" }, files.map((f) => h("a", { href: fileUrl(f), target: "_blank" }, f.replace(/^runs\/[^/]+\//, ""))));
-  if (keep) { panel.firstChild.replaceWith(head); panel.children[1].replaceWith(tabBar); if (ui.feed.live) pollFeed(); return; }
-  panel.replaceChildren(head, tabBar, body);
+  if (ui.tab === "activity") body = activityView(d.key, d.agents, d.live);
+  else if (ui.tab === "steps") body = stepsView(d.events);
+  else if (ui.tab === "shots") body = h("div", { class: "body" }, h("div", { class: "proof-head" }, h("span", { class: "who" }, "The screenshots of the last UI review"), verdictTile(d.ticket)),
+    h("div", { class: "thumbs wide" }, shots.map((_, i) => thumb(d.ticket, i))));
+  else body = h("div", { class: "body files" }, d.files.map((f) => h("a", { href: fileUrl(f), target: "_blank" }, f.replace(/^runs\/[^/]+\//, ""))));
+  main.replaceChildren(head, h("section", { class: "panel detail" }, top, bar, body));
 }
 
 function stepsView(events) {
@@ -500,30 +801,77 @@ function stepsView(events) {
     h("tr", {},
       h("td", { class: "t" }, clock(e.time)),
       h("td", { class: "k" }, e.ticket),
-      h("td", {}, h("b", {}, e.step), " ", pill(e.result, e.result)),
-      h("td", { class: "d" }, e.cost !== undefined ? `${money(e.cost)} list price (API) · ${e.turns} turns ` : "",
+      h("td", { class: "s" }, h("b", {}, e.step), tile([e.result, RESULT[e.result] || ""])),
+      h("td", { class: "d" }, e.cost !== undefined ? `${money(e.cost)} API list price · ${e.turns} turns ` : "",
         e.log ? h("a", { href: fileUrl(e.log), target: "_blank" }, "log") : "", " ", e.log ? "" : (e.detail || "").slice(0, 400)))))));
 }
 
-// --- Cost: the latest run against the run before it (`loop report`) ---
-function costView(key) {
-  const wrap = h("div", { class: "body" });
-  const fill = (report) => wrap.replaceChildren(report ? costTable(report) : h("div", { class: "empty" }, "No run of this Epic has a cost yet."));
-  const cached = ui.report && ui.report.key === key;
-  if (cached) fill(ui.report.data); else wrap.append(h("div", { class: "empty" }, "Loading..."));
-  if (!cached || Date.now() - ui.report.at > 30000) {
-    getJson(`/api/report/${key}`)
-      .then((data) => { ui.report = { key, data, at: Date.now() }; fill(data); })
-      .catch(() => { ui.report = { key, data: null, at: Date.now() }; fill(null); });
+// --- Usage: the plan meter in full, what the run delivered, and the API list price ---
+function usageView(v) {
+  const p = v.plan;
+  const s = v.stats;
+  const meters = WINDOWS.map(([w, label]) => {
+    const r = ui.usage[w];
+    if (!r) return h("div", { class: "meter" }, h("div", { class: "row1" }, h("b", {}, label), h("span", { class: "muted" }, "Unavailable")));
+    const used = Math.round(r.utilization * 100);
+    const tone = used >= 90 ? "bad" : used >= 70 ? "warn" : "";
+    return h("div", { class: "meter" },
+      h("div", { class: "row1" }, h("b", {}, label), h("span", {}, r.past ? "Unknown since reset" : `${used}% used`)),
+      h("div", { class: "track" }, h("span", { class: tone, style: `width:${r.past ? 0 : Math.min(used, 100)}%` })),
+      h("div", { class: "when" }, `${r.past ? "Reset" : "Resets"} ${typeof r.resets_at === "number" ? at(r.resets_at) : "at an unknown time"} · read ${ago(r.read)}`));
+  });
+  const figs = [];
+  for (const [w, , windowName] of WINDOWS) {
+    if (p.used[w] !== undefined) figs.push(h("div", {}, h("b", {}, pct(p.used[w])), `of the ${windowName} used by this run`));
+    if (p.per_landed[w] !== undefined) figs.push(h("div", {}, h("b", {}, pct(p.per_landed[w])), `of the ${windowName} per landed ticket`));
+    if (p.fits[w] !== undefined) figs.push(h("div", {}, h("b", {}, `About ${p.fits[w]}`), `more tickets fit in the ${windowName} at that rate`));
   }
-  return wrap;
+  const delivery = [
+    h("div", {}, h("b", {}, `${s.landed}`), "tickets landed in this run"),
+    h("div", { title: "Of the tickets that landed in this run, the share whose first ticket gate passed." }, h("b", {}, s.first_pass_rate === null ? "-" : `${Math.round(s.first_pass_rate * 100)}%`), "landed on their first ticket gate"),
+    h("div", {}, h("b", {}, s.median_land_minutes === null ? "-" : length(s.median_land_minutes)), "median from start to landing"),
+    h("div", {}, h("b", {}, `${s.stuck}`), "tickets stuck"),
+  ];
+  ui.reportWrap = h("div", { class: "body" });
+  fillReport();
+  return h("div", { class: "usage-grid" },
+    h("section", { class: "panel" }, h("div", { class: "phead" }, h("h2", {}, "Plan meter")), h("div", { class: "pbody" }, meters,
+      h("div", { class: "fine" }, "The meter belongs to the account, so the loop and your own sessions move it together. This is the newest reading on this host."))),
+    h("section", { class: "panel" }, h("div", { class: "phead" }, h("h2", {}, "This run")), h("div", { class: "pbody" },
+      figs.length ? h("div", { class: "figs" }, figs) : h("div", { class: "muted" }, "No agent of this run has finished with a meter reading yet."),
+      h("div", { class: "figs" }, delivery))),
+    h("section", { class: "panel", style: "grid-column:1/-1" }, h("div", { class: "phead" }, h("h2", {}, "Against the run before"),
+      h("span", { class: "aside" }, "Dollars are the API list price, not what the plan costs")), ui.reportWrap));
+}
+
+// The comparison reads every run on the host, so a poll asks for it at most every 10 seconds.
+function loadReport() {
+  const key = `${ui.project}/${ui.epic}`;
+  if (ui.report && ui.report.key === key && Date.now() - ui.report.at < 10000) return;
+  const asked = Date.now();
+  const before = ui.report && ui.report.key === key ? ui.report.data : undefined;
+  ui.report = { key, data: before, at: asked };
+  getJson(api(`/api/report/${ui.epic}`)).catch(() => null).then((data) => {
+    if (!ui.report || ui.report.key !== key) return;
+    const changed = JSON.stringify(data) !== JSON.stringify(ui.report.data);
+    ui.report = { key, data, at: asked };
+    if (changed) fillReport();
+  });
+}
+
+function fillReport() {
+  const wrap = ui.reportWrap;
+  if (!wrap) return;
+  const data = ui.report && ui.report.key === `${ui.project}/${ui.epic}` ? ui.report.data : undefined;
+  if (data === undefined) wrap.replaceChildren(h("div", { class: "empty" }, "Loading..."));
+  else wrap.replaceChildren(data ? costTable(data) : h("div", { class: "empty" }, "No run of this Epic has a cost yet."));
 }
 
 function figure(kind, n) {
   if (n === null || n === undefined) return "-";
   if (kind === "money") return money(n);
   if (kind === "minutes") return `${Math.round(n)} min`;
-  if (kind === "points") return `${n.toFixed(1)} pt`;
+  if (kind === "percent") return pct(n);
   if (kind === "tokens") return n.toLocaleString();
   return String(n);
 }
@@ -539,17 +887,16 @@ function costTable(report) {
       rows.push(h("tr", { class: "sec" }, h("td", {}, section), h("td", { class: "n" }, top ? before : ""),
         h("td", { class: "n" }, top ? "This run" : ""), h("td", { class: "n" }, top ? "Change" : "")));
     }
-    const pct = typeof row.change === "number";
-    const change = pct ? `${row.change > 0 ? "+" : ""}${row.change}%` : row.change || "";
-    const tone = (row.kind === "money" || row.kind === "points") && pct && row.change !== 0 ? (row.change < 0 ? "down" : "up") : "";
-    const n = row.kind === "text" ? "n text" : "n";
+    const change = typeof row.change === "number" ? `${row.change > 0 ? "+" : ""}${row.change}%` : row.change || "";
+    const tone = (row.kind === "money" || row.kind === "percent") && typeof row.change === "number" && row.change !== 0 ? (row.change < 0 ? "down" : "up") : "";
+    const n = row.kind === "text" ? "n txt" : "n";
     rows.push(h("tr", {}, h("td", {}, row.label), h("td", { class: n }, figure(row.kind, row.previous)),
       h("td", { class: n }, figure(row.kind, row.current)), h("td", { class: `n ${tone}` }, change)));
   }
   return h("table", { class: "steps cost" }, h("tbody", {}, rows));
 }
 
-// --- Activity ---
+// --- Agent activity: one line per tool call, read from the log as it grows ---
 function activityView(key, agents, live) {
   if (!agents.length) return h("div", { class: "empty" }, "No agent run yet.");
   if (!ui.agent || !agents.some((a) => a.number === ui.agent)) ui.agent = agents[agents.length - 1].number;
@@ -557,7 +904,7 @@ function activityView(key, agents, live) {
   const follow = h("input", { type: "checkbox", checked: ui.follow, onchange: (e) => { ui.follow = e.target.checked; } });
   const wrap = h("div", { class: "body" },
     h("div", { class: "runs" },
-      agents.map((a) => h("button", { class: a.number === ui.agent ? "on" : "", onclick: () => { ui.agent = a.number; ui.feed = null; renderDetail(ui.view); } }, `Run ${a.number}`)),
+      agents.map((a) => h("button", { class: a.number === ui.agent ? "on" : "", onclick: () => { ui.agent = a.number; ui.feed = null; render(); } }, `Run ${a.number}`)),
       h("label", {}, follow, "Follow")),
     root);
   ui.feed = { key, wrap, root, agent: ui.agent, offset: 0, rows: {}, live: live && ui.agent === agents[agents.length - 1].number, busy: false };
@@ -571,7 +918,7 @@ async function pollFeed() {
   feed.busy = true;
   try {
     for (;;) {
-      const data = await getJson(`/api/agent/${ui.epic}/${feed.key}/${feed.agent}?offset=${feed.offset}`);
+      const data = await getJson(api(`/api/agent/${ui.epic}/${feed.key}/${feed.agent}?offset=${feed.offset}`));
       if (feed !== ui.feed) return;
       const root = feed.root;
       const atEnd = feed.offset === 0 || root.scrollHeight - root.scrollTop - root.clientHeight < 40;
@@ -596,10 +943,10 @@ function addItem(feed, item) {
   }
   let row = null;
   if (item.kind === "init") row = h("div", { class: "divider" }, `Session started${item.model ? ` · ${item.model}` : ""}`);
-  else if (item.kind === "result") row = h("div", { class: "divider" }, `Turn ended${item.error ? " with an error" : ""} · ${money(item.total_cost_usd)} list price (API) · ${item.num_turns ?? "?"} turns · ${Math.round((item.duration_ms || 0) / 60000)} min`);
+  else if (item.kind === "result") row = h("div", { class: "divider" }, `Turn ended${item.error ? " with an error" : ""} · ${money(item.total_cost_usd)} API list price · ${item.num_turns ?? "?"} turns · ${Math.round((item.duration_ms || 0) / 60000)} min`);
   else if (item.kind === "text") row = h("div", { class: `item${sub}` }, h("div", { class: "text", onclick: (e) => e.currentTarget.classList.toggle("open") }, item.text));
   else if (item.kind === "status") {
-    row = h("div", { class: `status ${item.status}` }, h("b", {}, item.status === "done" ? "Done. " : "Blocked. "), item.text,
+    row = h("div", { class: `verdict ${item.status}` }, h("b", {}, item.status === "done" ? "Done. " : "Blocked. "), item.text,
       item.decisions?.length ? h("ul", {}, item.decisions.map((d) => h("li", {}, d))) : "");
   } else if (item.kind === "tool") {
     const mark = h("span", { class: "mark wait" }, "…");
@@ -614,6 +961,8 @@ function addItem(feed, item) {
 
 route();
 setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+// A tab that comes back to the front catches up at once.
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 </script>
 </body>
 </html>
