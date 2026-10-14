@@ -39,6 +39,14 @@ class Stack:
 
 
 @dataclass(frozen=True)
+class Demo:
+    """The always-on demo. `command` points it at a branch, and each `{branch}` in it names the branch."""
+
+    command: tuple[str, ...]
+    url: str
+
+
+@dataclass(frozen=True)
 class PlanSpan:
     """The Claude plan from `since` on. A date with no time leaves the runs of that day to either plan."""
 
@@ -82,6 +90,7 @@ class Config:
     backlog_minutes: int
     plans: tuple[PlanSpan, ...]
     stack: Stack | None
+    demo: Demo | None
     secrets: Mapping[str, Secret]
     state_dir: Path
 
@@ -125,6 +134,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
     stack_table = top.table("stack", optional=True)
     watch = top.table("watch", optional=True)
     agent = top.table("agent", optional=True)
+    demo_table = top.table("demo", optional=True)
     secrets_table = top.table("secrets")
 
     secrets = {}
@@ -141,6 +151,13 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         ports = stack_table.table("ports")
         stack = Stack({port: ports.number(port) for port in ports.keys()}, stack_table.number("port_step"))
         ports.done()
+
+    demo = None
+    if "demo" in data:
+        command = demo_table.texts("command")
+        if not command:
+            raise ValueError("demo.command must not be empty")
+        demo = Demo(command, demo_table.text("url"))
 
     config = Config(
         repo=repo,
@@ -170,10 +187,12 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         backlog_minutes=watch.number("backlog_minutes", 5),
         plans=_plans(watch.tables("plans")),
         stack=stack,
+        demo=demo,
         secrets=secrets,
         state_dir=state_dir or Path.home() / ".local/state" / f"{name}-loop",
     )
-    for table in (top, tracker, gates, limits, notify, ui, stack_table, watch, agent, secrets_table):
+    tables = (top, tracker, gates, limits, notify, ui, stack_table, watch, agent, demo_table, secrets_table)
+    for table in tables:
         table.done()
     return config
 
