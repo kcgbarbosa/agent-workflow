@@ -1,12 +1,14 @@
 ---
 name: to-spec
-description: "Turn the current conversation into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already discussed."
+description: "Turn the current conversation into a spec file in the project repo: no interview, just synthesis of what you've already discussed."
 disable-model-invocation: true
 ---
 
-This skill takes the current conversation context and codebase understanding and produces a spec. Do NOT interview the user; just synthesize what you already know.
+This skill takes the current conversation context and codebase understanding and writes a **spec**: the agent-facing requirements of one feature. The spec is the source of truth for the build, the tests and the tickets. Do NOT interview the user; just synthesize what you already know.
 
-The issue tracker and triage label vocabulary should have been provided to you. If not, tell the user to run `/setup-matt-pocock-skills`.
+The spec is a file in the project repo. Read `docs/agents/domain.md` for its folder; the default is `docs/product/specs/<feature>.md`. Read `docs/agents/issue-tracker.md` for the Epic. If either file is missing, tell the user to run `/setup-repo`.
+
+The spec is not the PRD. `/to-prd` writes the PRD into the Epic description, and `/to-tickets` writes the tickets. This skill publishes nothing to the issue tracker.
 
 ## Process
 
@@ -16,29 +18,39 @@ The issue tracker and triage label vocabulary should have been provided to you. 
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec using the template below, then publish it to the project issue tracker. Apply the `ready-for-agent` triage label - no need for additional triage.
+3. Write the spec to its file using the template below. When the file exists, update it in place. Take the Epic link from the user or the conversation; when there is none, write `Epic: none yet` and say so in your reply.
+
+4. Tell the user the path of the file. The next steps are `/to-prd`, then `/to-tickets`.
 
 <spec-template>
 
+# <Feature name>
+
+Epic: <Jira link>. Key persona: <Role>. ADRs: <numbers>. One line on what this file holds.
+
 ## Problem Statement
 
-The problem that the user is facing, from the user's perspective.
+The real-world problem that the user is facing, from the user's perspective. No project status. Status goes in Further Notes.
 
 ## Solution
 
-The solution to the problem, from the user's perspective.
+The solution to the problem, from the user's perspective. Short. Implementation Decisions holds the mechanism.
 
 ## User Stories
 
-A LONG, numbered list of user stories. Each user story should be in the format of:
+Group the stories under plain capability headings. Tag each group Must, Should or Later.
+Number the stories straight through the whole list (US-1, US-2, ...). Never restart the count in a group.
+The last group, "Behind the scenes", holds the stories whose actor is the maintainer or the system.
 
-1. As an <actor>, I want a <feature>, so that <benefit>
+Each story is in the format:
+
+US-1. As a <Role>, I want <one observable behaviour>, so that <benefit>
 
 <user-story-example>
-1. As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending
+US-1. As a mobile bank customer, I want to see the balance of each account, so that I can make better informed decisions about my spending
 </user-story-example>
 
-This list of user stories should be extremely extensive and cover all aspects of the feature.
+Every story is one behaviour that a test can pass or fail. This list of user stories should be extremely extensive and cover all aspects of the feature.
 
 ## Implementation Decisions
 
@@ -48,9 +60,11 @@ A list of implementation decisions that were made. This can include:
 - The interfaces of those modules that will be modified
 - Technical clarifications from the developer
 - Architectural decisions
-- Schema changes
-- API contracts
+- Schema, rules, API contracts, screens and status screens
+- Seed data
 - Specific interactions
+
+Do NOT include an "Order of the work": `/to-tickets` derives it.
 
 Do NOT include specific file paths or code snippets. They may end up being outdated very quickly.
 
@@ -61,15 +75,16 @@ Exception: if a prototype produced a snippet that encodes a decision more precis
 A list of testing decisions that were made. Include:
 
 - A description of what makes a good test (only test external behavior, not implementation details)
-- Which modules will be tested
+- The seams, and the tools
 - Prior art for the tests (i.e. similar types of tests in the codebase)
+- A test table. Each row names a test and cites the story IDs it covers. A row does not restate a rule.
 
 ## Out of Scope
 
-A description of the things that are out of scope for this spec.
+A list of the things that are out of scope for this spec. Each item has its reason and the ticket that picks it up, or "none planned". Mark each item user-visible or technical.
 
 ## Further Notes
 
-Any further notes about the feature.
+Dependencies, release holds, go-live checks, and the current state of the project.
 
 </spec-template>
