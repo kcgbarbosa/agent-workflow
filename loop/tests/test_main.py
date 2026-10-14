@@ -170,7 +170,7 @@ def test_loop_start_names_the_tailnet_address_of_the_watch_page(
     monkeypatch.setenv("WAYLAND_DISPLAY", "")
 
     monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1", "100.64.0.7"])
-    assert cli.open_watch(settings, "DEMO-33") == "http://100.64.0.7:8790/#/DEMO-33"
+    assert cli.open_watch(settings, "DEMO-33") == "http://100.64.0.7:8790/#/demo/DEMO-33"
 
     monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1"])
-    assert cli.open_watch(settings, "DEMO-33") == "http://127.0.0.1:8790/#/DEMO-33"
+    assert cli.open_watch(settings, "DEMO-33") == "http://127.0.0.1:8790/#/demo/DEMO-33"

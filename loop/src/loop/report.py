@@ -24,7 +24,7 @@ FINDINGS = re.compile(r"(\d+) (?:findings|faults)")
 ROLES = {"head": "Head agent and its subagents", "review": "Reviews", "pr": "PR body"}
 # The dollar figures are what the API would bill. KC pays a plan, and its meter is the cost that counts.
 LIST_PRICE = "list price (API)"
-WINDOWS = {"five_hour": "Five-hour", "seven_day": "Seven-day"}
+WINDOWS = {"five_hour": "5-hour", "seven_day": "Weekly"}
 
 
 def split_runs(epic: str, lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -74,11 +74,11 @@ def haiku_over_cap(models: dict[str, Any]) -> float:
 
 
 def plan_usage(run: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """The plan points a run used, and the meter at its last agent line (loop.md rule 11).
+    """The share of each plan window a run used, in percent, and the meter at its last agent line (loop.md
+    rule 11).
 
     The meter is the account's, so parallel sessions, and KC's own, move it together. For each window, which
-    one reset time names, the run used the highest end less the lowest start of its agent lines. One point
-    is 1% of the window.
+    one reset time names, the run used the highest end less the lowest start of its agent lines.
     """
     spans: dict[tuple[str, Any], tuple[float, float]] = {}
     now: dict[str, dict[str, Any]] = {}
@@ -171,7 +171,7 @@ def breakdown(epic: str, run: list[dict[str, Any]]) -> dict[str, Any]:
         "cost": cost,
         "cost_per_landed": cost / landed if landed else None,
         "plan_used": plan["used"],
-        "plan_per_landed": {window: round(points / landed, 1) for window, points in plan["used"].items()}
+        "plan_per_landed": {window: round(share / landed, 1) for window, share in plan["used"].items()}
         if landed
         else {},
         "meter": plan["now"],
@@ -232,15 +232,15 @@ def compare(current: dict[str, Any], previous: dict[str, Any] | None) -> list[di
             rows += [
                 _row(
                     "Plan usage",
-                    f"{name} points used",
-                    "points",
+                    f"{name} window used",
+                    "percent",
                     before_used.get(window),
                     after_used.get(window),
                 ),
                 _row(
                     "Plan usage",
-                    f"{name} points per landed ticket",
-                    "points",
+                    f"{name} window used per landed ticket",
+                    "percent",
                     before_each.get(window),
                     after_each.get(window),
                 ),
@@ -361,8 +361,8 @@ def _value(kind: str, value: Any) -> str:
         return f"${value:,.2f}"
     if kind == "minutes":
         return f"{value:,.0f} min"
-    if kind == "points":
-        return f"{value:,.1f} pt"
+    if kind == "percent":
+        return f"{value:,.1f}%"
     if kind == "tokens":
         return f"{value:,.0f}"
     return str(value)
