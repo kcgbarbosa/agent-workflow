@@ -35,7 +35,6 @@ Write plain professional prose, as a product manager would. The PRD is exempt fr
 - The PRD body holds no name or title of a real person. Persona names are fictional. The one exception is the Owner line, which takes the owner given in `docs/agents/issue-tracker.md`.
 - Success numbers come only from the Metrics page. Each goal copies its baseline and target from one row. A feature with no row gets a named signal and no target. Keep the caveat that a figure carries, for example "estimate". End the goals with one line that names the baseline source.
 - Scenario names equal the spec's story group names.
-- Link a design only when the spec or the current Epic description already links it. Invent no link.
 - Take the Target from the Epic's sprint or due date. When the Epic has none, write "Target: not set".
 - Write Rollout only for a feature that ships after go-live. The spec's Further Notes and the README say when go-live is. When they do not say, leave Rollout out and tell the user.
 - Leave out Decisions and open questions when it is empty. Every other section stays.
@@ -57,7 +56,7 @@ Owner: <name>. Target: <sprint or date>.
 
 **Goals and success.** Two to four outcomes. Each has the baseline, the target, how it is measured, and why it matters.
 
-**How it works.** Two or three short scenarios, each a person doing a real task start to finish. Link the designs.
+**How it works.** Two or three short scenarios, each a person doing a real task start to finish.
 
 **Scope.**
 
