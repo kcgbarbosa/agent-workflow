@@ -1,6 +1,6 @@
 ---
 name: to-prd
-description: "Write the PRD into the Jira Epic description from the spec, the metrics and personas pages, and the README users table."
+description: "Write the PRD into the Jira Epic description from the spec, the metrics file, the personas file, and the README users table."
 disable-model-invocation: true
 ---
 
@@ -14,16 +14,16 @@ Do NOT interview the user. Synthesize from the sources below, show the draft, an
 
 ### 1. Find the sources
 
-Read `docs/agents/issue-tracker.md`. It names the Epic rule, the Confluence space, and the titles of the Metrics page and the Personas page. `/setup-repo` writes it. If it is missing, tell the user to run `/setup-repo`.
+Read `docs/agents/issue-tracker.md`. It names the Epic rule, the paths of the metrics file and the personas file, and the Confluence space that archives specs. When it names no path, use `docs/product/metrics.md` and `docs/product/personas.md`. `/setup-repo` writes it. If it is missing, tell the user to run `/setup-repo`.
 
 Read `docs/agents/domain.md` for the spec folder. Then collect:
 
 - The Epic key, from the user or the conversation. Read the Epic through the Atlassian connector: its current description, its sprint or due date.
 - The spec of the feature, the file `/to-spec` wrote.
-- The Metrics page and the Personas page in Confluence.
+- The metrics file and the personas file in this repo.
 - The Users table in the project `README.md`.
 
-If the spec, the Epic, or either Confluence page cannot be read, stop and tell the user which one.
+If the spec, the Epic, the metrics file, or the personas file cannot be read, stop and tell the user which one.
 
 ### 2. Draft the PRD
 
@@ -33,7 +33,7 @@ Write plain professional prose, as a product manager would. The PRD is exempt fr
 
 - The PRD body holds no ADR number, no ticket key and no story ID.
 - The PRD body holds no name or title of a real person. Persona names are fictional. The one exception is the Owner line, which takes the owner given in `docs/agents/issue-tracker.md`.
-- Success numbers come only from the Metrics page. Each goal copies its baseline and target from one row. A feature with no row gets a named signal and no target. Keep the caveat that a figure carries, for example "estimate". End the goals with one line that names the baseline source.
+- Success numbers come only from the metrics file. Each goal copies its baseline and target from one row. A feature with no row gets a named signal and no target. Keep the caveat that a figure carries, for example "estimate". End the goals with one line that names the baseline source.
 - Scenario names equal the spec's story group names.
 - Take the Target from the Epic's sprint or due date. When the Epic has none, write "Target: not set".
 - Write Rollout only for a feature that ships after go-live. The spec's Further Notes and the README say when go-live is. When they do not say, leave Rollout out and tell the user.
@@ -50,7 +50,7 @@ Owner: <name>. Target: <sprint or date>.
 
 **Problem.** Who has it, what it costs them or us, and why now. What we are not solving.
 
-**Who it's for.** The key persona first, then the others, one line each. Take them from the Personas page. Match each to a Role in the README Users table.
+**Who it's for.** The key persona first, then the others, one line each. Take them from the personas file. Match each to a Role in the README Users table.
 
 **Approach.** A short paragraph. Enough to picture the solution, not to build it.
 
@@ -77,18 +77,18 @@ Owner: <name>. Target: <sprint or date>.
 
 Before you show it, check every line of the draft against the rules:
 
-- Each number traces to a row of the Metrics page. Remove any that does not.
-- Each persona is on the Personas page. Each scenario name is a story group name of the spec.
+- Each number traces to a row of the metrics file. Remove any that does not.
+- Each persona is in the personas file. Each scenario name is a story group name of the spec.
 - No ADR number, ticket key, story ID, em dash, or real name remains.
 
 ### 4. Show the draft and wait
 
-Show the user the full draft, then a short note on anything you left out or could not fill: no Metrics row, no target date, no rollout. Wait for approval. Do NOT write to Jira before the user approves. If the user asks for changes, redraft and show it again.
+Show the user the full draft, then a short note on anything you left out or could not fill: no metrics row, no target date, no rollout. Wait for approval. Do NOT write to Jira before the user approves. If the user asks for changes, redraft and show it again.
 
 ### 5. Write the Epic description
 
 After approval, replace the whole description of the Epic with the approved text, through the Atlassian connector. Leave the Epic's title field, status, priority and links as they are.
 
-A re-run overwrites the whole description. That is why nobody edits it by hand: a change to the PRD goes into the spec or the Metrics page, and `/to-prd` runs again.
+A re-run overwrites the whole description. That is why nobody edits it by hand: a change to the PRD goes into the spec or the metrics file, and `/to-prd` runs again.
 
 Tell the user the Epic link. The next step is `/to-tickets`.
