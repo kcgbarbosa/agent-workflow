@@ -71,6 +71,7 @@ class Config:
     ntfy_url: str
     ui_path: str | None
     ui_skill: str
+    ui_accepted_unchecked: tuple[str, ...]
     main_branch: str
     agent_model: str
     agent_effort: str
@@ -158,6 +159,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         ntfy_url=notify.text("url", "https://ntfy.sh"),
         ui_path=ui.text("path", None),
         ui_skill=ui.text("skill", "ui-review"),
+        ui_accepted_unchecked=ui.texts("accepted_unchecked", ()),
         main_branch=top.text("main_branch", "main"),
         agent_model=agent.text("model", "claude-opus-5-5"),
         agent_effort=agent.text("effort", "high"),
