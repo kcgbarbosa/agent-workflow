@@ -87,9 +87,25 @@ class World:
     def plan(self, steps: dict[str, list[dict[str, Any]]]) -> None:
         (self.fakes / "plan.json").write_text(json.dumps(steps))
 
-    def run(self, parallel: int = 2, landed_keys_only: bool = False, extra: str = "") -> int:
+    def run(
+        self,
+        parallel: int = 2,
+        landed_keys_only: bool = False,
+        extra: str = "",
+        base: str | None = None,
+    ) -> int:
         write_config(self.repo, self.jira.url, parallel, landed_keys_only, extra)
-        return run(EPIC, config.load(self.repo, state_dir=self.state), SECRETS)
+        return run(EPIC, config.load(self.repo, state_dir=self.state), SECRETS, base)
+
+    def push_branch(self, branch: str, files: dict[str, str], start: str = "origin/main") -> None:
+        """Pushes a commit of the files on the branch, as another Epic's PR branch."""
+        sh(self.repo, "git", "switch", "-q", "-C", branch, start)
+        for name, text in files.items():
+            (self.repo / name).write_text(text)
+        sh(self.repo, "git", "add", "-A")
+        sh(self.repo, "git", "commit", "-q", "-m", f"feat: {branch}")
+        sh(self.repo, "git", "push", "-q", "origin", branch)
+        sh(self.repo, "git", "switch", "-q", "main")
 
     def records(self, name: str) -> list[dict[str, Any]]:
         path = self.fakes / f"{name}.jsonl"

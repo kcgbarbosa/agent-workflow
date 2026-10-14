@@ -1002,3 +1002,51 @@ def test_the_loop_removes_the_trial_worktrees_that_a_ticket_run_left(world: Worl
     assert branches.split() == ["worktree-agent-other", "worktree-agent-running"]
     removed = next(line for line in world.decisions() if line["step"] == "trials")
     assert removed["ticket"] == "DEMO-2" and removed["detail"].endswith("agent-failed")
+
+
+def test_an_epic_stacked_on_a_branch_starts_from_it_and_opens_its_pr_against_it(world: World) -> None:
+    world.push_branch("feat/DEMO-0-before", {"before.txt": "before"})
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run(base="feat/DEMO-0-before") == 0
+
+    assert world.epic_file("before.txt").read_text() == "before"
+    create = world.records("gh")[-1]
+    assert create["args"][create["args"].index("--base") + 1] == "feat/DEMO-0-before"
+
+
+def test_a_fix_to_the_base_branch_is_merged_into_the_stacked_epic_and_keeps_its_work(world: World) -> None:
+    world.push_branch("feat/DEMO-0-before", {"before.txt": "before"})
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+    world.run(base="feat/DEMO-0-before")
+    world.push_branch("feat/DEMO-0-before", {"before.txt": "fixed"}, start="origin/feat/DEMO-0-before")
+
+    assert world.run(base="feat/DEMO-0-before") == 0
+
+    assert world.epic_file("before.txt").read_text() == "fixed"
+    assert world.epic_file("a.txt").read_text() == "a"
+    assert any(line["step"] == "base" and line["result"] == "merged" for line in world.decisions())
+
+
+def test_a_base_branch_that_does_not_merge_stops_the_run_and_leaves_the_branch_as_it_was(
+    world: World,
+) -> None:
+    world.push_branch("feat/DEMO-0-before", {"before.txt": "before"})
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"before.txt": "ours"}}]})
+    world.run(base="feat/DEMO-0-before")
+    world.push_branch("feat/DEMO-0-before", {"before.txt": "theirs"}, start="origin/feat/DEMO-0-before")
+
+    assert world.run(base="feat/DEMO-0-before") == 1
+
+    assert world.epic_file("before.txt").read_text() == "ours"
+    assert sh(world.epic_file("."), "git", "status", "--porcelain") == ""
+    assert ("base", "conflict") in [(line["step"], line["result"]) for line in world.decisions()]
+
+
+def test_a_base_branch_that_is_gone_stops_the_run(world: World) -> None:
+    assert world.run(base="feat/DEMO-0-gone") == 1
+
+    assert ("base", "missing") in [(line["step"], line["result"]) for line in world.decisions()]
