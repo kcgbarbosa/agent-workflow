@@ -1,0 +1,5 @@
+interface:
+  display_name: "Setup Repo"
+  short_description: "Configure a repo for the Jira workflow skills"
+policy:
+  allow_implicit_invocation: false
