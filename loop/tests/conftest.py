@@ -46,6 +46,7 @@ url = "{tracker_url}/ntfy"
 
 [ui]
 path = "frontend/src/"
+{ui_extra}
 
 [stack]
 port_step = 10
@@ -64,10 +65,14 @@ def write_config(
     parallel: int = 2,
     landed_keys_only: bool = False,
     extra: str = "",
+    ui_extra: str = "",
 ) -> None:
-    """The test config. `extra` adds tables at the end, such as `[agent]`."""
+    """The test config. `extra` adds tables at the end, such as `[agent]`. `ui_extra` adds keys to `[ui]`."""
     text = CONFIG.format(
-        tracker_url=tracker_url, parallel=parallel, landed_keys_only=str(landed_keys_only).lower()
+        tracker_url=tracker_url,
+        parallel=parallel,
+        landed_keys_only=str(landed_keys_only).lower(),
+        ui_extra=ui_extra,
     )
     (repo / config.FILE).write_text(text + extra)
 
@@ -93,8 +98,9 @@ class World:
         landed_keys_only: bool = False,
         extra: str = "",
         base: str | None = None,
+        ui_extra: str = "",
     ) -> int:
-        write_config(self.repo, self.jira.url, parallel, landed_keys_only, extra)
+        write_config(self.repo, self.jira.url, parallel, landed_keys_only, extra, ui_extra)
         return run(EPIC, config.load(self.repo, state_dir=self.state), SECRETS, base)
 
     def push_branch(self, branch: str, files: dict[str, str], start: str = "origin/main") -> None:

@@ -132,8 +132,11 @@ if step.get("subagents_running"):
     print(json.dumps({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": session}))
 
 output = {"status": step.get("status", "done"), "reason": step.get("reason", ""), "decisions": step.get("decisions", [])}
+if step.get("notes"):
+    output["notes"] = step["notes"]
 if "findings" in record["schema"]["properties"]:
     output["findings"] = step.get("findings", [])
+    output["unchecked"] = step.get("unchecked", [])
 print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output, **cost(0.5, 3)}))
 if step.get("late_turn"):
     print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied.", **cost(0.75, 4)}))
