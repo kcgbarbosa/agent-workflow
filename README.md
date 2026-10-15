@@ -44,5 +44,5 @@ apt-get update && apt-get install -y fd-find tree jq && ln -sf "$(command -v fdf
 
 - Clones with no token, so the repo must stay public.
 - A session gets the version pushed before it started, not later pushes.
-- The environment's allowed domains must include the hosts the downloads use: `github.com`, `release-assets.githubusercontent.com` and the Ubuntu package mirror.
+- The environment's allowed domains must include the hosts the downloads use: `github.com`, `release-assets.githubusercontent.com`, `mcp.workos.com` and the Ubuntu package mirror.
 - Verified: the `gitleaks` download and unpack (reports 8.30.1), and the `fd-find` and `tree` install with the `fd` link, on Ubuntu 24.04 as root. Unverified: the `apt-get update` and the `jq` install, the clone and `install.sh` lines in the cloud, and whether the script runs as root there. Without root, put `sudo` before `apt-get` and use a writable folder on `PATH` for the other two commands.
