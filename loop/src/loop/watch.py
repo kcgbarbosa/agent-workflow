@@ -169,6 +169,35 @@ def epics(state_dir: Path) -> list[dict[str, Any]]:
     return sorted(found, key=lambda epic: epic["updated"], reverse=True)
 
 
+def host_view(state_dir: Path) -> list[dict[str, Any]]:
+    """Each project on this host with the latest run of each of its Epics, the running one first: its status,
+    its tickets complete of the total, and the step of each running ticket. The home page lists them.
+    """
+    found = []
+    for name, home in projects(state_dir).items():
+        runs = []
+        for epic in epics(home):
+            view = epic_view(home, epic["key"])
+            working = [
+                {"key": ticket["key"], "step": (ticket["step"] or {}).get("name")}
+                for ticket in view["tickets"]
+                if ticket["column"] == "running"
+            ]
+            runs.append(
+                {
+                    **epic,
+                    "status": view["status"],
+                    "progress": view["progress"],
+                    "stuck": view["stats"]["stuck"],
+                    "working": working,
+                    "pr_url": view["pr_url"],
+                }
+            )
+        runs.sort(key=lambda run: not run["running"])
+        found.append({"name": name, "running": active_run(home), "runs": runs})
+    return found
+
+
 def all_runs(state_dir: Path) -> list[tuple[str, list[dict[str, Any]]]]:
     """Each run on this host, as its Epic key and its lines, the oldest first."""
     runs = []
@@ -911,6 +940,8 @@ class Watch:
             return HTTPStatus.OK, "text/html; charset=utf-8", PAGE.read_bytes()
         if parts == ["api", "projects"]:
             return self.json(project_list(self.state_dir))
+        if parts == ["api", "home"]:
+            return self.json(host_view(self.state_dir))
         if parts == ["api", "usage"]:
             return self.json(plan_meter(self.state_dir))
         if parts == ["api", "forecast"]:

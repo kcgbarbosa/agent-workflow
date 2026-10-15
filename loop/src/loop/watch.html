@@ -53,6 +53,13 @@ code { font-family: var(--code); font-size: 12.5px; background: var(--fill); pad
 header { position: sticky; top: 0; z-index: 5; background: var(--ground); border-bottom: 1px solid transparent; transition: border-color 160ms; }
 header.scrolled { border-bottom-color: var(--line); }
 .bar { display: flex; align-items: center; gap: 16px; height: 56px; }
+.homelink { display: inline-flex; align-items: center; justify-content: center; gap: 8px; flex: none; min-width: 36px; min-height: 36px; padding: 6px 8px; border-radius: var(--radius-sm); color: var(--text); text-decoration: none; font-weight: 600; }
+.homelink:hover { background: var(--fill); }
+.homelink svg { width: 20px; height: 20px; }
+.homelink .label { display: none; }
+body.at-home .homelink .label { display: inline; }
+body.at-home .homelink:hover { background: none; }
+body.at-home .ctx { display: none; }
 .ctx { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; }
 .ctx .slash { color: var(--line-strong); }
 .picker { position: relative; display: inline-flex; min-width: 0; border-radius: var(--radius-sm); }
@@ -70,6 +77,7 @@ nav.tabs a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 1
 nav.tabs a:hover { color: var(--text); background: var(--fill); }
 nav.tabs a.on { color: var(--accent-text); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--line); }
 nav.tabs svg { width: 18px; height: 18px; }
+nav.tabs:empty { display: none; }
 .run { display: flex; align-items: center; gap: 12px; margin-left: auto; color: var(--text-muted); font-size: 13px; white-space: nowrap; }
 @media (max-width: 1023px) {
   .bar { height: 52px; gap: 8px; }
@@ -169,6 +177,14 @@ main.wrap { padding-top: 8px; padding-bottom: 48px; display: grid; gap: 24px; }
 .thumb img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; object-position: top; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--stage); transition: border-color 160ms; }
 .thumb:hover img { border-color: var(--line-strong); }
 .thumb span { display: block; margin-top: 6px; font-size: 12px; line-height: 16px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- Home: each project on the host and its runs --- */
+.projects { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); align-items: start; }
+@media (max-width: 1023px) { .projects { gap: 16px; } }
+.list.epics button { grid-template-columns: minmax(0, 1fr) auto; }
+.textbtn { background: none; border: 0; padding: 0; color: var(--text-muted); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.textbtn:hover { color: var(--text); text-decoration-color: var(--text); }
+.metric .sub a { color: var(--text-muted); }
 
 /* --- Tickets --- */
 table.tickets { width: 100%; border-collapse: collapse; }
@@ -284,7 +300,9 @@ details.forecast[open] > summary h2::before { content: "▾ "; }
 <body>
 <header id="top">
   <div class="wrap bar">
+    <a class="homelink" id="home" href="#/" title="Every run on this host" aria-label="Every run on this host"><span class="label">Loop Watch</span></a>
     <div class="ctx">
+      <span class="slash">/</span>
       <label class="picker project"><select id="project" aria-label="Project"></select></label>
       <span class="slash">/</span>
       <label class="picker epic"><select id="epic" aria-label="Epic"></select></label>
@@ -304,6 +322,8 @@ const AGE_MS = 15000;
 const KEY = /^[A-Z][A-Z0-9]*-\d+$/;
 // Phosphor icons (MIT), Regular and Fill: the Fill weight marks the active tab.
 const ICONS = {
+  home: ["M219.31,108.68l-80-80a16,16,0,0,0-22.62,0l-80,80A15.87,15.87,0,0,0,32,120v96a8,8,0,0,0,8,8h64a8,8,0,0,0,8-8V160h32v56a8,8,0,0,0,8,8h64a8,8,0,0,0,8-8V120A15.87,15.87,0,0,0,219.31,108.68ZM208,208H160V152a8,8,0,0,0-8-8H104a8,8,0,0,0-8,8v56H48V120l80-80,80,80Z",
+    "M224,120v96a8,8,0,0,1-8,8H160a8,8,0,0,1-8-8V164a4,4,0,0,0-4-4H108a4,4,0,0,0-4,4v52a8,8,0,0,1-8,8H40a8,8,0,0,1-8-8V120a16,16,0,0,1,4.69-11.31l80-80a16,16,0,0,1,22.62,0l80,80A16,16,0,0,1,224,120Z"],
   "": ["M104,40H56A16,16,0,0,0,40,56v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V56A16,16,0,0,0,104,40Zm0,64H56V56h48v48Zm96-64H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,64H152V56h48v48Zm-96,32H56a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,104,136Zm0,64H56V152h48v48Zm96-64H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,200,136Zm0,64H152V152h48v48Z",
     "M120,56v48a16,16,0,0,1-16,16H56a16,16,0,0,1-16-16V56A16,16,0,0,1,56,40h48A16,16,0,0,1,120,56Zm80-16H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm-96,96H56a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,104,136Zm96,0H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,200,136Z"],
   "tickets": ["M224,128a8,8,0,0,1-8,8H128a8,8,0,0,1,0-16h88A8,8,0,0,1,224,128ZM128,72h88a8,8,0,0,0,0-16H128a8,8,0,0,0,0,16Zm88,112H128a8,8,0,0,0,0,16h88a8,8,0,0,0,0-16ZM82.34,42.34,56,68.69,45.66,58.34A8,8,0,0,0,34.34,69.66l16,16a8,8,0,0,0,11.32,0l32-32A8,8,0,0,0,82.34,42.34Zm0,64L56,132.69,45.66,122.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Zm0,64L56,196.69,45.66,186.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32,0l32-32a8,8,0,0,0-11.32-11.32Z",
@@ -333,10 +353,11 @@ const STOPPED = {
 const WINDOWS = [["five_hour", "5-hour usage", "5-hour window"], ["seven_day", "Weekly usage", "weekly window"]];
 const QUEUE_SHOWN = 3;
 const PROOF_SHOWN = 4;
+const RUNS_SHOWN = 5;
 const ui = {
   project: null, epic: null, page: "", ticket: null, tab: null, agent: null, follow: true, version: null, drawn: null,
   projects: [], epics: [], view: null, usage: {}, feed: null, report: null, reportWrap: null, viewer: null,
-  forecast: null, forecastWrap: null, forecastOpen: false,
+  forecast: null, forecastWrap: null, forecastOpen: false, home: [], homeOpen: new Set(),
 };
 
 // --- Helpers ---
@@ -414,16 +435,17 @@ function shotName(path) {
   return file.replace(/-?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-?/gi, "-").replace(/-{2,}/g, " · ").replace(/^[-· ]+|[-· ]+$/g, "");
 }
 
-// --- Routing: #/<project>/<Epic>/<view or ticket> ---
+// --- Routing: #/ is home, then #/<project>/<Epic>/<view or ticket> ---
 function readHash() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
-  // An address from before projects names the Epic first.
+  // An address from before projects names the Epic first, and opens that Epic of this repo's project.
   if (parts[0] && KEY.test(parts[0])) parts.unshift("");
   const [project, epic, page] = parts;
   ui.project = project || null;
   ui.epic = epic || null;
   ui.ticket = page && KEY.test(page) ? page : null;
-  ui.page = ui.ticket ? "ticket" : VIEWS.some(([k]) => k === page) ? page : "";
+  ui.page = !parts.length ? "home" : ui.ticket ? "ticket" : VIEWS.some(([k]) => k === page) ? page : "";
+  document.body.classList.toggle("at-home", ui.page === "home");
 }
 const hashFor = (project, epic, page) => `#/${[project, epic, page].filter(Boolean).map(encodeURIComponent).join("/")}`;
 function go(page, project = ui.project, epic = ui.epic) {
@@ -435,6 +457,7 @@ window.addEventListener("hashchange", route);
 async function route() {
   const before = `${ui.project}/${ui.epic}/${ui.page}/${ui.ticket}`;
   readHash();
+  drawHomeLink();
   if (`${ui.project}/${ui.epic}/${ui.page}/${ui.ticket}` !== before) { ui.agent = null; ui.feed = null; ui.tab = null; window.scrollTo(0, 0); }
   ui.drawn = null;
   await refresh();
@@ -442,10 +465,12 @@ async function route() {
 
 // --- Data: every figure comes from one poll, and a poll redraws only when something changed ---
 async function refresh() {
+  if (ui.page === "home") return refreshHome();
   let projects;
   try { [projects, ui.usage] = await Promise.all([getJson("/api/projects"), getJson("/api/usage")]); } catch { return; }
   ui.projects = projects;
-  if (!ui.project || !projects.some((p) => p.name === ui.project)) { go("", projects[0].name, ui.epic); return; }
+  if (!ui.project) { go("", projects[0].name, ui.epic); return; }
+  if (!projects.some((p) => p.name === ui.project)) { go("", null, null); return; }
   try { ui.epics = await getJson(api("/api/epics")); } catch { return; }
   renderContext();
   if (!ui.epics.length) {
@@ -478,6 +503,66 @@ function renderContext() {
   epic.replaceChildren(...ui.epics.map((e) => h("option", { value: e.key, selected: e.key === ui.epic },
     `${e.key}${e.summary ? ` · ${e.summary}` : ""}${e.running ? " (running)" : ""}`)));
   epic.onchange = () => go("", ui.project, epic.value);
+}
+
+// --- Home: each project on the host and the runs of its Epics, so one address leads to every loop ---
+async function refreshHome() {
+  let home;
+  try { [home, ui.usage] = await Promise.all([getJson("/api/home"), getJson("/api/usage")]); } catch { return; }
+  ui.home = home;
+  const drawn = JSON.stringify([home, ui.usage, ui.page, [...ui.homeOpen], Math.floor(Date.now() / AGE_MS)]);
+  if (drawn !== ui.drawn) { ui.drawn = drawn; renderHome(); }
+}
+
+function renderHome() {
+  const running = ui.home.flatMap((p) => p.runs.filter((r) => r.running).map((r) => ({ ...r, project: p.name })));
+  document.title = running.length ? `${running.length} running · Loop Watch` : "Loop Watch";
+  document.getElementById("run").replaceChildren();
+  document.getElementById("views").replaceChildren();
+  const now = metric("Running now", h("div", { class: "figure" }, h("b", {}, String(running.length)), running.length === 1 ? "loop" : "loops"),
+    h("div", { class: "sub" }, running.length
+      ? running.flatMap((r, i) => [i ? ", " : "", h("a", { href: hashFor(r.project, r.key, "") }, `${r.project} ${r.key}`)])
+      : "No loop runs on this host now."));
+  document.getElementById("main").replaceChildren(
+    h("div", { class: "pagehead" }, h("div", { class: "over" }, "Every project on this host"), h("h1", { id: "title" }, "Runs")),
+    h("div", { class: "metrics" }, now, ...WINDOWS.map(([w, label]) => usageCard(label, ui.usage[w]))),
+    h("div", { class: "projects" }, ui.home.map(projectPanel)));
+  watchTitle();
+}
+
+function projectPanel(p) {
+  const open = ui.homeOpen.has(p.name);
+  const shown = open ? p.runs : p.runs.slice(0, RUNS_SHOWN);
+  const rows = shown.map((r) => {
+    const { complete, total } = r.progress;
+    const facts = [
+      total ? `${complete} of ${plural(total, "ticket", "tickets")} complete` : "No tickets read yet",
+      ...r.working.map((w) => `${w.key} in ${stepName(w.step || "agent")}`),
+      r.stuck ? `${r.stuck} stuck` : "",
+      `last step ${ago(r.updated)}`,
+    ].filter(Boolean);
+    return h("li", {}, h("button", { onclick: () => go("", p.name, r.key) },
+      h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, r.key), " ", r.summary),
+        h("div", { class: "rowreason" }, facts.join(" · "))),
+      tile(STATUS[r.status] || [r.status, ""], true)));
+  });
+  const toggle = () => { if (open) ui.homeOpen.delete(p.name); else ui.homeOpen.add(p.name); renderHome(); };
+  return h("section", { class: "panel" },
+    h("div", { class: "phead" }, h("h2", {}, p.name), h("span", { class: "aside" }, p.running ? "Running" : "Not running")),
+    h("div", { class: "pbody" }, p.runs.length
+      ? [h("ul", { class: "list epics" }, rows),
+        p.runs.length > RUNS_SHOWN ? h("div", { class: "more" }, h("button", { class: "textbtn", onclick: toggle },
+          open ? "Show fewer" : `${p.runs.length - RUNS_SHOWN} earlier runs`)) : ""]
+      : h("div", { class: "note" }, "No runs of this project yet. ", h("code", {}, "loop start <Epic key>"), " starts one.")));
+}
+
+// The house icon is filled on the home page, as the active tab is.
+function drawHomeLink() {
+  const link = document.getElementById("home");
+  const at = ui.page === "home";
+  link.querySelector("svg")?.remove();
+  link.prepend(icon(ICONS.home[at ? 1 : 0]));
+  if (at) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
 }
 
 function render() {
