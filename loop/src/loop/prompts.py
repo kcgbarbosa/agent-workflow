@@ -67,9 +67,10 @@ CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. 
 UI_REVIEW_PROMPT = (
     "/{skill} The run folder is {run_dir}. The base is `{base}`. "
     + REVIEW_RULES
-    + " When the environment lacks something that a screen needs, such as a bucket name, that is not a block:"
-    " check the rest, return `done`, and list in `unchecked` each screen or part that you could not check,"
-    " with its path and the reason, so that KC reviews it by hand."
+    + " When the environment lacks something that a screen needs, such as a secret, a bucket, or a seeded file,"
+    " return `blocked` with what is missing. A screen that shows an error in place of its content fails the"
+    " review. List in `unchecked` only a part that the seeded data cannot show, with its path and the reason,"
+    " so that KC reviews it by hand."
 )
 REVIEW_FIX_PROMPT = (
     "The {review} found these problems:\n\n{findings}\n\nFix each one that is a real problem, and commit the "

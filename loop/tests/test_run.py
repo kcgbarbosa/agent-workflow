@@ -519,7 +519,8 @@ def test_a_ui_change_lands_only_after_a_ui_review_and_its_screenshots_reach_the_
 
     (review,) = world.calls("DEMO-2-ui")
     assert review["prompt"].startswith("/ui-review ") and review["run_dir"] in review["prompt"]
-    assert "list in `unchecked` each screen or part that you could not check" in review["prompt"]
+    assert "return `blocked` with what is missing" in review["prompt"]
+    assert "List in `unchecked` only a part that the seeded data cannot show" in review["prompt"]
     assert review["resume"] is None and review["model"] == REVIEW_MODEL
     assert len(world.calls("DEMO-2")) == 1
     assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
@@ -574,7 +575,7 @@ def test_a_ui_fault_that_is_still_there_after_one_fix_lands_and_keeps_the_epic_p
 
 def test_a_part_the_ui_review_could_not_check_keeps_the_epic_pr_a_draft(world: World) -> None:
     world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
-    part = "/admin/materials: the upload needs a bucket name."
+    part = "/admin/materials: the seed has one row, not three."
     world.plan(
         {
             "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
@@ -591,7 +592,7 @@ def test_a_part_the_ui_review_could_not_check_keeps_the_epic_pr_a_draft(world: W
 
 def test_a_part_that_loop_toml_accepts_as_unchecked_is_a_note_and_the_epic_pr_is_ready(world: World) -> None:
     world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
-    part = "/admin/materials: the upload needs a bucket name."
+    part = "/admin/materials: the seed has one row, not three."
     world.plan(
         {
             "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
@@ -599,7 +600,7 @@ def test_a_part_that_loop_toml_accepts_as_unchecked_is_a_note_and_the_epic_pr_is
         }
     )
 
-    assert world.run(ui_extra='accepted_unchecked = ["needs a bucket name"]') == 0
+    assert world.run(ui_extra='accepted_unchecked = ["the seed has one row"]') == 0
 
     assert f"Not checked, and accepted in loop.toml: {part}" in world.jira.issues["DEMO-2"].comments[-1]
     create = world.records("gh")[-1]
