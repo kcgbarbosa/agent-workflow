@@ -20,6 +20,7 @@ from . import repo, tiers
 from .claude import REVIEW_EFFORT, REVIEW_MODEL, TRIALS, agent_settings, run_setup
 from .config import Config
 from .prompts import (
+    ACCEPTANCE_PROMPT,
     AGENT_SCHEMA,
     CODE_REVIEW_PROMPT,
     DECISIONS_COMMENT,
@@ -402,13 +403,42 @@ class EpicRun:
         if self.gate(
             command, run.worktree, self.config.stack_env(run.slot, run.ticket.key), log_file, run.ticket.key
         ):
-            return None
+            return self.acceptance_check(run)
         reason = f"The ticket gate `{' '.join(command)}` failed. The log is {log_file}."
         prompt = (
             f"The ticket gate `{' '.join(command)}` failed. Fix the cause and commit the fix.\n"
             f"The end of the log:\n\n{tail(log_file.read_text())}"
         )
         return GateFailure(reason, prompt, log_file)
+
+    def acceptance_check(self, run: TicketRun) -> GateFailure | None:
+        """Each line of what the user sees has an acceptance test whose title is the line. The merge gate
+        runs the tests, and the UI review looks at their screenshots.
+        """
+        command = self.config.acceptance_list
+        lines = user_sees(run.ticket.text, self.config.acceptance_heading)
+        if command is None or not lines:
+            return None
+        key = run.ticket.key
+        listed = self.command(
+            [part.replace("{key}", key) for part in command],
+            run.worktree,
+            self.config.stack_env(run.slot, key),
+        )
+        if listed.returncode != 0:
+            reason = f"The acceptance list `{' '.join(command)}` failed."
+            prompt = f"{reason} Fix the cause and commit the fix.\n\n{tail(listed.stdout + listed.stderr)}"
+            self.log(key, "ticket-gate", "fail", detail=reason)
+            return GateFailure(reason, prompt, run.agent_log or run.run_dir)
+        titles = {normal(title) for title in listed.stdout.splitlines()}
+        missing = [line for line in lines if normal(line) not in titles]
+        if not missing:
+            return None
+        reason = f"{len(missing)} lines of what the user sees have no acceptance test."
+        self.log(key, "ticket-gate", "fail", detail=reason)
+        listed_lines = "\n".join(f"- {line}" for line in missing)
+        prompt = ACCEPTANCE_PROMPT.format(missing=listed_lines, key=key)
+        return GateFailure(reason, prompt, run.agent_log or run.run_dir)
 
     def code_review(self, run: TicketRun) -> GateFailure | None:
         """`/code-review` in its own session. Its findings go back to the head agent's session."""
@@ -1164,6 +1194,28 @@ class EpicRun:
         with self._log_lock, self.log_path.open("a") as file:
             file.write(json.dumps(line) + "\n")
         print(f"{line['time']} {ticket} {step} {result} {detail}".rstrip(), flush=True)
+
+
+def user_sees(text: str, heading: str) -> list[str]:
+    """The list under the heading in the ticket text, such as "What the user sees.", one item per line."""
+    items: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        bare = line.strip().strip("*#").strip()
+        if not inside:
+            inside = bare.lower().rstrip(".:").strip() == heading.lower()
+            continue
+        if line.startswith(("- ", "* ")):
+            items.append(line[2:].strip())
+        elif line.startswith("  ") and items:
+            items[-1] += " " + line.strip()
+        elif bare:
+            break
+    return items
+
+
+def normal(text: str) -> str:
+    return " ".join(text.split())
 
 
 def screenshots(run_dir: Path) -> list[Path]:

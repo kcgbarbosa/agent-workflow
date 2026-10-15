@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Break a spec into a set of **tickets**: tracer-bullet vertical slices, each declaring the tickets that **block** it.
 
-The tickets are Jira Tasks under the feature's Epic. Read `docs/agents/issue-tracker.md` for the project, the board fields and the ticket body. Read `docs/agents/domain.md` for the spec folder. If either file is missing, tell the user to run `/setup-repo`. Where `docs/agents/issue-tracker.md` differs from this skill, the file wins.
+The tickets are Jira Tasks under the feature's Epic. Read `docs/agents/issue-tracker.md` for the project, the board fields and the ticket body. Read `docs/agents/domain.md` for the spec folder, and `docs/agents/testing.md` for the acceptance suite. If one of these files is missing, tell the user to run `/setup-repo`. Where `docs/agents/issue-tracker.md` differs from this skill, the file wins.
 
 ## Process
 
@@ -50,6 +50,8 @@ Present the proposed breakdown as a numbered list. For each ticket, show:
 
 Then check every story ID of the spec against the list. Flag each story that no ticket delivers, and ask whether a new ticket, an existing ticket or Out of Scope takes it. Do not continue while a story has no home.
 
+Check each "What the user sees" line against the seed. Flag each line that the seed cannot show, and add the seed change to the ticket that holds the line.
+
 Ask the user:
 
 - Does the granularity feel right? (too coarse / too fine)
@@ -74,9 +76,9 @@ Title: a plain outcome, for example "Answer a question on the Product page"
 
 **Stories.** The spec's story group and the IDs this ticket delivers.
 
-**What the user sees.** Plain checks, one line each. Acceptance of the deployed result uses these.
+**What the user sees.** Plain checks, one line each. Each line becomes one acceptance test whose title is the line, as `docs/agents/testing.md` gives, so write a line that a tap-through of the seeded stack can show.
 
-**Technical checks.** Schema, routes, events, tests. For the agent.
+**Technical checks.** Schema, routes, events, tests. For the agent. Name a stubbed test only for a state that the real stack cannot show.
 
 **Spec.** A link, and the sections used.
 

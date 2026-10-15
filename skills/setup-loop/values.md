@@ -90,7 +90,23 @@ Write the rule in the issue tracker doc, so `to-tickets` follows it:
 - Run both gates on a clean checkout of the main branch. A red main sticks every ticket, because each one fails its merge gate.
 - Run the ticket gate twice in a row. A gate that passes once and fails once spends the fix attempts of a ticket on noise.
 - After a gate, `git status` is clean. A gate that rewrites tracked files, such as a formatter, fails the next check, which refuses a tree with changes not committed.
-- A gate needs no sign-in and no prompt, and no secret: gates run without the repo's secrets (Secrets). A test that needs a key uses a development default.
+- A gate needs no sign-in and no prompt. The script gives a gate no secret (Secrets). A test that needs a key uses a development default, except the acceptance tests, whose make target reads the stack's secrets from the secrets file through a repo script (Acceptance tests).
+- The merge gate runs the acceptance suite after the fast checks, such as `make check acceptance`.
+
+## Acceptance tests
+
+**Find.** `docs/agents/testing.md`, which `/setup-repo` writes. It names the acceptance suite, its command for one ticket, and its list command.
+
+**Choose.**
+
+- `list` is the list command of `docs/agents/testing.md`, with `{key}` for the ticket, such as `["make", "acceptance-list", "ticket={key}"]`. It prints one title per line and needs no stack.
+- Keep `heading` at its default unless the ticket template names the list another way.
+- A repo whose `docs/agents/testing.md` says "No acceptance suite" leaves the table out.
+
+**Check.**
+
+- Run the list command for a landed ticket. It prints the title of each of its tests, and nothing else.
+- Each title matches a line of that ticket's "What the user sees", word for word.
 
 ## Stack per worktree
 

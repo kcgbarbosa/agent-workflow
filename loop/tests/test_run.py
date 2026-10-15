@@ -511,6 +511,63 @@ def test_a_code_review_fix_is_not_a_fix_attempt(world: World) -> None:
     assert not world.jira.issues["DEMO-2"].flagged
 
 
+ACCEPTANCE = '\n[acceptance]\nlist = ["make", "acceptance-list", "ticket={key}"]\n'
+SEES = [
+    "Goal. A reader sees how many Products there are.",
+    "What the user sees.",
+    "- The count shows on Home.",
+    "- A tap on the count opens the list.",
+    "Technical checks.",
+]
+
+
+def test_a_line_of_what_the_user_sees_with_no_acceptance_test_goes_back_to_the_agent(world: World) -> None:
+    world.jira.add("DEMO-2", "Show the count", parent=EPIC, body=SEES)
+    one = "The count shows on Home.\n"
+    both = one + "A tap on the count opens the list.\n"
+    world.plan(
+        {
+            "DEMO-2": [
+                {"write": {"count.txt": "x", "acceptance-titles.txt": one}},
+                {"write": {"acceptance-titles.txt": both}},
+            ]
+        }
+    )
+
+    assert world.run(extra=ACCEPTANCE) == 0
+
+    first, fix = world.calls("DEMO-2")
+    missing = fix["prompt"].split("\n\n")[1]
+    assert missing == "- A tap on the count opens the list."
+    assert "its tag is DEMO-2" in fix["prompt"]
+    listed = [call for call in world.records("make") if "acceptance-list" in call["targets"]]
+    assert listed[0]["targets"] == ["acceptance-list", "ticket=DEMO-2"]
+    assert not world.jira.issues["DEMO-2"].flagged
+
+
+def test_with_no_acceptance_table_the_loop_lists_no_tests(world: World) -> None:
+    world.jira.add("DEMO-2", "Show the count", parent=EPIC, body=SEES)
+    world.plan({"DEMO-2": [{"write": {"count.txt": "x"}}]})
+
+    assert world.run() == 0
+
+    assert not [call for call in world.records("make") if "acceptance-list" in call["targets"]]
+    assert len(world.calls("DEMO-2")) == 1
+
+
+def test_the_lines_of_what_the_user_sees_come_from_the_list_under_the_heading() -> None:
+    text = (
+        "Goal. Read a file.\n\n**What the user sees.**\n\n- A tap opens the file.\n"
+        "- The note says to download\n  the original.\n\nTechnical checks.\n\n- Not a line.\n"
+    )
+
+    assert loop_run.user_sees(text, "What the user sees") == [
+        "A tap opens the file.",
+        "The note says to download the original.",
+    ]
+    assert loop_run.user_sees("Goal. Read a file.\n", "What the user sees") == []
+
+
 def test_a_ui_change_lands_only_after_a_ui_review_and_its_screenshots_reach_the_ticket(world: World) -> None:
     world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}], "DEMO-2-ui": [{"screenshot": True}]})

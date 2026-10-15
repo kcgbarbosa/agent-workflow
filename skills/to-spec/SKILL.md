@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 This skill takes the current conversation context and codebase understanding and writes a **spec**: the agent-facing requirements of one feature. The spec is the source of truth for the build, the tests and the tickets. Do NOT interview the user; just synthesize what you already know.
 
-The spec is a file in the project repo. Read `docs/agents/domain.md` for its folder; the default is `docs/product/specs/<feature>.md`. Read `docs/agents/issue-tracker.md` for the Epic. If either file is missing, tell the user to run `/setup-repo`.
+The spec is a file in the project repo. Read `docs/agents/domain.md` for its folder; the default is `docs/product/specs/<feature>.md`. Read `docs/agents/issue-tracker.md` for the Epic, and `docs/agents/testing.md` for the acceptance suite. If one of these files is missing, tell the user to run `/setup-repo`.
 
 The spec is not the PRD. `/to-prd` writes the PRD into the Epic description, and `/to-tickets` writes the tickets. This skill publishes nothing to the issue tracker.
 
@@ -14,7 +14,7 @@ The spec is not the PRD. `/to-prd` writes the PRD into the Epic description, and
 
 1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary throughout the spec, and respect any ADRs in the area you're touching.
 
-2. Sketch out the seams at which you're going to test the feature. Existing seams should be preferred to new ones. Use the highest seam possible. If new seams are needed, propose them at the highest point you can. The fewer seams across the codebase, the better - the ideal number is one.
+2. Sketch out the seams at which you're going to test the feature. The acceptance suite of `docs/agents/testing.md` is the first seam: each story that a user can see is tested there, on the real stack. Use a lower seam only for what it cannot reach, such as a rule matrix or an error state. Existing seams should be preferred to new ones. Use the highest seam possible. If new seams are needed, propose them at the highest point you can. The fewer seams across the codebase, the better - the ideal number is one.
 
 Check with the user that these seams match their expectations.
 
@@ -61,7 +61,7 @@ A list of implementation decisions that were made. This can include:
 - Technical clarifications from the developer
 - Architectural decisions
 - Schema, rules, API contracts, screens and status screens
-- Seed data
+- Seed data: what each acceptance test needs to show its story, such as three rows for a list of three
 - Specific interactions
 
 Do NOT include an "Order of the work": `/to-tickets` derives it.
@@ -77,7 +77,7 @@ A list of testing decisions that were made. Include:
 - A description of what makes a good test (only test external behavior, not implementation details)
 - The seams, and the tools
 - Prior art for the tests (i.e. similar types of tests in the codebase)
-- A test table. Each row names a test and cites the story IDs it covers. A row does not restate a rule.
+- A test table. Each row names a test and cites the story IDs it covers. A row does not restate a rule. A story that a user can see has an acceptance test row.
 
 ## Out of Scope
 
