@@ -470,6 +470,42 @@ def test_one_page_serves_each_project_on_the_host(tmp_path: Path) -> None:
     assert watch.handle("/api/epics?project=none")[0] == 404
 
 
+def test_the_home_page_lists_the_runs_of_each_project_with_the_running_one_first(tmp_path: Path) -> None:
+    ours = tmp_path / "demo-loop"
+    state_dir(ours)
+    theirs = tmp_path / "other-loop"
+    write_lines(theirs / "OTHER-1" / "decisions.jsonl", [step("OTHER-1", "start", "ok")])
+    write_lines(
+        theirs / "OTHER-2" / "decisions.jsonl",
+        [step("OTHER-2", "start", "ok"), step("OTHER-3", "start", "new"), step("OTHER-3", "agent", "done")],
+    )
+    later = time.time() + 60
+    os.utime(theirs / "OTHER-1" / "decisions.jsonl", (later, later))
+    (theirs / "OTHER-2" / "board.json").write_text(
+        json.dumps({"summary": "Other", "tickets": [{"key": "OTHER-3"}, {"key": "OTHER-4"}]})
+    )
+
+    with one_run(theirs, "OTHER-2"):
+        home = json.loads(Watch(ours).handle("/api/home")[2])
+
+    names = [(project["name"], project["running"]) for project in home]
+    assert names == [("demo", None), ("other", "OTHER-2")]
+    assert home[0]["runs"][0] | {"updated": None} == {
+        "key": EPIC,
+        "summary": "The Loop",
+        "updated": None,
+        "running": False,
+        "status": "blocked",
+        "progress": {"complete": 2, "total": 4},
+        "stuck": 1,
+        "working": [],
+        "pr_url": "",
+    }
+    # OTHER-1 changed last, and the running run still comes first.
+    assert [run["key"] for run in home[1]["runs"]] == ["OTHER-2", "OTHER-1"]
+    assert home[1]["runs"][0]["working"] == [{"key": "OTHER-3", "step": "ticket-gate"}]
+
+
 def test_a_screenshot_is_cached_and_the_data_is_not(tmp_path: Path) -> None:
     home = state_dir(tmp_path) / EPIC
     (home / "runs" / "DEMO-3" / "home.png").write_bytes(b"\x89PNG")
