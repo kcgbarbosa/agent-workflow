@@ -6,11 +6,22 @@ import json
 import os
 import time
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from loop.cli import one_run
-from loop.watch import Watch, active_run, epic_view, serve
+from loop.watch import (
+    Watch,
+    active_run,
+    epic_view,
+    plan_meter,
+    queue,
+    run_status,
+    serve,
+    ticket_health,
+    verdict,
+)
 
 EPIC = "DEMO-1"
 TOKEN = "secret-token-value"
@@ -337,3 +348,177 @@ def test_a_running_ticket_shows_its_current_step_and_its_last_activity(tmp_path:
         "List",
     ]
     assert tickets["DEMO-3"]["recent"] == []
+
+
+def test_the_overview_counts_complete_tickets_and_puts_a_ticket_behind_a_stuck_one_last(
+    tmp_path: Path,
+) -> None:
+    view = epic_view(state_dir(tmp_path), EPIC)
+
+    # DEMO-2 landed and DEMO-5 was done before the run. DEMO-3 is stuck, so DEMO-4, which waits on it, is
+    # blocked, and the run that stopped for it needs KC.
+    assert view["progress"] == {"complete": 2, "total": 4}
+    assert view["status"] == "blocked"
+    assert view["queue"] == [{"key": "DEMO-4", "state": "blocked", "waits_on": ["DEMO-3"]}]
+
+
+def ticket(key: str, column: str, *blockers: str) -> dict[str, Any]:
+    return {"key": key, "column": column, "blockers": [{"key": b, "done": False} for b in blockers]}
+
+
+def test_the_queue_takes_the_ready_tickets_first_and_each_waiting_one_after_its_blockers() -> None:
+    tickets = [
+        ticket("DEMO-2", "running"),
+        ticket("DEMO-3", "waiting", "DEMO-4"),
+        ticket("DEMO-4", "waiting", "DEMO-2"),
+        ticket("DEMO-5", "waiting"),
+        ticket("DEMO-6", "landed"),
+        ticket("DEMO-7", "waiting", "DEMO-6"),
+    ]
+
+    assert [(item["key"], item["state"]) for item in queue(tickets)] == [
+        ("DEMO-5", "ready"),
+        ("DEMO-7", "ready"),
+        ("DEMO-4", "waiting"),
+        ("DEMO-3", "waiting"),
+    ]
+
+
+def test_the_run_status_names_a_pause_a_finish_and_a_failure() -> None:
+    paused = {**ticket("DEMO-2", "running"), "step": {"name": "agent", "paused": True}}
+    working = {**ticket("DEMO-3", "running"), "step": {"name": "agent", "paused": False}}
+
+    assert run_status("running", "", [paused]) == "paused"
+    assert run_status("running", "", [paused, working]) == "running"
+    assert run_status("pr-open", "", [ticket("DEMO-2", "landed")]) == "completed"
+    assert run_status("idle", "", [ticket("DEMO-2", "landed"), ticket("DEMO-3", "done")]) == "completed"
+    assert run_status("stopped", "loop-error", [ticket("DEMO-2", "waiting")]) == "failed"
+    assert run_status("stopped", "usage-limit", [ticket("DEMO-2", "waiting")]) == "stopped"
+    assert run_status("idle", "", [ticket("DEMO-2", "waiting")]) == "idle"
+
+
+def test_a_running_ticket_needs_attention_only_for_a_reason_it_names() -> None:
+    now = time.time()
+
+    def ago(minutes: int) -> str:
+        return datetime.fromtimestamp(now - minutes * 60, UTC).isoformat(timespec="seconds")
+
+    agent = {"name": "agent", "since": ago(40), "paused": False}
+    assert ticket_health(agent, ago(2), 0) == {"state": "on-track", "reason": ""}
+    assert ticket_health(agent, ago(20), 0)["state"] == "attention"
+    # A gate runs no agent, so a quiet log says nothing then.
+    assert ticket_health({**agent, "name": "ticket-gate"}, ago(20), 0)["state"] == "on-track"
+    assert (
+        ticket_health(agent, ago(2), 2)["reason"] == "The ticket gate failed 2 times. The agent is fixing it."
+    )
+    assert ticket_health({**agent, "paused": True}, ago(30), 0)["state"] == "blocked"
+
+
+def test_a_screenshot_counts_as_reviewed_only_when_a_ui_review_line_follows_it() -> None:
+    shots = [{"path": "runs/DEMO-2/home.png", "time": at(10)}]
+
+    assert verdict(None, []) is None
+    assert verdict(None, shots) == "unreviewed"
+    assert verdict({"result": "pass", "time": at(5)}, shots) == "unreviewed"
+    assert verdict({"result": "pass", "time": at(12)}, shots) == "passed"
+    assert verdict({"result": "fail", "time": at(12)}, shots) == "faults"
+    assert verdict({"result": "unfixed", "time": at(12)}, shots) == "unfixed"
+
+
+def test_the_plan_meter_is_the_newest_reading_on_the_host_and_never_the_cost(tmp_path: Path) -> None:
+    resets = int(time.time()) + 3600
+    home = stats_state(tmp_path, resets) / EPIC
+    # The finished agent lines end at 45% of the five-hour window. The running agent has read 61% since.
+    event = {
+        "type": "rate_limit_event",
+        "rate_limit_info": {"unifiedWindows": {"five_hour": {"utilization": 0.61, "resetsAt": resets}}},
+    }
+    log = home / "runs" / "DEMO-4" / "agent-1.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(json.dumps(event) + "\n" + json.dumps({"type": "result", "total_cost_usd": 9.0}) + "\n")
+
+    assert plan_meter(tmp_path)["five_hour"]["utilization"] == 0.45
+    with one_run(tmp_path, EPIC):
+        meter = plan_meter(tmp_path)
+
+    assert meter["five_hour"]["utilization"] == 0.61 and not meter["five_hour"]["past"]
+    assert meter["seven_day"] == {
+        "utilization": 0.52,
+        "resets_at": resets + 86400,
+        "read": at(15),
+        "past": False,
+    }
+
+
+def test_one_page_serves_each_project_on_the_host(tmp_path: Path) -> None:
+    ours = tmp_path / "demo-loop"
+    state_dir(ours)
+    theirs = tmp_path / "other-loop" / "OTHER-1"
+    write_lines(theirs / "decisions.jsonl", [step("OTHER-1", "start", "ok")])
+    (theirs / "runs" / "OTHER-2").mkdir(parents=True)
+    (theirs / "runs" / "OTHER-2" / "gate.log").write_text("other-secret-value\n")
+    (tmp_path / "other-loop" / "secrets.json").write_text(json.dumps({"OTHER_TOKEN": "other-secret-value"}))
+    watch = Watch(ours)
+
+    projects = json.loads(watch.handle("/api/projects")[2])
+    epics = json.loads(watch.handle("/api/epics?project=other")[2])
+
+    assert projects == [{"name": "demo", "running": None}, {"name": "other", "running": None}]
+    assert [epic["key"] for epic in epics] == ["OTHER-1"]
+    assert [epic["key"] for epic in json.loads(watch.handle("/api/epics")[2])] == [EPIC]
+    assert watch.handle("/files/OTHER-1/runs/OTHER-2/gate.log?project=other")[2] == b"[OTHER_TOKEN]\n"
+    assert watch.handle("/api/epics?project=none")[0] == 404
+
+
+def test_the_home_page_lists_the_runs_of_each_project_with_the_running_one_first(tmp_path: Path) -> None:
+    ours = tmp_path / "demo-loop"
+    state_dir(ours)
+    theirs = tmp_path / "other-loop"
+    write_lines(theirs / "OTHER-1" / "decisions.jsonl", [step("OTHER-1", "start", "ok")])
+    write_lines(
+        theirs / "OTHER-2" / "decisions.jsonl",
+        [step("OTHER-2", "start", "ok"), step("OTHER-3", "start", "new"), step("OTHER-3", "agent", "done")],
+    )
+    later = time.time() + 60
+    os.utime(theirs / "OTHER-1" / "decisions.jsonl", (later, later))
+    (theirs / "OTHER-2" / "board.json").write_text(
+        json.dumps({"summary": "Other", "tickets": [{"key": "OTHER-3"}, {"key": "OTHER-4"}]})
+    )
+
+    with one_run(theirs, "OTHER-2"):
+        home = json.loads(Watch(ours).handle("/api/home")[2])
+
+    names = [(project["name"], project["running"]) for project in home]
+    assert names == [("demo", None), ("other", "OTHER-2")]
+    assert home[0]["runs"][0] | {"updated": None} == {
+        "key": EPIC,
+        "summary": "The Loop",
+        "updated": None,
+        "running": False,
+        "status": "blocked",
+        "progress": {"complete": 2, "total": 4},
+        "stuck": 1,
+        "working": [],
+        "pr_url": "",
+    }
+    # OTHER-1 changed last, and the running run still comes first.
+    assert [run["key"] for run in home[1]["runs"]] == ["OTHER-2", "OTHER-1"]
+    assert home[1]["runs"][0]["working"] == [{"key": "OTHER-3", "step": "ticket-gate"}]
+
+
+def test_a_screenshot_is_cached_and_the_data_is_not(tmp_path: Path) -> None:
+    home = state_dir(tmp_path) / EPIC
+    (home / "runs" / "DEMO-3" / "home.png").write_bytes(b"\x89PNG")
+    servers = serve(tmp_path, 0, ["127.0.0.1"])
+    port = servers[0].server_address[1]
+    try:
+        image = urllib.request.urlopen(f"http://127.0.0.1:{port}/files/{EPIC}/runs/DEMO-3/home.png?v=1")
+        data = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/epic/{EPIC}")
+    finally:
+        for server in servers:
+            server.shutdown()
+
+    assert image.headers["Cache-Control"] == "private, max-age=86400"
+    assert data.headers["Cache-Control"] == "no-store"
+    # An open page reloads itself when this changes.
+    assert data.headers["X-Page-Version"] == image.headers["X-Page-Version"] != ""

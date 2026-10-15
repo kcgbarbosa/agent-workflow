@@ -26,11 +26,13 @@ from .prompts import (
     DISPATCH,
     EARLY_STATUS_PROMPT,
     LANDED_KEYS_PROMPT,
+    NOTES_COMMENT,
     PR_PROMPT,
     RESTART_PROMPT,
     REVIEW_FIX_PROMPT,
     REVIEW_SCHEMA,
     STUCK_COMMENT,
+    UI_OPEN_COMMENT,
     UI_REVIEW_PROMPT,
     USAGE_RESUME_PROMPT,
 )
@@ -48,10 +50,12 @@ IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 # Marks in a ticket's run folder. They outlive a restart, so a restart repeats no review:
 # the commit that the screenshots show, a code review that ran, and the findings it left unfixed.
 UI_COMMIT_FILE = "ui-review.commit"
+# What the UI review left open on a landed ticket: a fault, or a part it could not check. Drafts the Epic PR.
+UI_OPEN_FILE = "ui-review.open"
 CODE_REVIEWED_FILE = "code-review.done"
 CODE_REVIEW_FIX_FILE = "code-review.fix"
 # The faults of a UI review go back to the head agent this often. A fault left after that lands with the
-# ticket and goes to KC as a decision, because it costs less to fix by hand than to review again.
+# ticket and keeps the Epic PR a draft, because it costs less to fix by hand than to review again.
 UI_FIX_ROUNDS = 1
 TIMED_OUT = 124
 # A session with a background task, such as a dev server, stays open after its status. Past this grace
@@ -82,6 +86,7 @@ class AgentResult:
     reason: str
     session: str
     findings: list[str] = field(default_factory=list)
+    unchecked: list[str] = field(default_factory=list)
     # The subagents still running when the status came, which Claude Code then asked for too early.
     subagents_running: int = 0
 
@@ -143,7 +148,6 @@ class EpicRun:
         self.epic_branch = ""
         self.epic_worktree = self.home / "worktrees" / epic_key
         self.epic_summary = ""
-        self.decisions: list[tuple[Ticket, str]] = []
         self.settings = agent_settings(config)
         self._pause_lock = threading.Lock()
         self.paused_until = 0.0
@@ -435,6 +439,7 @@ class EpicRun:
                 )
                 return None
         reviewed.unlink(missing_ok=True)
+        (run.run_dir / UI_OPEN_FILE).unlink(missing_ok=True)
         for shot in screenshots(run.run_dir):
             shot.unlink()
         skill = self.config.ui_skill
@@ -450,14 +455,30 @@ class EpicRun:
         if not screenshots(run.run_dir):
             raise AgentFailed(f"The UI review saved no screenshots in {run.run_dir}.")
         reviewed.write_text(head + "\n")
-        if review.findings:
-            self.log(key, "ui-gate", "unfixed", commit=head, detail=f"{len(review.findings)} faults")
-            self.record_decisions(
-                run.ticket, [f"UI fault left unfixed: {fault}" for fault in review.findings]
-            )
+        accepted = [part for part in review.unchecked if self.accepted_unchecked(part)]
+        left = [f"UI fault left unfixed: {fault}" for fault in review.findings]
+        left += [f"Not checked: {part}" for part in review.unchecked if part not in accepted]
+        self.record_notes(run.ticket, [f"Not checked, and accepted in loop.toml: {p}" for p in accepted])
+        if left:
+            (run.run_dir / UI_OPEN_FILE).write_text(json.dumps(left))
+            self.log(key, "ui-gate", "open", commit=head, detail=f"{len(left)} items")
+            self.track(key, "comment", lambda: self.tracker.comment(key, self.bullets(UI_OPEN_COMMENT, left)))
         else:
             self.log(key, "ui-gate", "pass", commit=head)
         return None
+
+    def accepted_unchecked(self, part: str) -> bool:
+        """Whether `loop.toml` accepts a part that the UI review could not check, by a phrase in its text."""
+        return any(phrase.lower() in part.lower() for phrase in self.config.ui_accepted_unchecked)
+
+    def ui_open(self) -> dict[str, int]:
+        """For each ticket of the Epic, how many items its UI review left open."""
+        found: dict[str, int] = {}
+        for ticket in self.tracker.children(self.epic_key):
+            marked = self.home / "runs" / ticket.key / UI_OPEN_FILE
+            if marked.exists():
+                found[self.ticket_label(ticket)] = len(json.loads(marked.read_text()))
+        return found
 
     def ui_diff(self, run: TicketRun, rev: str) -> str:
         """The ticket's own change to the UI paths at `rev`, with no context lines, so that a commit that
@@ -615,8 +636,20 @@ class EpicRun:
         if not self.gate(command, self.epic_worktree, self.config.stack_env(EPIC_SLOT, key), log_file, key):
             failing = (" ".join(command), log_file)
         self.push(self.epic_worktree, self.epic_branch, key)
+        demo_failing = self.point_demo(run_dir)
         body = self.pr_body(run, merge_base)
-        return self.open_pr(failing, body)
+        return self.open_pr(failing, body, demo_failing)
+
+    def point_demo(self, run_dir: Path) -> tuple[str, Path] | None:
+        """Points the always-on demo at the Epic branch. Returns the command and its log when it fails."""
+        demo = self.config.demo
+        if demo is None:
+            return None
+        command = tuple(item.replace("{branch}", self.epic_branch) for item in demo.command)
+        log_file = run_dir / "finish-demo.log"
+        passed = self.limited(command, self.epic_worktree, self.child_env(), log_file, "demo command") == 0
+        self.log(self.epic_key, "demo", "ok" if passed else "fail", detail=str(log_file))
+        return None if passed else (" ".join(command), log_file)
 
     def pr_body(self, run: TicketRun, merge_base: str) -> str:
         """The body an agent writes with the `pr` skill, or a table of the tickets when it writes none."""
@@ -647,7 +680,9 @@ class EpicRun:
         self.log(key, "pr-body", "fallback")
         return f"Builds the Epic {key}: {self.epic_summary}.\n\n{table}\n"
 
-    def open_pr(self, failing: tuple[str, Path] | None, body: str) -> int:
+    def open_pr(
+        self, failing: tuple[str, Path] | None, body: str, demo_failing: tuple[str, Path] | None = None
+    ) -> int:
         """Opens the Epic PR, or updates the one an earlier run opened. Unfinished work makes it a draft."""
         key = self.epic_key
         unfinished = [
@@ -655,9 +690,11 @@ class EpicRun:
             for ticket in self.tracker.children(key)
             if self.ticket_result(ticket) in UNFINISHED
         ]
-        draft = bool(failing or unfinished)
+        ui_open = self.ui_open()
+        draft = bool(failing or demo_failing or unfinished or ui_open)
         body_file = self.home / "runs" / key / "pr-body.md"
-        body_file.write_text(self.pr_notes(failing, unfinished) + body)
+        demo = f"**Demo:** {self.config.demo.url}\n\n" if self.config.demo and not demo_failing else ""
+        body_file.write_text(demo + self.pr_notes(failing, unfinished, ui_open, demo_failing) + body)
         state = "pr-draft" if draft else "pr-open"
         listed = ["gh", "pr", "list", "--head", self.epic_branch, "--state", "open", "--json", "url"]
         existing = self.command([*listed, "--jq", ".[].url"], self.epic_worktree).stdout.strip()
@@ -683,16 +720,29 @@ class EpicRun:
         self.notify(f"{key} {state}")
         return 0
 
-    def pr_notes(self, failing: tuple[str, Path] | None, unfinished: list[str]) -> str:
-        """What KC reads first in the Epic PR: the unfinished tickets, the failing gate, the decisions."""
+    def pr_notes(
+        self,
+        failing: tuple[str, Path] | None,
+        unfinished: list[str],
+        ui_open: Mapping[str, int],
+        demo_failing: tuple[str, Path] | None = None,
+    ) -> str:
+        """What stops the Epic PR from being ready: unfinished tickets, a failing gate, a failed demo command,
+        open UI items.
+
+        A PR with none of these has no notes, because it is ready to merge. The agents' decisions and notes
+        stay in the ticket comments.
+        """
         lines: list[str] = []
         if unfinished:
             lines += [f"**Unfinished tickets:** {', '.join(unfinished)}.", ""]
         if failing:
             lines += [f"**Failing gate:** `{failing[0]}`. The log is `{failing[1]}`.", ""]
-        if self.decisions:
-            items = [f"- {self.ticket_label(ticket)}: {item}" for ticket, item in self.decisions]
-            lines += ["**Decisions to check:**", *items, ""]
+        if demo_failing:
+            lines += [f"**Demo failed:** `{demo_failing[0]}`. The log is `{demo_failing[1]}`.", ""]
+        if ui_open:
+            counts = ", ".join(f"{label} ({count})" for label, count in ui_open.items())
+            lines += [f"**UI review left open:** {counts}. The ticket comment lists each item.", ""]
         return "\n".join(lines)
 
     def ticket_label(self, ticket: Ticket) -> str:
@@ -860,17 +910,26 @@ class EpicRun:
             name, "agent", status, commit=commit, session=session_id, detail=reason, usage=cost, plan=plan
         )
         self.record_decisions(run.ticket, [str(item) for item in output.get("decisions", [])])
+        self.record_notes(run.ticket, [str(item) for item in output.get("notes", [])])
         findings = [str(item) for item in output.get("findings", [])]
-        return AgentResult(status, reason, session_id, findings, subagents_at_status(events))
+        unchecked = [str(item) for item in output.get("unchecked", [])]
+        return AgentResult(status, reason, session_id, findings, unchecked, subagents_at_status(events))
 
     def record_decisions(self, ticket: Ticket, decisions: list[str]) -> None:
-        """Comments the decisions on the ticket, and keeps them for the Epic PR."""
-        if not decisions:
-            return
-        self.decisions += [(ticket, item) for item in decisions]
-        bullets = "\n".join(f"- {item}" for item in decisions)
-        text = f"{DECISIONS_COMMENT}\n{bullets}"
-        self.track(ticket.key, "comment", lambda: self.tracker.comment(ticket.key, text))
+        """Comments the open questions on the ticket. They stay out of the Epic PR."""
+        if decisions:
+            text = self.bullets(DECISIONS_COMMENT, decisions)
+            self.track(ticket.key, "comment", lambda: self.tracker.comment(ticket.key, text))
+
+    def record_notes(self, ticket: Ticket, notes: list[str]) -> None:
+        """Comments the notes on the ticket. They stay out of the Epic PR."""
+        if notes:
+            text = self.bullets(NOTES_COMMENT, notes)
+            self.track(ticket.key, "comment", lambda: self.tracker.comment(ticket.key, text))
+
+    @staticmethod
+    def bullets(heading: str, items: list[str]) -> str:
+        return heading + "\n" + "\n".join(f"- {item}" for item in items)
 
     def wait_for_agent(self, process: subprocess.Popen[bytes], log: Path, name: str) -> tuple[int, bool]:
         """Waits for the agent to exit. Returns its exit code, and whether the loop stopped it.
@@ -913,17 +972,23 @@ class EpicRun:
             # A container from a start that failed, such as on a port that was in use, can start later
             # with no published port. A gate on new containers does not depend on an earlier start.
             self.command(["docker", "compose", "down"], cwd, stack)
+        passed = self.limited(command, cwd, env, log_file, "gate") == 0
+        commit = out(cwd, "rev-parse", "HEAD")
+        self.log(key, " ".join(command), "pass" if passed else "fail", commit=commit, detail=str(log_file))
+        return passed
+
+    def limited(
+        self, command: tuple[str, ...], cwd: Path, env: dict[str, str], log_file: Path, what: str
+    ) -> int:
+        """Runs a command under `timeout` at the gate timeout, with its output in the log file."""
         limit = f"{self.config.gate_timeout_minutes}m"
         with log_file.open("w") as log:
             wrapped = ["timeout", "--kill-after=60", limit, *command]
             result = subprocess.run(wrapped, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT)
         if result.returncode == TIMED_OUT:
             with log_file.open("a") as log:
-                log.write(f"The gate ran past {self.config.gate_timeout_minutes} minutes.\n")
-        passed = result.returncode == 0
-        commit = out(cwd, "rev-parse", "HEAD")
-        self.log(key, " ".join(command), "pass" if passed else "fail", commit=commit, detail=str(log_file))
-        return passed
+                log.write(f"The {what} ran past {self.config.gate_timeout_minutes} minutes.\n")
+        return result.returncode
 
     def push(self, worktree: Path, branch: str, key: str) -> None:
         result = git(worktree, "push", "--set-upstream", "origin", branch, check=False)
@@ -1029,7 +1094,8 @@ class EpicRun:
         except Exception as error:  # noqa: BLE001 - a failed read never makes the ticket stuck.
             self.log(key, "tracker-comments", "fail", detail=str(error))
             return []
-        return [text for text in comments if text and not text.startswith((STUCK_COMMENT, DECISIONS_COMMENT))]
+        own = (STUCK_COMMENT, DECISIONS_COMMENT, NOTES_COMMENT, UI_OPEN_COMMENT)
+        return [text for text in comments if text and not text.startswith(own)]
 
     def track(self, key: str, step: str, call: Callable[[], object]) -> None:
         """A tracker call that fails is logged. It does not stop the ticket."""

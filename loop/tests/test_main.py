@@ -134,6 +134,35 @@ def test_a_repo_without_a_stack_gets_no_stack_env(tmp_path: Path) -> None:
     assert config.load(tmp_path).stack_env(2, "DEMO-7") == {}
 
 
+def test_the_demo_table_is_optional_and_needs_a_command_and_an_address(tmp_path: Path) -> None:
+    write_config(tmp_path)
+    assert config.load(tmp_path).demo is None
+
+    write_config(
+        tmp_path, extra='\n[demo]\ncommand = ["make", "demo", "branch={branch}"]\nurl = "https://d"\n'
+    )
+    assert config.load(tmp_path).demo == config.Demo(("make", "demo", "branch={branch}"), "https://d")
+
+
+@pytest.mark.parametrize(
+    ("demo", "message"),
+    [
+        ("", "demo.command is missing"),
+        ('command = ["make", "demo"]', "demo.url is missing"),
+        ('url = "https://d"', "demo.command is missing"),
+        ('command = []\nurl = "https://d"', "demo.command must not be empty"),
+        ('command = "make demo"\nurl = "https://d"', "demo.command has the wrong type"),
+        ('command = ["make", 1]\nurl = "https://d"', "demo.command must be a list of strings"),
+        ('command = ["make"]\nurl = "https://d"\nport = 1', "unknown key demo.port"),
+    ],
+)
+def test_a_demo_table_mistake_refuses_the_file(tmp_path: Path, demo: str, message: str) -> None:
+    write_config(tmp_path, extra=f"\n[demo]\n{demo}\n")
+
+    with pytest.raises(config.ConfigError, match=message):
+        config.load(tmp_path)
+
+
 @pytest.mark.parametrize(
     ("edit", "message"),
     [
@@ -170,7 +199,7 @@ def test_loop_start_names_the_tailnet_address_of_the_watch_page(
     monkeypatch.setenv("WAYLAND_DISPLAY", "")
 
     monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1", "100.64.0.7"])
-    assert cli.open_watch(settings, "DEMO-33") == "http://100.64.0.7:8790/#/DEMO-33"
+    assert cli.open_watch(settings, "DEMO-33") == "http://100.64.0.7:8790/#/demo/DEMO-33"
 
     monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1"])
-    assert cli.open_watch(settings, "DEMO-33") == "http://127.0.0.1:8790/#/DEMO-33"
+    assert cli.open_watch(settings, "DEMO-33") == "http://127.0.0.1:8790/#/demo/DEMO-33"

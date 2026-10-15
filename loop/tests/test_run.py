@@ -434,6 +434,7 @@ def test_the_comments_on_a_stuck_ticket_reach_the_restarted_agent(world: World) 
     comments = ticket.split("## Comments\n")[1].split("## Loop\n")[0]
     assert comments.index("Use the v2 endpoint.") < comments.index("Keep the old client too.")
     assert "The loop stopped" not in comments and "decisions for KC" not in comments
+    assert "The agent noted" not in comments and "UI review left these open" not in comments
 
 
 def test_a_ticket_whose_comments_cannot_be_read_still_lands(world: World) -> None:
@@ -518,7 +519,7 @@ def test_a_ui_change_lands_only_after_a_ui_review_and_its_screenshots_reach_the_
 
     (review,) = world.calls("DEMO-2-ui")
     assert review["prompt"].startswith("/ui-review ") and review["run_dir"] in review["prompt"]
-    assert "list in `decisions` each screen or part that you could not check" in review["prompt"]
+    assert "list in `unchecked` each screen or part that you could not check" in review["prompt"]
     assert review["resume"] is None and review["model"] == REVIEW_MODEL
     assert len(world.calls("DEMO-2")) == 1
     assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
@@ -543,7 +544,7 @@ def test_a_ui_fault_goes_back_to_the_agent_and_the_fixed_commit_gets_a_new_revie
     assert gates == ["fail", "pass"]
 
 
-def test_a_ui_fault_that_is_still_there_after_one_fix_lands_with_the_ticket_as_a_decision(
+def test_a_ui_fault_that_is_still_there_after_one_fix_lands_and_keeps_the_epic_pr_a_draft(
     world: World,
 ) -> None:
     world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
@@ -562,10 +563,47 @@ def test_a_ui_fault_that_is_still_there_after_one_fix_lands_with_the_ticket_as_a
 
     assert len(world.calls("DEMO-2")) == 2 and len(world.calls("DEMO-2-ui")) == 2
     gates = [line["result"] for line in world.decisions() if line["step"] == "ui-gate"]
-    assert gates == ["fail", "unfixed"]
+    assert gates == ["fail", "open"]
     assert not world.jira.issues["DEMO-2"].flagged
     assert f"UI fault left unfixed: {fault}" in world.jira.issues["DEMO-2"].comments[-1]
-    assert f"DEMO-2: UI fault left unfixed: {fault}" in world.records("gh")[-1]["body"]
+    create = world.records("gh")[-1]
+    assert "--draft" in create["args"]
+    assert "**UI review left open:** DEMO-2 (1)." in create["body"]
+    assert fault not in create["body"]
+
+
+def test_a_part_the_ui_review_could_not_check_keeps_the_epic_pr_a_draft(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
+    part = "/admin/materials: the upload needs a bucket name."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
+            "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
+        }
+    )
+
+    assert world.run() == 0
+
+    assert f"Not checked: {part}" in world.jira.issues["DEMO-2"].comments[-1]
+    create = world.records("gh")[-1]
+    assert "--draft" in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
+
+
+def test_a_part_that_loop_toml_accepts_as_unchecked_is_a_note_and_the_epic_pr_is_ready(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
+    part = "/admin/materials: the upload needs a bucket name."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
+            "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
+        }
+    )
+
+    assert world.run(ui_extra='accepted_unchecked = ["needs a bucket name"]') == 0
+
+    assert f"Not checked, and accepted in loop.toml: {part}" in world.jira.issues["DEMO-2"].comments[-1]
+    create = world.records("gh")[-1]
+    assert "--draft" not in create["args"] and "UI review left open" not in create["body"]
 
 
 def test_a_ui_review_that_saves_no_screenshots_makes_the_ticket_stuck(world: World) -> None:
@@ -715,14 +753,21 @@ def test_a_done_ticket_whose_work_never_landed_is_reported(world: World) -> None
     assert "| DEMO-4 | Done before this run |" in body
 
 
-def test_the_decisions_of_an_agent_go_to_jira_and_the_epic_pr(world: World) -> None:
+def test_the_decisions_and_notes_of_an_agent_go_to_jira_and_not_to_the_epic_pr(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
-    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "decisions": ["Kept the filter in access.py."]}]})
+    notes = ["Kept the filter in access.py."]
+    step = {"write": {"a.txt": "a"}, "decisions": ["Which filter?"], "notes": notes}
+    world.plan({"DEMO-2": [step]})
 
     assert world.run() == 0
 
-    assert "Kept the filter in access.py." in world.jira.issues["DEMO-2"].comments[-1]
-    assert "DEMO-2: Kept the filter in access.py." in world.records("gh")[-1]["body"]
+    comments = world.jira.issues["DEMO-2"].comments
+    assert any("Which filter?" in text for text in comments)
+    assert any("Kept the filter in access.py." in text for text in comments)
+    create = world.records("gh")[-1]
+    assert "--draft" not in create["args"]
+    assert "Which filter?" not in create["body"] and "Kept the filter" not in create["body"]
+    assert "Decisions to check" not in create["body"]
 
 
 def test_with_name_landed_keys_only_the_epic_pr_names_no_key_that_did_not_land(world: World) -> None:
@@ -740,7 +785,7 @@ def test_with_name_landed_keys_only_the_epic_pr_names_no_key_that_did_not_land(w
     assert (
         "| Builds on the decision | Not built |" in body and "| Done before | Done before this run |" in body
     )
-    assert "- Needs a decision: Kept the role." in body
+    assert "Kept the role." not in body
     assert not {"DEMO-2", "DEMO-3", "DEMO-5"} & set(re.findall(r"DEMO-\d+", body))
     assert "Name no ticket key" in world.calls(f"{EPIC}-pr")[-1]["prompt"]
 
@@ -760,6 +805,57 @@ def test_the_epic_pr_is_a_draft_when_a_gate_still_fails(world: World) -> None:
     assert "--draft" in create["args"]
     assert create["body"].startswith("**Failing gate:** `make check`")
     assert world.jira.notifications == [f"{EPIC} pr-draft"]
+
+
+DEMO = '\n[demo]\ncommand = ["make", "demo", "branch={branch}"]\nurl = "https://demo.example.ts.net"\n'
+
+
+def test_the_finish_points_the_demo_at_the_epic_branch_and_the_epic_pr_starts_with_its_address(
+    world: World,
+) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run(extra=DEMO) == 0
+
+    demo = [call for call in world.records("make") if call["targets"][0] == "demo"]
+    assert [(call["targets"], call["cwd"]) for call in demo] == [
+        (["demo", f"branch=feat/{EPIC}-the-loop"], str(world.state / EPIC / "worktrees" / EPIC))
+    ]
+    create = world.records("gh")[-1]
+    assert "--draft" not in create["args"]
+    assert create["body"].startswith("**Demo:** https://demo.example.ts.net\n\n")
+    steps = [(line["step"], line["result"]) for line in world.decisions() if line["step"] == "demo"]
+    assert steps == [("demo", "ok")]
+
+
+def test_a_failed_demo_command_makes_the_epic_pr_a_draft_and_names_its_log(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+    (world.fakes / "demo-fails").write_text("")
+
+    assert world.run(extra=DEMO) == 0
+
+    log = world.state / EPIC / "runs" / EPIC / "finish-demo.log"
+    assert "the demo did not start" in log.read_text()
+    create = world.records("gh")[-1]
+    assert "--draft" in create["args"]
+    assert create["body"].startswith(
+        f"**Demo failed:** `make demo branch=feat/{EPIC}-the-loop`. The log is `{log}`.\n"
+    )
+    assert "**Demo:**" not in create["body"]
+    assert world.jira.notifications == [f"{EPIC} pr-draft"]
+
+
+def test_without_a_demo_table_the_finish_runs_no_demo(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run() == 0
+
+    assert not [call for call in world.records("make") if call["targets"][0] == "demo"]
+    assert "Demo" not in world.records("gh")[-1]["body"]
+    assert not [line for line in world.decisions() if line["step"] == "demo"]
 
 
 def test_an_epic_with_nothing_landed_opens_no_pr(world: World) -> None:

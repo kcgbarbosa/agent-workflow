@@ -1,7 +1,8 @@
 """`loop watch`: a read-only web page of the runs on this host.
 
 It reads only what the run writes to the state folder: `decisions.jsonl`, `board.json`, the agent logs, the
-gate logs, and the screenshots. It changes nothing, so it can run while a run lasts, after it, or without one.
+gate logs, and the screenshots. It changes nothing the loop reads, so it can run while a run lasts, after it,
+or without one. The capacity forecast (`forecast.py`) writes its own Jira snapshot, which no run reads.
 """
 
 from __future__ import annotations
@@ -21,10 +22,11 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import report
+from .stream import agent_plan
 
 RUN_LOCK = "run.lock"
 SECRETS_FILE = "secrets.json"
@@ -47,13 +49,33 @@ TAIL_BYTES = 256_000
 SUMMARY_CHARS = 160
 DETAIL_CHARS = 4000
 CHUNK_BYTES = 2_000_000
+LOOP_SUFFIX = "-loop"
+# The friendly name of each step, as the page shows it.
+STAGES = {
+    "agent": "Implementation",
+    "ticket-gate": "Ticket gate",
+    "code-review": "Code review",
+    "ui-review": "UI review",
+    "land": "Landing",
+}
+AGENT_STAGES = {"agent", "code-review", "ui-review"}
+# An agent that writes nothing for longer than this needs a look. A Bash call stops after 10 minutes, so a
+# quiet agent past 15 runs no command.
+STALL_MINUTES = 15
+METER_TAIL_BYTES = 4_000_000
+METER_EVENT = b'"rate_limit_event"'
 
 
 class Masker:
     """Replaces the value of each secret with its name. A transcript can hold what an agent printed."""
 
-    def __init__(self, secrets: dict[str, str]) -> None:
-        pairs = [(value, f"[{name}]") for name, value in secrets.items() if len(value) >= MIN_SECRET]
+    def __init__(self, *secrets: dict[str, str]) -> None:
+        pairs = [
+            (value, f"[{name}]")
+            for each in secrets
+            for name, value in each.items()
+            if len(value) >= MIN_SECRET
+        ]
         self.pairs = sorted(pairs, key=lambda pair: -len(pair[0]))
 
     def text(self, value: str) -> str:
@@ -69,6 +91,23 @@ class Masker:
         if isinstance(value, dict):
             return {key: self.data(item) for key, item in value.items()}
         return value
+
+
+def projects(state_dir: Path) -> dict[str, Path]:
+    """The state folder of each project on this host, by name: this one first, then each sibling
+    `<name>-loop` folder. Each repo's `loop.toml` names its own folder there, so one page serves them all.
+    """
+    found = {state_dir.name.removesuffix(LOOP_SUFFIX): state_dir}
+    parent = state_dir.parent
+    for home in sorted(parent.iterdir()) if parent.is_dir() else []:
+        if home.name.endswith(LOOP_SUFFIX) and home.is_dir() and home != state_dir:
+            found.setdefault(home.name.removesuffix(LOOP_SUFFIX), home)
+    return found
+
+
+def project_list(state_dir: Path) -> list[dict[str, Any]]:
+    """Each project with the Epic that runs there now, if any."""
+    return [{"name": name, "running": active_run(home)} for name, home in projects(state_dir).items()]
 
 
 def read_secrets(state_dir: Path) -> dict[str, str]:
@@ -130,6 +169,35 @@ def epics(state_dir: Path) -> list[dict[str, Any]]:
     return sorted(found, key=lambda epic: epic["updated"], reverse=True)
 
 
+def host_view(state_dir: Path) -> list[dict[str, Any]]:
+    """Each project on this host with the latest run of each of its Epics, the running one first: its status,
+    its tickets complete of the total, and the step of each running ticket. The home page lists them.
+    """
+    found = []
+    for name, home in projects(state_dir).items():
+        runs = []
+        for epic in epics(home):
+            view = epic_view(home, epic["key"])
+            working = [
+                {"key": ticket["key"], "step": (ticket["step"] or {}).get("name")}
+                for ticket in view["tickets"]
+                if ticket["column"] == "running"
+            ]
+            runs.append(
+                {
+                    **epic,
+                    "status": view["status"],
+                    "progress": view["progress"],
+                    "stuck": view["stats"]["stuck"],
+                    "working": working,
+                    "pr_url": view["pr_url"],
+                }
+            )
+        runs.sort(key=lambda run: not run["running"])
+        found.append({"name": name, "running": active_run(home), "runs": runs})
+    return found
+
+
 def all_runs(state_dir: Path) -> list[tuple[str, list[dict[str, Any]]]]:
     """Each run on this host, as its Epic key and its lines, the oldest first."""
     runs = []
@@ -178,6 +246,9 @@ class _Ticket:
     stuck_reason: str = ""
     blockers: list[dict[str, Any]] | None = None
     last: dict[str, Any] | None = None
+    # The ticket gate failures since its last pass, in this run.
+    gate_failures: int = 0
+    ui_review: dict[str, Any] | None = None
 
 
 def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
@@ -209,6 +280,10 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
 
     state, stop_reason, pr_url = ("running" if running else "idle"), "", ""
     every_run, this_run = _session_costs(lines), _session_costs(run)
+    # A UI review of a ticket that landed in an earlier run is in an earlier run's lines.
+    for line in lines:
+        if line.get("step") == "ui-gate" and line.get("ticket") in tickets:
+            tickets[line["ticket"]].ui_review = {"result": line.get("result"), "time": line.get("time")}
     events = []
     for line in run:
         name, step, result = line.get("ticket", ""), line.get("step", ""), line.get("result", "")
@@ -232,6 +307,10 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
                 ticket.stuck_reason = str(line.get("detail", "")).replace(f"{home}/", "")
             elif step == "land" and result == "landed":
                 ticket.landed = True
+            if _is_gate(line, "ticket"):
+                ticket.gate_failures = ticket.gate_failures + 1 if result == "fail" else 0
+            if step == "ui-gate":
+                ticket.ui_review = {"result": result, "time": line.get("time")}
             if step not in QUIET_STEPS and not step.startswith("tracker-"):
                 ticket.last = {"step": step, "result": result, "time": line.get("time")}
         if step not in QUIET_STEPS:
@@ -255,6 +334,8 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
         agents = agent_logs(run_dir)
         live = column == "running"
         newest = max((log["updated"] for log in agents), default=None)
+        step = current_step(by_ticket.get(ticket.key, []), newest) if live else None
+        shots = _shots(home, run_dir)
         columns.append(
             {
                 "key": ticket.key,
@@ -266,17 +347,25 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
                 "last": ticket.last,
                 "cost": round(sum(_ticket_sessions(lines, ticket.key, every_run).values()), 2),
                 "agents": agents,
-                "step": current_step(by_ticket.get(ticket.key, []), newest) if live else None,
+                "step": step,
+                "health": ticket_health(step, newest, ticket.gate_failures) if live else None,
+                "gate_failures": ticket.gate_failures,
                 "recent": recent_activity(home, ticket.key, run_dir, agents) if live else [],
-                "screenshots": _files(home, run_dir, image=True),
+                "ui_review": ticket.ui_review,
+                "screenshots": shots,
+                "verdict": verdict(ticket.ui_review, shots),
                 "files": _files(home, run_dir, image=False),
             }
         )
     breakdown = report.breakdown(epic_key, run)
+    complete = sum(1 for ticket in columns if ticket["column"] in ("landed", "done"))
     return {
         "key": epic_key,
         "summary": board.get("summary", ""),
         "branch": board.get("branch", ""),
+        "status": run_status(state, stop_reason, columns),
+        "progress": {"complete": complete, "total": len(columns)},
+        "queue": queue(columns),
         "state": state,
         "stop_reason": stop_reason,
         "pr_url": pr_url,
@@ -293,25 +382,112 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
     }
 
 
+def run_status(state: str, stop_reason: str, tickets: list[dict[str, Any]]) -> str:
+    """One word for the run: running, paused, completed, failed, blocked, stopped, or idle.
+
+    Paused: every running ticket waits for the usage limit to reset. Completed: the Epic PR is open, or every
+    ticket landed or was done before. Failed: the loop itself failed. Blocked: a ticket is stuck, or the run
+    stopped for want of a ticket it could land.
+    """
+    columns = [ticket["column"] for ticket in tickets]
+    if state == "running":
+        working = [ticket for ticket in tickets if ticket["column"] == "running"]
+        paused = working and all((ticket["step"] or {}).get("paused") for ticket in working)
+        return "paused" if paused else "running"
+    if state in ("pr-open", "pr-draft"):
+        return "completed"
+    if stop_reason == "loop-error":
+        return "failed"
+    if "stuck" in columns or stop_reason in ("circuit-breaker", "nothing-landed"):
+        return "blocked"
+    if columns and all(column in ("landed", "done") for column in columns):
+        return "completed"
+    return "stopped" if state == "stopped" else "idle"
+
+
+def verdict(ui_review: dict[str, Any] | None, shots: list[dict[str, Any]]) -> str | None:
+    """What the UI review made of the screenshots on disk: passed, unfixed (it landed with faults the review
+    left), faults (a fix round follows), or unreviewed. A new review deletes the old screenshots before it
+    saves its own, so a review line no older than the newest screenshot judged them.
+    """
+    if not shots:
+        return None
+    newest = max(shot["time"] for shot in shots)
+    if ui_review is None or str(ui_review.get("time")) < newest:
+        return "unreviewed"
+    return {"pass": "passed", "fail": "faults", "unfixed": "unfixed"}.get(
+        str(ui_review["result"]), "unreviewed"
+    )
+
+
+def ticket_health(step: dict[str, Any] | None, newest_log: str | None, gate_failures: int) -> dict[str, str]:
+    """How a running ticket fares, from explicit conditions: on-track, attention, or blocked, with why."""
+    if step and step.get("paused"):
+        return {"state": "blocked", "reason": "It waits for the usage limit to reset."}
+    if step and step["name"] in AGENT_STAGES:
+        # The stage starts when its agent starts, so a new agent with no log yet is not quiet.
+        quiet_since = max(str(newest_log or ""), str(step.get("since") or ""))
+        minutes = (time.time() - datetime.fromisoformat(quiet_since).timestamp()) / 60 if quiet_since else 0
+        if minutes > STALL_MINUTES:
+            return {
+                "state": "attention",
+                "reason": f"The agent has written nothing for {int(minutes)} minutes.",
+            }
+    if gate_failures:
+        times = "once" if gate_failures == 1 else f"{gate_failures} times"
+        return {"state": "attention", "reason": f"The ticket gate failed {times}. The agent is fixing it."}
+    return {"state": "on-track", "reason": ""}
+
+
+def queue(tickets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The tickets that wait to start, in the order the loop takes them: the ready ones by key, as the
+    frontier reads them, then the ones that wait on a blocker, after their blockers. A ticket whose blocker
+    is stuck, or waits on a stuck one, is blocked and comes last.
+    """
+    by_key = {ticket["key"]: ticket for ticket in tickets}
+    index = {ticket["key"]: number for number, ticket in enumerate(tickets)}
+
+    def open_blockers(ticket: dict[str, Any]) -> list[str]:
+        return [
+            blocker["key"]
+            for blocker in ticket["blockers"]
+            if not blocker.get("done")
+            and by_key.get(blocker["key"], {}).get("column") not in ("landed", "done")
+        ]
+
+    def depth(key: str, seen: frozenset[str] = frozenset()) -> tuple[int, bool]:
+        """How many open blockers lie in a row before the ticket, and whether a stuck one is among them."""
+        ticket = by_key.get(key)
+        if ticket is None or key in seen:
+            return 0, False
+        if ticket["column"] == "stuck":
+            return 0, True
+        found = [depth(blocker, seen | {key}) for blocker in open_blockers(ticket)]
+        return (1 + max(n for n, _ in found), any(stuck for _, stuck in found)) if found else (0, False)
+
+    items = []
+    for ticket in tickets:
+        if ticket["column"] != "waiting":
+            continue
+        waits_on = open_blockers(ticket)
+        levels, stuck = depth(ticket["key"])
+        state = "blocked" if stuck else "waiting" if waits_on else "ready"
+        items.append({"key": ticket["key"], "state": state, "waits_on": waits_on, "_order": levels})
+    rank = {"ready": 0, "waiting": 1, "blocked": 2}
+    items.sort(key=lambda item: (rank[item["state"]], item["_order"], index[item["key"]]))
+    return [{key: value for key, value in item.items() if key != "_order"} for item in items]
+
+
 def ticket_stats(columns: list[dict[str, Any]], by_ticket: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     """The counts of the board, a ticket done before this run left out. Of the tickets that landed in this
     run: how many passed their first ticket gate, and the median time from their start to their landing.
     """
     names = ("landed", "running", "stuck", "waiting", "done")
     counts = {name: sum(1 for ticket in columns if ticket["column"] == name) for name in names}
-    landed_here, first_pass, minutes = 0, 0, []
-    for lines in by_ticket.values():
-        land = next(
-            (line for line in lines if line.get("step") == "land" and line.get("result") == "landed"), None
-        )
-        if land is None:
-            continue
-        landed_here += 1
-        gates = [line for line in lines if _is_gate(line, "ticket")]
-        first_pass += bool(gates) and gates[0].get("result") == "pass"
-        start = next((line for line in lines if line.get("step") == "start"), None)
-        if start:
-            minutes.append((_time(land) - _time(start)) / 60)
+    landed = landings(by_ticket)
+    landed_here = len(landed)
+    first_pass = sum(item["first_pass"] for item in landed)
+    minutes = [item["minutes"] for item in landed if item["minutes"] is not None]
     return {
         "landed": counts["landed"],
         "total": len(columns) - counts["done"],
@@ -323,8 +499,34 @@ def ticket_stats(columns: list[dict[str, Any]], by_ticket: dict[str, list[dict[s
     }
 
 
+def landings(by_ticket: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Each ticket that landed in a run, from its lines in that run: whether its first ticket gate passed,
+    how many of its ticket gates failed, and its start and landing times with the minutes between them.
+    """
+    found = []
+    for key, lines in by_ticket.items():
+        land = next(
+            (line for line in lines if line.get("step") == "land" and line.get("result") == "landed"), None
+        )
+        if land is None:
+            continue
+        gates = [line for line in lines if _is_gate(line, "ticket")]
+        start = next((line for line in lines if line.get("step") == "start"), None)
+        found.append(
+            {
+                "key": key,
+                "first_pass": bool(gates) and gates[0].get("result") == "pass",
+                "gate_failures": sum(1 for line in gates if line.get("result") == "fail"),
+                "start": _time(start) if start else None,
+                "land": _time(land),
+                "minutes": (_time(land) - _time(start)) / 60 if start else None,
+            }
+        )
+    return found
+
+
 def plan_view(breakdown: dict[str, Any]) -> dict[str, Any]:
-    """The plan meter of the run, and how many more tickets fit in the rest of each window at the points the
+    """The plan meter of the run, and how many more tickets fit in the rest of each window at the share the
     run used per landed ticket. A meter whose window has reset since the run read it gives no estimate.
     """
     now: dict[str, dict[str, Any]] = {}
@@ -471,6 +673,14 @@ def agent_logs(run_dir: Path) -> list[dict[str, Any]]:
     return sorted(logs, key=lambda log: log["number"])
 
 
+def _shots(home: Path, run_dir: Path) -> list[dict[str, Any]]:
+    """The screenshots of the ticket's last UI review, each with the time it was saved."""
+    return [
+        {"path": path, "time": _iso((home / path).stat().st_mtime)}
+        for path in _files(home, run_dir, image=True)
+    ]
+
+
 def _files(home: Path, run_dir: Path, image: bool) -> list[str]:
     images = {".png", ".jpg", ".jpeg", ".webp"}
     if not run_dir.is_dir():
@@ -600,42 +810,171 @@ def tool_summary(name: str, tool_input: dict[str, Any]) -> tuple[str, str, str]:
     return name, json.dumps(tool_input)[:SUMMARY_CHARS], json.dumps(tool_input, indent=1)
 
 
+# --- The plan meter ---
+
+_meter_lock = threading.Lock()
+_meters: dict[Path, tuple[Any, dict[str, dict[str, Any]]]] = {}
+
+
+def plan_meter(state_dir: Path) -> dict[str, dict[str, Any]]:
+    """The newest reading of the account's plan meter on this host, for each window: its utilization, when
+    it resets, when it was read, and whether it has reset since. The meter belongs to the account, so the
+    newest reading of any run of any project counts. A running agent's log gives one that is minutes old; a
+    finished agent's line in `decisions.jsonl` gives the reading at its end. Dollars never stand in for it.
+    """
+    readings = []
+    for home in projects(state_dir).values():
+        active = active_run(home)
+        for epic in home.iterdir() if home.is_dir() else []:
+            if not KEY.fullmatch(epic.name):
+                continue
+            readings.append(_lines_meter(epic / DECISIONS))
+            if epic.name != active:
+                continue
+            for run_dir in (epic / "runs").iterdir() if (epic / "runs").is_dir() else []:
+                logs = agent_logs(run_dir)
+                if logs:
+                    readings.append(_log_meter(run_dir / f"agent-{logs[-1]['number']}.jsonl"))
+    newest: dict[str, dict[str, Any]] = {}
+    for reading in readings:
+        for window, value in reading.items():
+            if window not in newest or value["read"] > newest[window]["read"]:
+                newest[window] = value
+    now = time.time()
+    return {
+        window: {**value, "past": isinstance(value["resets_at"], int | float) and value["resets_at"] < now}
+        for window, value in newest.items()
+    }
+
+
+def _reading(plan: dict[str, dict[str, Any]], read: str) -> dict[str, dict[str, Any]]:
+    return {
+        window: {"utilization": value["end"], "resets_at": value.get("resets_at"), "read": read}
+        for window, value in plan.items()
+        if isinstance(value, dict) and isinstance(value.get("end"), int | float)
+    }
+
+
+def _lines_meter(path: Path) -> dict[str, dict[str, Any]]:
+    """The newest reading among a log's agent lines, read again only when the log changes."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    signature = (stat.st_size, stat.st_mtime)
+    with _meter_lock:
+        cached = _meters.get(path)
+        if cached and cached[0] == signature:
+            return cached[1]
+    found: dict[str, dict[str, Any]] = {}
+    for line in read_lines(path):
+        if isinstance(line.get("plan"), dict):
+            found |= _reading(line["plan"], str(line.get("time")))
+    with _meter_lock:
+        _meters[path] = (signature, found)
+    return found
+
+
+def _log_meter(path: Path) -> dict[str, dict[str, Any]]:
+    """The newest `rate_limit_event` reading in an agent log, read from where the last call stopped. Its
+    events carry no time, so the reading counts as read when the log last changed, which is no earlier.
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    with _meter_lock:
+        offset, found = _meters.get(path, (0, {}))
+        if stat.st_size < offset:
+            offset, found = 0, {}
+        start = max(offset, stat.st_size - METER_TAIL_BYTES)
+        try:
+            with path.open("rb") as file:
+                file.seek(start)
+                data = file.read(stat.st_size - start)
+        except OSError:
+            return found
+        skip = data.find(b"\n") + 1 if start > offset else 0
+        end = data.rfind(b"\n") + 1
+        for raw in reversed(data[skip:end].splitlines()):
+            if METER_EVENT not in raw:
+                continue
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            reading = _reading(agent_plan([event]), _iso(stat.st_mtime))
+            if reading:
+                found = {**found, **reading}
+                break
+        _meters[path] = (start + max(end, skip), found)
+        return found
+
+
 # --- Server ---
 
 
+class Forecast(Protocol):
+    """The capacity forecast, which `loop watch` wires in from `forecast.py`."""
+
+    def view(self) -> dict[str, Any]: ...
+
+    def refresh(self) -> bool: ...
+
+
 class Watch:
-    def __init__(self, state_dir: Path) -> None:
+    def __init__(self, state_dir: Path, forecast: Forecast | None = None) -> None:
         self.state_dir = state_dir
+        self.forecast = forecast
 
     def masker(self) -> Masker:
         # Read for each request, so a new `loop secrets` takes effect without a restart.
-        return Masker(read_secrets(self.state_dir))
+        return Masker(*(read_secrets(home) for home in projects(self.state_dir).values()))
 
     def handle(self, url: str) -> tuple[HTTPStatus, str, bytes]:
+        """Each API path and file takes `?project=<name>`, and without it serves this repo's project."""
         parsed = urlparse(url)
         parts = [unquote(part) for part in parsed.path.strip("/").split("/") if part]
         query = parse_qs(parsed.query)
         if not parts:
             return HTTPStatus.OK, "text/html; charset=utf-8", PAGE.read_bytes()
+        if parts == ["api", "projects"]:
+            return self.json(project_list(self.state_dir))
+        if parts == ["api", "home"]:
+            return self.json(host_view(self.state_dir))
+        if parts == ["api", "usage"]:
+            return self.json(plan_meter(self.state_dir))
+        if parts == ["api", "forecast"]:
+            return self.json(self.forecast.view() if self.forecast else None)
+        name = query.get("project", [""])[0]
+        state_dir = projects(self.state_dir).get(name) if name else self.state_dir
+        if state_dir is None:
+            return self.missing()
         if parts == ["api", "epics"]:
-            return self.json(epics(self.state_dir))
+            return self.json(epics(state_dir))
         if len(parts) == 3 and parts[:2] == ["api", "epic"] and KEY.fullmatch(parts[2]):
-            if not (self.state_dir / parts[2] / DECISIONS).exists():
+            if not (state_dir / parts[2] / DECISIONS).exists():
                 return self.missing()
-            return self.json(epic_view(self.state_dir, parts[2]))
+            return self.json(epic_view(state_dir, parts[2]))
         if len(parts) == 3 and parts[:2] == ["api", "report"] and KEY.fullmatch(parts[2]):
             against = query.get("against", [""])[0]
-            found = comparison(self.state_dir, parts[2], against if KEY.fullmatch(against) else None)
+            found = comparison(state_dir, parts[2], against if KEY.fullmatch(against) else None)
             return self.json(found) if found else self.missing()
         if len(parts) == 5 and parts[:2] == ["api", "agent"] and all(KEY.fullmatch(p) for p in parts[2:4]):
-            home = self.state_dir / parts[2]
+            home = state_dir / parts[2]
             path = home / "runs" / parts[3] / f"agent-{parts[4]}.jsonl"
             if not parts[4].isdigit() or not path.is_file():
                 return self.missing()
             offset = int(query.get("offset", ["0"])[0] or 0)
             return self.json(activity(home, parts[3], path, offset))
         if len(parts) >= 4 and parts[0] == "files" and KEY.fullmatch(parts[1]) and parts[2] == "runs":
-            return self.file(self.state_dir / parts[1], "/".join(parts[2:]))
+            return self.file(state_dir / parts[1], "/".join(parts[2:]))
+        return self.missing()
+
+    def post(self, url: str) -> tuple[HTTPStatus, str, bytes]:
+        """The one request that does something: read the backlog from Jira now. No run reads the result."""
+        if urlparse(url).path.rstrip("/") == "/api/forecast/refresh" and self.forecast:
+            return self.json({"started": self.forecast.refresh()})
         return self.missing()
 
     def json(self, data: Any) -> tuple[HTTPStatus, str, bytes]:
@@ -660,11 +999,21 @@ class Watch:
 def handler(watch: Watch) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - the name http.server calls.
-            status, kind, body = watch.handle(self.path)
+            self.reply(*watch.handle(self.path))
+
+        def do_POST(self) -> None:  # noqa: N802 - the name http.server calls.
+            self.reply(*watch.post(self.path))
+
+        def reply(self, status: HTTPStatus, kind: str, body: bytes) -> None:
             self.send_response(status)
             self.send_header("Content-Type", kind)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
+            # An open page reloads itself when the page on disk changes, as after `loop` updates.
+            self.send_header("X-Page-Version", str(PAGE.stat().st_mtime_ns))
+            # The page asks for a screenshot by its saved time, so a new one has a new address.
+            self.send_header(
+                "Cache-Control", "private, max-age=86400" if kind.startswith("image/") else "no-store"
+            )
             self.end_headers()
             self.wfile.write(body)
 
@@ -686,9 +1035,11 @@ def addresses() -> list[str]:
     return found
 
 
-def serve(state_dir: Path, port: int, hosts: list[str] | None = None) -> list[ThreadingHTTPServer]:
+def serve(
+    state_dir: Path, port: int, hosts: list[str] | None = None, forecast: Forecast | None = None
+) -> list[ThreadingHTTPServer]:
     """Starts one server for each address, each in its own thread, and returns them."""
-    watch = Watch(state_dir)
+    watch = Watch(state_dir, forecast)
     servers = []
     for host in hosts or addresses():
         try:
@@ -703,5 +1054,6 @@ def serve(state_dir: Path, port: int, hosts: list[str] | None = None) -> list[Th
     return servers
 
 
-def url(port: int, epic_key: str | None = None, host: str = "127.0.0.1") -> str:
-    return f"http://{host}:{port}/" + (f"#/{epic_key}" if epic_key else "")
+def url(port: int, epic_key: str | None = None, host: str = "127.0.0.1", project: str | None = None) -> str:
+    path = "/".join(part for part in (project, epic_key) if part)
+    return f"http://{host}:{port}/" + (f"#/{path}" if path else "")

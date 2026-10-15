@@ -30,6 +30,7 @@ from . import report
 from . import watch as watch_page
 from .claude import MIN_CLAUDE, claude_version
 from .config import Config, ConfigError
+from .forecast import Forecaster
 from .run import run
 from .tracker import TrackerError
 from .update import Stale, source_checkout, update
@@ -296,15 +297,17 @@ def start(epic_key: str, config: Config, base: str | None = None) -> int:
 
 
 def watch(config: Config) -> int:
-    """Serves the page until the process stops. It reads the state folder and changes nothing."""
+    """Serves the page until the process stops. It changes nothing the loop reads."""
+    forecast = Forecaster(config)
     try:
-        servers = watch_page.serve(config.state_dir, config.watch_port)
+        servers = watch_page.serve(config.state_dir, config.watch_port, forecast=forecast)
     except OSError as error:
         raise Refused(f"loop watch cannot listen on port {config.watch_port}: {error}") from error
     for server in servers:
         host = str(server.server_address[0])
         print(f"loop watch serves the {config.name} runs at http://{host}:{config.watch_port}/")
     sys.stdout.flush()
+    forecast.start()
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
@@ -329,7 +332,7 @@ def print_report(config: Config, epic_key: str | None, against: str | None, as_j
 
 def open_watch(config: Config, epic_key: str) -> str:
     """Starts `loop watch` when nothing answers on its port, opens the page, and returns its address."""
-    page = watch_page.url(config.watch_port, epic_key)
+    page = watch_page.url(config.watch_port, epic_key, project=config.name)
     if not watch_answers(config.watch_port):
         session = f"{config.name}-watch"
         # A session whose server does not answer is left from a watch that failed.
@@ -347,7 +350,7 @@ def open_watch(config: Config, epic_key: str) -> str:
             [opener, page], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
         )
     # 127.0.0.1 opens only on this host. The tailnet address also opens on the phone and the other host.
-    return watch_page.url(config.watch_port, epic_key, watch_page.addresses()[-1])
+    return watch_page.url(config.watch_port, epic_key, watch_page.addresses()[-1], config.name)
 
 
 def watch_answers(port: int) -> bool:
