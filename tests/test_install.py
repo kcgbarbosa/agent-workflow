@@ -1,6 +1,7 @@
 """install.sh links the repo into a fresh home and is safe to run again.
 
-Every run gets a temp HOME and a fake uv, so nothing is installed for real and the checkout is never touched.
+Every run gets a temp HOME, a fake uv, and a fake claude, so nothing is installed for real and the checkout is never touched.
+The real claude would write through the settings.json link into config/ in the checkout.
 """
 
 from __future__ import annotations
@@ -31,6 +32,15 @@ def run(tmp_path: Path, home: Path, repo: Path):
     # Records its arguments, so the test can see the loop command would be installed.
     uv.write_text(f'#!/bin/sh\necho "$@" >> "{tmp_path / "uv.log"}"\n')
     uv.chmod(0o755)
+    claude = bin_dir / "claude"
+    # Records its arguments. `mcp get` finds only a server that an earlier `mcp add` added.
+    claude.write_text(
+        "#!/bin/sh\n"
+        f'log="{tmp_path / "claude.log"}"\n'
+        '[ "$1 $2" = "mcp get" ] && exec grep -q "^mcp add .* $3 " "$log"\n'
+        'echo "$@" >> "$log"\n'
+    )
+    claude.chmod(0o755)
     env = {**os.environ, "HOME": str(home), "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
 
     def run() -> subprocess.CompletedProcess[str]:
@@ -75,6 +85,13 @@ def test_links_every_skill_tier_and_agents_md(run, home: Path, repo: Path, tmp_p
     assert (claude / "CLAUDE.md").is_symlink()
     assert (claude / "CLAUDE.md").resolve() == (repo / "AGENTS.md").resolve()
     assert f"tool install --quiet --editable {repo}/loop" in (tmp_path / "uv.log").read_text()
+
+
+def test_adds_each_mcp_server_once(run, tmp_path: Path) -> None:
+    run()
+    run()
+    added = (tmp_path / "claude.log").read_text().splitlines()
+    assert [line.split()[-2] for line in added] == ["workos", "aws-mcp"]
 
 
 def test_removes_stale_repo_links_and_keeps_others(run, home: Path, repo: Path, tmp_path: Path) -> None:
