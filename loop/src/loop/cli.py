@@ -18,10 +18,9 @@ import shlex
 import shutil
 import subprocess
 import sys
-import threading
 import time
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -41,6 +40,7 @@ RUN_LOCK = watch_page.RUN_LOCK
 START_POLLS = 60
 START_POLL_SECONDS = 2
 WATCH_POLLS = 20
+CODE_CHECK_SECONDS = 2
 
 
 class Refused(Exception):
@@ -297,7 +297,9 @@ def start(epic_key: str, config: Config, base: str | None = None) -> int:
 
 
 def watch(config: Config) -> int:
-    """Serves the page until the process stops. It changes nothing the loop reads."""
+    """Serves the page until the process stops, and restarts it when its code changes. It changes nothing the
+    loop reads.
+    """
     forecast = Forecaster(config)
     try:
         servers = watch_page.serve(config.state_dir, config.watch_port, forecast=forecast)
@@ -309,10 +311,37 @@ def watch(config: Config) -> int:
     sys.stdout.flush()
     forecast.start()
     try:
-        threading.Event().wait()
+        wait_for_new_code(code_stamp, time.sleep)
     except KeyboardInterrupt:
-        pass
-    return 0
+        return 0
+    # The open page reloads itself when the page on disk changes, and it needs the API of the same code.
+    print("loop watch restarts on its new code.", flush=True)
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+    os.execv(sys.executable, [sys.executable, "-m", "loop", *sys.argv[1:]])
+
+
+def code_stamp() -> tuple[tuple[str, int], ...]:
+    """The modified time of each file of the loop's code, which a `git pull` or `loop start` changes."""
+    found = []
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        try:
+            found.append((path.name, path.stat().st_mtime_ns))
+        except OSError:
+            continue  # A pull removed it after the glob.
+    return tuple(found)
+
+
+def wait_for_new_code(stamp: Callable[[], object], sleep: Callable[[float], None]) -> None:
+    """Returns once the code differs from its start and has held still for one check, as after a pull."""
+    first = seen = stamp()
+    while True:
+        sleep(CODE_CHECK_SECONDS)
+        now = stamp()
+        if now != first and now == seen:
+            return
+        seen = now
 
 
 def print_report(config: Config, epic_key: str | None, against: str | None, as_json: bool) -> int:

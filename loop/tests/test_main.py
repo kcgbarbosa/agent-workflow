@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -203,3 +204,27 @@ def test_loop_start_names_the_tailnet_address_of_the_watch_page(
 
     monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1"])
     assert cli.open_watch(settings, "DEMO-33") == "http://127.0.0.1:8790/#/demo/DEMO-33"
+
+
+def test_loop_watch_restarts_once_its_new_code_holds_still() -> None:
+    stamps = iter(["old", "old", "pulling", "new", "new", "newer"])
+    checks: list[float] = []
+
+    cli.wait_for_new_code(lambda: next(stamps), checks.append)
+
+    # It waits out the pull that is still writing, and restarts on the code the pull left.
+    assert len(checks) == 4
+
+
+def test_the_code_stamp_changes_when_a_file_of_the_loop_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "cli.py").write_text("")
+    (tmp_path / "watch.py").write_text("")
+    monkeypatch.setattr(cli, "__file__", str(tmp_path / "cli.py"))
+    before = cli.code_stamp()
+
+    os.utime(tmp_path / "watch.py", ns=(1, 1))
+
+    assert [name for name, _ in before] == ["cli.py", "watch.py"]
+    assert cli.code_stamp() != before
