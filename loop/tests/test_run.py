@@ -901,13 +901,16 @@ def test_a_status_before_a_later_turn_with_none_still_counts(world: World) -> No
     assert not world.jira.issues["DEMO-2"].flagged
 
 
-def test_a_session_that_stays_open_after_its_status_is_stopped(
+def test_a_session_that_a_dev_server_keeps_open_is_stopped_without_the_late_turn_wait(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(loop_run, "EXIT_GRACE_SECONDS", 0.5)
+    # A UI review that leaves `make dev` in a background task. Only a subagent gives a late turn.
+    monkeypatch.setattr(loop_run, "IDLE_GRACE_SECONDS", 0.5)
     monkeypatch.setattr(loop_run, "EXIT_POLL_SECONDS", 0.1)
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
-    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "linger": 60}]})
+    world.plan(
+        {"DEMO-2": [{"write": {"a.txt": "a"}, "shells_running": ["Start the dev stack"], "linger": 60}]}
+    )
 
     started = time.monotonic()
     assert world.run() == 0
@@ -915,7 +918,24 @@ def test_a_session_that_stays_open_after_its_status_is_stopped(
     assert time.monotonic() - started < 30
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
     assert not world.jira.issues["DEMO-2"].flagged
-    assert any(line["step"] == "agent" and line["result"] == "stopped" for line in world.decisions())
+    stopped = [line for line in world.decisions() if line["step"] == "agent" and line["result"] == "stopped"]
+    assert [line["detail"] for line in stopped] == [
+        "The session kept running after its status, with these background tasks: Start the dev stack."
+    ]
+    assert stopped[0]["session"]
+
+
+def test_a_subagent_at_the_status_keeps_the_late_turn_wait(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(loop_run, "IDLE_GRACE_SECONDS", 0.1)
+    monkeypatch.setattr(loop_run, "EXIT_POLL_SECONDS", 0.1)
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "subagents_running": 1, "linger": 2}]})
+
+    assert world.run() == 0
+
+    assert not any(line["step"] == "agent" and line["result"] == "stopped" for line in world.decisions())
 
 
 def test_a_merge_that_fails_its_gate_never_reaches_the_frontier(world: World) -> None:

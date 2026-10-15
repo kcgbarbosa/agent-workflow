@@ -37,7 +37,15 @@ from .prompts import (
     USAGE_RESUME_PROMPT,
 )
 from .repo import git, out
-from .stream import agent_plan, agent_status, agent_usage, json_lines, subagents_at_status, usage_reset
+from .stream import (
+    agent_plan,
+    agent_status,
+    agent_usage,
+    background_tasks,
+    json_lines,
+    subagents_at_status,
+    usage_reset,
+)
 from .tracker import Ticket, TrackerError
 from .watch import BOARD
 
@@ -58,9 +66,11 @@ CODE_REVIEW_FIX_FILE = "code-review.fix"
 # ticket and keeps the Epic PR a draft, because it costs less to fix by hand than to review again.
 UI_FIX_ROUNDS = 1
 TIMED_OUT = 124
-# A session with a background task, such as a dev server, stays open after its status. Past this grace
-# time the loop stops it.
+# A session with a background task, such as a dev server, stays open after its status. A subagent that
+# still runs at the status wakes the session for a late turn, so the loop waits this long for it.
 EXIT_GRACE_SECONDS = 120.0
+# Without such a subagent, no late turn is worth a wait, and a dev server never ends by itself.
+IDLE_GRACE_SECONDS = 10.0
 EXIT_POLL_SECONDS = 2.0
 LOG_TAIL_LINES = 80
 # Slot 0 is the main checkout, and the Epic branch has its own slot.
@@ -937,9 +947,11 @@ class EpicRun:
         `claude -p` does not exit while a background task runs, such as the dev server that a UI review
         starts, and the task can run until its own time limit. The loop stops a session that has given
         its status and has not exited in the grace time, as the status is its last word. A late turn
-        that comes within the grace time still counts.
+        that comes within the grace time still counts, and only a subagent that ran at the status gets
+        the long grace.
         """
         given: float | None = None
+        grace = EXIT_GRACE_SECONDS
         size = -1
         while True:
             try:
@@ -951,8 +963,14 @@ class EpicRun:
                 events = json_lines(log.read_text())
                 if any(agent_status(event) for event in events if event.get("type") == "result"):
                     given = time.monotonic()
-            elif given is not None and time.monotonic() - given >= EXIT_GRACE_SECONDS:
-                self.log(name, "agent", "stopped", detail="The session kept running after its status.")
+                    grace = EXIT_GRACE_SECONDS if subagents_at_status(events) else IDLE_GRACE_SECONDS
+            elif given is not None and time.monotonic() - given >= grace:
+                events = json_lines(log.read_text())
+                tasks = [str(task.get("description", "")) for task in background_tasks(events)]
+                running = f", with these background tasks: {'; '.join(tasks)}" if tasks else ""
+                session = next((event["session_id"] for event in events if event.get("session_id")), None)
+                detail = f"The session kept running after its status{running}."
+                self.log(name, "agent", "stopped", session=session, detail=detail)
                 # `timeout` passes the signal on to the whole group that it started.
                 process.terminate()
                 try:
