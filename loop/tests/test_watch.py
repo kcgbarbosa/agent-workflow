@@ -222,7 +222,7 @@ def test_loop_watch_serves_the_page_and_the_api(tmp_path: Path) -> None:
         for server in servers:
             server.shutdown()
 
-    assert "<title>Loop Watch</title>" in page
+    assert "<title>My Loop</title>" in page
     assert epics == [
         {"key": EPIC, "summary": "The Loop", "updated": epics[0]["updated"], "running": False},
     ]

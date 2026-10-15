@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Loop Watch</title>
+<title>My Loop</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap">
@@ -96,7 +96,6 @@ nav.tabs:empty { display: none; }
 main.wrap { padding-top: 8px; padding-bottom: 48px; display: grid; gap: 24px; }
 @media (max-width: 1023px) { main.wrap { padding-bottom: 112px; gap: 16px; } }
 .pagehead { padding: 16px 0 4px; }
-.pagehead .over { color: var(--text-muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .pagehead h1 { margin: 4px 0 0; font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
 @media (max-width: 1023px) { .pagehead h1 { font-size: 34px; line-height: 40px; font-weight: 650; letter-spacing: -0.02em; } }
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); min-width: 0; }
@@ -300,7 +299,7 @@ details.forecast[open] > summary h2::before { content: "▾ "; }
 <body>
 <header id="top">
   <div class="wrap bar">
-    <a class="homelink" id="home" href="#/" title="Every run on this host" aria-label="Every run on this host"><span class="label">Loop Watch</span></a>
+    <a class="homelink" id="home" href="#/" title="Home" aria-label="Home"><span class="label">My Loop</span></a>
     <div class="ctx">
       <span class="slash">/</span>
       <label class="picker project"><select id="project" aria-label="Project"></select></label>
@@ -516,7 +515,7 @@ async function refreshHome() {
 
 function renderHome() {
   const running = ui.home.flatMap((p) => p.runs.filter((r) => r.running).map((r) => ({ ...r, project: p.name })));
-  document.title = running.length ? `${running.length} running · Loop Watch` : "Loop Watch";
+  document.title = running.length ? `${running.length} running · My Loop` : "My Loop";
   document.getElementById("run").replaceChildren();
   document.getElementById("views").replaceChildren();
   const now = metric("Running now", h("div", { class: "figure" }, h("b", {}, String(running.length)), running.length === 1 ? "loop" : "loops"),
@@ -524,7 +523,7 @@ function renderHome() {
       ? running.flatMap((r, i) => [i ? ", " : "", h("a", { href: hashFor(r.project, r.key, "") }, `${r.project} ${r.key}`)])
       : "No loop runs on this host now."));
   document.getElementById("main").replaceChildren(
-    h("div", { class: "pagehead" }, h("div", { class: "over" }, "Every project on this host"), h("h1", { id: "title" }, "Runs")),
+    h("div", { class: "pagehead" }, h("h1", { id: "title" }, "Runs")),
     h("div", { class: "metrics" }, now, ...WINDOWS.map(([w, label]) => usageCard(label, ui.usage[w]))),
     h("div", { class: "projects" }, ui.home.map(projectPanel)));
   watchTitle();
@@ -548,7 +547,7 @@ function projectPanel(p) {
   });
   const toggle = () => { if (open) ui.homeOpen.delete(p.name); else ui.homeOpen.add(p.name); renderHome(); };
   return h("section", { class: "panel" },
-    h("div", { class: "phead" }, h("h2", {}, p.name), h("span", { class: "aside" }, p.running ? "Running" : "Not running")),
+    h("div", { class: "phead" }, h("h2", {}, p.name)),
     h("div", { class: "pbody" }, p.runs.length
       ? [h("ul", { class: "list epics" }, rows),
         p.runs.length > RUNS_SHOWN ? h("div", { class: "more" }, h("button", { class: "textbtn", onclick: toggle },
@@ -567,7 +566,7 @@ function drawHomeLink() {
 
 function render() {
   const v = ui.view;
-  document.title = `${v.key} ${(STATUS[v.status] || [v.status])[0]} · Loop Watch`;
+  document.title = `${v.key} ${(STATUS[v.status] || [v.status])[0]} · My Loop`;
   renderRun(v);
   const active = ui.page === "ticket" ? "tickets" : ui.page;
   document.getElementById("views").replaceChildren(...VIEWS.map(([k, label]) =>
@@ -575,18 +574,16 @@ function render() {
       icon(ICONS[k][active === k ? 1 : 0]), label)));
   const main = document.getElementById("main");
   if (ui.page === "ticket") renderTicket(v);
-  else if (ui.page === "tickets") main.replaceChildren(pageHead(v, "Tickets"), ticketList(v));
+  else if (ui.page === "tickets") main.replaceChildren(pageHead("Tickets"), ticketList(v));
   else if (ui.page === "diagnostics") renderDiagnostics(v);
-  else if (ui.page === "usage") main.replaceChildren(pageHead(v, "Usage"), usageView(v));
-  else main.replaceChildren(pageHead(v, v.summary || v.key), metrics(v), h("div", { class: "work" }, workQueue(v), proof(v)));
+  else if (ui.page === "usage") main.replaceChildren(pageHead("Usage"), usageView(v));
+  else main.replaceChildren(pageHead(v.summary || v.key), metrics(v), h("div", { class: "work" }, workQueue(v), proof(v)));
   if (ui.viewer) drawViewer();
   watchTitle();
 }
 
-function pageHead(v, title, over) {
-  return h("div", { class: "pagehead" },
-    h("div", { class: "over" }, over || [h("span", { class: "key" }, v.key), v.summary && title !== v.summary ? h("span", {}, v.summary) : ""]),
-    h("h1", { id: "title" }, title));
+function pageHead(title) {
+  return h("div", { class: "pagehead" }, h("h1", { id: "title" }, title));
 }
 
 // The large title shrinks into the bar once it scrolls away.
@@ -838,7 +835,7 @@ function renderTicket(v) {
     t.verdict ? ["UI review", (VERDICT[t.verdict] || VERDICT.unreviewed)[0]] : null,
     t.cost ? ["API list price", h("span", { title: "What the API would bill. It is not the plan usage." }, `${money(t.cost)}, not plan usage`)] : null,
   ].filter(Boolean);
-  const head = pageHead(v, t.summary || t.key, [h("a", { href: hashFor(ui.project, ui.epic, "tickets") }, "Tickets"), h("span", {}, "/"), h("span", { class: "key" }, t.key)]);
+  const head = pageHead(t.summary ? `${t.key} ${t.summary}` : t.key);
   const top = h("div", { class: "detail-head" },
     h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" }, ticketState(v, t), health ? tile(HEALTH[health.state], true) : ""),
     t.step ? stepper(t.step) : "",
@@ -863,7 +860,7 @@ function renderDiagnostics(v) {
   const top = h("div", { class: "detail-head" },
     v.stop_reason ? h("div", { class: "reason" }, STOPPED[v.stop_reason] || `The run stopped: ${v.stop_reason}`) : "",
     h("dl", { class: "facts-grid" }, facts.map(([k, val]) => h("div", {}, h("dt", {}, k), h("dd", {}, val)))));
-  detailPanel(document.getElementById("main"), pageHead(v, "Diagnostics"), top, {
+  detailPanel(document.getElementById("main"), pageHead("Diagnostics"), top, {
     key: v.key, agents: v.epic_agents, live: v.state === "running", events: v.events, ticket: null, files: v.epic_files, steps: true,
   });
 }
@@ -942,12 +939,11 @@ function usageView(v) {
     h("section", { class: "panel" }, h("div", { class: "phead" }, h("h2", {}, "This run")), h("div", { class: "pbody" },
       figs.length ? h("div", { class: "figs" }, figs) : h("div", { class: "muted" }, "No agent of this run has finished with a meter reading yet."),
       h("div", { class: "figs" }, delivery))),
-    h("section", { class: "panel", style: "grid-column:1/-1" }, h("div", { class: "phead" }, h("h2", {}, "Against the run before"),
-      h("span", { class: "aside" }, "Dollars are the API list price, not what the plan costs")), ui.reportWrap),
+    h("section", { class: "panel", style: "grid-column:1/-1" }, h("div", { class: "phead" }, h("h2", {}, "Against the run before")), ui.reportWrap),
     h("details", { class: "panel forecast", style: "grid-column:1/-1", open: ui.forecastOpen,
       // A redraw opens a new panel, which fires a toggle that changes nothing.
       ontoggle: (e) => { if (e.target.open === ui.forecastOpen) return; ui.forecastOpen = e.target.open; if (ui.forecastOpen) loadForecast(true); } },
-      h("summary", { class: "phead" }, h("h2", {}, "Capacity forecast"), h("span", { class: "aside" }, "Every run on this host and the open Epics in Jira")),
+      h("summary", { class: "phead" }, h("h2", {}, "Capacity forecast")),
       ui.forecastWrap));
 }
 
