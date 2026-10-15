@@ -67,7 +67,7 @@ Owner: <name>. Target: <sprint or date>.
 
 **Dependencies and rollout.** Dependencies always apply. Write the rollout only for a feature that ships after go-live.
 
-**Acceptance.** What can be checked on the deployed result, one line each, in user terms.
+**Acceptance.** What can be checked on the deployed result, one line each, in user terms. `/to-tickets` turns each line into "What the user sees" lines, and each of those becomes an acceptance test (`docs/agents/testing.md`).
 
 **Spec.** A link to the spec file on the default branch, built from the git remote. When the Epic has merged and the spec is archived, link the Confluence page that `docs/agents/issue-tracker.md` names.
 

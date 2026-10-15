@@ -90,7 +90,23 @@ Write the rule in the issue tracker doc, so `to-tickets` follows it:
 - Run both gates on a clean checkout of the main branch. A red main sticks every ticket, because each one fails its merge gate.
 - Run the ticket gate twice in a row. A gate that passes once and fails once spends the fix attempts of a ticket on noise.
 - After a gate, `git status` is clean. A gate that rewrites tracked files, such as a formatter, fails the next check, which refuses a tree with changes not committed.
-- A gate needs no sign-in and no prompt, and no secret: gates run without the repo's secrets (Secrets). A test that needs a key uses a development default.
+- A gate needs no sign-in and no prompt. The script gives a gate no secret (Secrets). A test that needs a key uses a development default, except the acceptance tests, whose make target reads the stack's secrets from the secrets file through a repo script (Acceptance tests).
+- The merge gate runs the acceptance suite after the fast checks, such as `make check acceptance`.
+
+## Acceptance tests
+
+**Find.** `docs/agents/testing.md`, which `/setup-repo` writes. It names the acceptance suite, its command for one ticket, and its list command.
+
+**Choose.**
+
+- `list` is the list command of `docs/agents/testing.md`, with `{key}` for the ticket, such as `["make", "acceptance-list", "ticket={key}"]`. It prints one title per line and needs no stack.
+- Keep `heading` at its default unless the ticket template names the list another way.
+- A repo whose `docs/agents/testing.md` says "No acceptance suite" leaves the table out.
+
+**Check.**
+
+- Run the list command for a landed ticket. It prints the title of each of its tests, and nothing else.
+- Each title matches a line of that ticket's "What the user sees", word for word.
 
 ## Stack per worktree
 
@@ -137,7 +153,7 @@ With `parallel = 2`, the highest slot is 3, so a port moves by at most 30. The b
 **Choose.**
 
 - `path` is the one folder prefix that holds the screens. Choose the narrowest folder that holds all of them, because backend code under the prefix starts a review for nothing. Test files never count.
-- The review is a skill of the repo, at `.claude/skills/ui-review/` by default. It starts the stack with the slot's ports, signs in as each role, opens the screens that the diff touches (`git diff <base>`), and saves the screenshots in `$LOOP_RUN_DIR`, named by role, browser, language, and screen. It returns each fault with its screenshot. It changes no file. The environment can lack something a screen needs, such as a bucket name, and then the review lists the part in `decisions` and does not block.
+- The review is a skill of the repo, at `.claude/skills/ui-review/` by default. It runs the ticket's acceptance tests on the real stack with the slot's ports: one test for each line of what the user sees, which taps through the flow as each role and saves a screenshot of each step in `$LOOP_RUN_DIR`. A screenshot of a page as it loads proves nothing about a tap, a search, or a jump, so the review does not take one. It returns each fault with its screenshot. It changes no file. A missing secret, bucket, or seeded file blocks the review, and a step that shows an error screen fails it.
 - Check at the narrowest supported width, because a layout that fits there usually fits wider. Add a desktop width only when the layout differs. Use Chromium, and add WebKit when users reach the product on Safari or iOS, because WebKit shows faults Chromium hides. Check each language the product ships, because a longer string breaks a layout and a missing key shows. Check as each role that the diff affects, because roles see different screens.
 - Take the screenshots and run the checks that need no eyes with one script, such as `make ui-review`. The checks are horizontal overflow (`scrollWidth > clientWidth`), console errors, failed requests, and untranslated keys.
 - A script costs no context on a turn. A Playwright MCP server in `.mcp.json` adds its tool list to every turn (Connectors), so add one only for a flow the script cannot cover.

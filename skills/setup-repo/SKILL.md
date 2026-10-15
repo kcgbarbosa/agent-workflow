@@ -1,6 +1,6 @@
 ---
 name: setup-repo
-description: "Configure this repo for the Jira workflow: write docs/agents/issue-tracker.md, domain.md and workflow.md and the Agent skills block of AGENTS.md. Run once before first use of /to-spec, /to-prd and /to-tickets."
+description: "Configure this repo for the Jira workflow: write docs/agents/issue-tracker.md, domain.md, testing.md and workflow.md and the Agent skills block of AGENTS.md. Run once before first use of /to-spec, /to-prd and /to-tickets."
 disable-model-invocation: true
 ---
 
@@ -10,6 +10,7 @@ Scaffold the per-repo configuration that `grill-with-docs`, `to-spec`, `to-prd`,
 
 - **Issue tracker**: the Jira project, the key format, the board fields, the rule that the Epic is the PRD, the paths of the metrics file and the personas file, and the Confluence space for archived specs
 - **Domain docs**: where `GLOSSARY.md`, the ADRs, the specs, the README Users table, the metrics file and the personas file live
+- **Testing**: the acceptance suite that proves each "What the user sees" line on the real stack, and what may be stubbed
 - **Workflow**: the order of the work for one feature
 
 This is a prompt-driven skill, not a deterministic script. Explore, present what you found, confirm with the user, then write. It reads Jira and Confluence at most, and writes neither.
@@ -25,6 +26,7 @@ Look at the current repo to understand its starting state. Read whatever exists;
 - `GLOSSARY.md`, `docs/adr/`, `docs/product/` (does it hold a metrics file or a personas file?), and the Users table in `README.md`
 - `docs/agents/`: does this skill's prior output already exist? A labels file, or a GitHub or local-files `issue-tracker.md`, is output of the retired setup skill.
 - `loop.toml` and `docs/agents/loop.md`: is there a loop?
+- The test folders, the test commands in the `Makefile` or `package.json`, and the seed: is there a suite that runs on the real stack, and a stubbed one?
 - Monorepo signals: a `pnpm-workspace.yaml`, a `workspaces` field in `package.json`, or a `GLOSSARY-MAP.md`.
 
 If `CLAUDE.md` exists, stop. Claude Code reads `AGENTS.md` only when no `CLAUDE.md` exists in the working directory or above. Tell the user to merge `CLAUDE.md` into `AGENTS.md` and remove it, then run this skill again. Never create or edit `CLAUDE.md` or `CLAUDE.local.md`.
@@ -54,21 +56,30 @@ Read the space through the Atlassian connector to check that the parent page exi
 
 **Section C: Domain docs.** The layout is single-context: one `GLOSSARY.md` and one `docs/adr/` at the repo root, and specs in `docs/product/specs/`. Write it without asking. If exploration found monorepo signals, tell the user that this skill writes the single-context layout only, and ask whether to continue.
 
+**Section D: Testing.** Ask for:
+
+- The acceptance folder, its command for one ticket, and its command that lists the titles of one ticket's tests. Recommend the ones exploration found. With no suite yet, recommend Playwright on the real stack, and say that the first UI ticket builds it.
+- The UI review skill. Recommend `.claude/skills/ui-review/`.
+- The stubbed and unit test folders, if any.
+
+A repo with no screen and no stack writes "No acceptance suite" in `docs/agents/testing.md`, and each skill then skips the acceptance steps.
+
 ### 3. Confirm and edit
 
 Show the user a draft of:
 
 - The `## Agent skills` block to add to `AGENTS.md`
-- The contents of `docs/agents/issue-tracker.md`, `docs/agents/domain.md` and `docs/agents/workflow.md`
+- The contents of `docs/agents/issue-tracker.md`, `docs/agents/domain.md`, `docs/agents/testing.md` and `docs/agents/workflow.md`
 
 Let them edit before writing.
 
 ### 4. Write
 
-Write the three docs from the seed templates in this skill folder, with every `<placeholder>` filled in from the answers:
+Write the four docs from the seed templates in this skill folder, with every `<placeholder>` filled in from the answers:
 
 - [issue-tracker.md](./issue-tracker.md)
 - [domain.md](./domain.md)
+- [testing.md](./testing.md)
 - [workflow.md](./workflow.md)
 
 Write in the style of the repo's own documents. If `AGENTS.md` or `docs/agents/domain.md` names a writing standard, follow it.
@@ -86,6 +97,10 @@ Single-context: `GLOSSARY.md` and `docs/adr/`. Read `docs/agents/domain.md` befo
 
 Jira, project `<KEY>`. See `docs/agents/issue-tracker.md`.
 
+### Testing
+
+Each "What the user sees" line is an acceptance test on the real stack. See `docs/agents/testing.md`.
+
 ### Workflow
 
 grill-with-docs → to-spec → to-prd → to-tickets → implement, or the loop. See `docs/agents/workflow.md`.
@@ -95,6 +110,6 @@ When a labels file from the retired setup skill exists in `docs/agents/`, tell t
 
 ### 5. Done
 
-Tell the user which files you wrote. Say that they can edit `docs/agents/*.md` directly, and that this skill needs to run again only to change the Jira project, the paths of the metrics and personas files, or the Confluence space.
+Tell the user which files you wrote. Say that they can edit `docs/agents/*.md` directly, and that this skill needs to run again only to change the Jira project, the paths of the metrics and personas files, the Confluence space, or the acceptance suite.
 
 End by pointing at `/setup-loop`: run it to let the loop build an Epic unattended. Skip it for a repo that builds with `implement` only.

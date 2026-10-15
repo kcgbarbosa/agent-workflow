@@ -31,6 +31,8 @@ Look for the originating spec, in this order:
 3. A spec file under `docs/`, `specs/`, or `.scratch/` matching the branch name or feature.
 4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
 
+When the spec is a ticket with "What the user sees" lines and `docs/agents/testing.md` names an acceptance suite, run its list command for the ticket and keep the titles for the Spec sub-agent.
+
 ### 3. Identify the standards sources
 
 Anything in the repo that documents how code should be written, such as `CODING_STANDARDS.md` or `CONTRIBUTING.md`.
@@ -69,7 +71,8 @@ Spawn each as a `general-purpose` subagent on your own model, because a review i
 
 - The diff command and commit list.
 - The path or fetched contents of the spec.
-- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+- The acceptance test titles from step 2, and the path of `docs/agents/testing.md`, when there are any.
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong; (d) each 'What the user sees' line with no acceptance test of the same name, or whose test does not check what the line says, or stubs an API, as `docs/agents/testing.md` gives. Quote the spec line for each finding. Under 400 words."
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 

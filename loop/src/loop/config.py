@@ -80,6 +80,8 @@ class Config:
     ui_path: str | None
     ui_skill: str
     ui_accepted_unchecked: tuple[str, ...]
+    acceptance_list: tuple[str, ...] | None
+    acceptance_heading: str
     main_branch: str
     agent_model: str
     agent_effort: str
@@ -135,6 +137,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
     watch = top.table("watch", optional=True)
     agent = top.table("agent", optional=True)
     demo_table = top.table("demo", optional=True)
+    acceptance = top.table("acceptance", optional=True)
     secrets_table = top.table("secrets")
 
     secrets = {}
@@ -159,6 +162,12 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
             raise ValueError("demo.command must not be empty")
         demo = Demo(command, demo_table.text("url"))
 
+    acceptance_list = None
+    if "acceptance" in data:
+        acceptance_list = acceptance.texts("list")
+        if not acceptance_list:
+            raise ValueError("acceptance.list must not be empty")
+
     config = Config(
         repo=repo,
         name=name,
@@ -177,6 +186,8 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         ui_path=ui.text("path", None),
         ui_skill=ui.text("skill", "ui-review"),
         ui_accepted_unchecked=ui.texts("accepted_unchecked", ()),
+        acceptance_list=acceptance_list,
+        acceptance_heading=acceptance.text("heading", "What the user sees"),
         main_branch=top.text("main_branch", "main"),
         agent_model=agent.text("model", "claude-opus-5-5"),
         agent_effort=agent.text("effort", "high"),
@@ -191,7 +202,20 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         secrets=secrets,
         state_dir=state_dir or Path.home() / ".local/state" / f"{name}-loop",
     )
-    tables = (top, tracker, gates, limits, notify, ui, stack_table, watch, agent, demo_table, secrets_table)
+    tables = (
+        top,
+        tracker,
+        gates,
+        limits,
+        notify,
+        ui,
+        stack_table,
+        watch,
+        agent,
+        demo_table,
+        acceptance,
+        secrets_table,
+    )
     for table in tables:
         table.done()
     return config

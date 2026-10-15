@@ -27,6 +27,8 @@ class Issue:
     comments: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)
     statuses: list[str] = field(default_factory=list)
+    # The description: a paragraph for each text, and a bullet list for each run of "- " texts.
+    body: list[str] = field(default_factory=list)
 
 
 class FakeJira:
@@ -63,7 +65,7 @@ class FakeJira:
             }
             for key in issue.blockers
         ]
-        description = {"type": "doc", "content": [_paragraph(f"Build {issue.summary}.")]}
+        description = {"type": "doc", "content": _content(issue.body or [f"Build {issue.summary}."])}
         return {
             "key": issue.key,
             "fields": {
@@ -205,6 +207,18 @@ class FakeJira:
                 self._send({"errorMessages": ["not found"]}, 404)
 
         return Handler
+
+
+def _content(texts: list[str]) -> list[dict[str, Any]]:
+    nodes: list[dict[str, Any]] = []
+    for text in texts:
+        if not text.startswith("- "):
+            nodes.append(_paragraph(text))
+            continue
+        if not nodes or nodes[-1]["type"] != "bulletList":
+            nodes.append({"type": "bulletList", "content": []})
+        nodes[-1]["content"].append({"type": "listItem", "content": [_paragraph(text[2:])]})
+    return nodes
 
 
 def _paragraph(text: str) -> dict[str, Any]:
