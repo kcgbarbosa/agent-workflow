@@ -10,7 +10,8 @@ utilization and the reset of each window, as the CLI writes the plan meter. A st
 assistant messages with their usage, one event per content block as the CLI does, and a message with `parent`
 comes from a subagent. A step with `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to
 FAKE_CLAUDE_DIR/peek.json. A step with `subagents_running` starts that many background subagents before the
-head agent returns its status, as when Claude Code asks for the status while they run. With no step left, the call returns done and changes nothing. `--version` prints
+head agent returns its status, as when Claude Code asks for the status while they run. A step with `shells_running`
+lists the background shell tasks that still run at the status, such as the dev server of a UI review. With no step left, the call returns done and changes nothing. `--version` prints
 FAKE_CLAUDE_VERSION, or a version new enough for the loop.
 
 The output is stream-json: one event per line, with one result event per turn. Each result event reports a
@@ -130,6 +131,10 @@ if step.get("subagents_running"):
     body = {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "StructuredOutput", "input": {}}]}
     print(json.dumps({"type": "assistant", "message": body, "parent_tool_use_id": None, "session_id": session}))
     print(json.dumps({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": session}))
+
+if step.get("shells_running"):
+    tasks = [{"task_id": f"b{n}", "task_type": "local_bash", "description": text} for n, text in enumerate(step["shells_running"])]
+    print(json.dumps({"type": "system", "subtype": "background_tasks_changed", "tasks": tasks, "session_id": session}))
 
 output = {"status": step.get("status", "done"), "reason": step.get("reason", ""), "decisions": step.get("decisions", [])}
 if step.get("notes"):

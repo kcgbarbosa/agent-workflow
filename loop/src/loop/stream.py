@@ -58,6 +58,15 @@ def subagents_at_status(events: list[dict[str, Any]]) -> int:
     return 0
 
 
+def background_tasks(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The background tasks that run at the end of the events, such as a dev server or a subagent."""
+    tasks: list[dict[str, Any]] = []
+    for event in events:
+        if event.get("type") == "system" and event.get("subtype") == "background_tasks_changed":
+            tasks = event.get("tasks") or []
+    return tasks
+
+
 def usage_reset(events: list[dict[str, Any]]) -> float | None:
     """The time, in epoch seconds, when the usage limit that stopped a run resets."""
     for event in reversed(events):
