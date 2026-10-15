@@ -20,7 +20,7 @@ from typing import Any, Protocol
 from . import report
 from .config import Config, PlanSpan
 from .jira import Jira
-from .watch import KEY, all_runs, landings, plan_meter, read_secrets
+from .watch import KEY, _is_gate, all_runs, landings, plan_meter, read_secrets
 
 # Anthropic's published plans: the usage of each against Pro's, and the monthly price in US dollars, from
 # https://claude.com/pricing. Anthropic states the multiple for the 5-hour window, and none for the week.
@@ -35,7 +35,7 @@ SNAPSHOT = "backlog.json"
 MIN_TICKETS = 5
 CONFIDENT_TICKETS = 15
 REFRESH_GAP_SECONDS = 30
-WINDOW_MINUTES = 300
+WINDOW_HOURS = 5
 RESETS = re.compile(r"resets at (\S+?)\.?$")
 EPIC_FIELDS = ["summary", "status"]
 TICKET_FIELDS = ["summary", "status", "parent", "issuelinks"]
@@ -212,30 +212,34 @@ def plan_of(spans: tuple[PlanSpan, ...], start: float, end: float) -> str | None
 
 
 def run_records(state_dir: Path, spans: tuple[PlanSpan, ...]) -> list[dict[str, Any]]:
-    """Each run on this host with its plan, its landed tickets, its plan usage, and its usage-limit waits."""
+    """Each run on this host with its plan, its landed and stuck tickets, its fix rounds, its plan usage, its
+    usage-limit waits, and its hours of running less those waits.
+    """
     records = []
     for epic, run in all_runs(state_dir):
         started, ended = _time(run[0]), _time(run[-1])
         by_ticket: dict[str, list[dict[str, Any]]] = {}
         for line in run:
-            name = str(line.get("ticket", ""))
-            key = match[0] if (match := KEY.match(name)) else name
+            key = _key(line)
             if key != epic:
                 by_ticket.setdefault(key, []).append(line)
         waits = _waits(run, ended)
+        waited = sum(wait["until"] - wait["since"] for wait in waits)
         landed = landings(by_ticket)
         for item in landed:
             if item["minutes"] is not None:
-                waited = sum(_overlap(wait, item["start"], item["land"]) for wait in waits) / 60
-                item["active_minutes"] = max(0.0, item["minutes"] - waited)
+                overlap = sum(_overlap(wait, item["start"], item["land"]) for wait in waits) / 60
+                item["active_minutes"] = max(0.0, item["minutes"] - overlap)
         records.append(
             {
                 "epic": epic,
                 "started": started,
                 "ended": ended,
+                "hours": max(0.0, ended - started - waited) / 3600,
                 "plan": plan_of(spans, started, ended),
                 "landed": landed,
-                "stuck": sum(1 for line in run if line.get("step") == "stuck"),
+                "stuck": {_key(line) for line in run if line.get("step") == "stuck"},
+                "fixes": _fixes(run),
                 "used": report.plan_usage(run)["used"],
                 "waits": waits,
                 "limit_stops": sum(
@@ -246,7 +250,35 @@ def run_records(state_dir: Path, spans: tuple[PlanSpan, ...]) -> list[dict[str, 
     return records
 
 
-def _waits(run: list[dict[str, Any]], ended: float) -> list[tuple[float, float]]:
+def _key(line: dict[str, Any]) -> str:
+    """The ticket of a line. A review session, such as `<KEY>-review`, belongs to its ticket."""
+    name = str(line.get("ticket", ""))
+    return match[0] if (match := KEY.match(name)) else name
+
+
+# The rounds of fixing that a run's lines record, by what asked for the fix.
+FIXES = ("ticket_gate", "merge_gate", "code_review", "ui_review")
+
+
+def _fixes(run: list[dict[str, Any]]) -> dict[str, int]:
+    """Each failed ticket gate and merge gate, each code review with findings, and each UI review with
+    faults, of every ticket in the run, landed or not.
+    """
+    counts = dict.fromkeys(FIXES, 0)
+    for line in run:
+        result = line.get("result")
+        if _is_gate(line, "ticket") and result == "fail":
+            counts["ticket_gate"] += 1
+        elif _is_gate(line, "merge") and result == "fail":
+            counts["merge_gate"] += 1
+        elif line.get("step") == "code-review" and result == "findings":
+            counts["code_review"] += 1
+        elif line.get("step") == "ui-gate" and result == "fail":
+            counts["ui_review"] += 1
+    return counts
+
+
+def _waits(run: list[dict[str, Any]], ended: float) -> list[dict[str, Any]]:
     """Each wait for a usage limit to reset, from the first pause line that names the reset to the reset, or
     to the run's last line when the run ended first. Parallel tickets wait for the same reset once.
     """
@@ -263,21 +295,27 @@ def _waits(run: list[dict[str, Any]], ended: float) -> list[tuple[float, float]]
             until = datetime.fromisoformat(resets).timestamp()
         except ValueError:
             continue
-        waits.append((since, max(since, min(until, ended))))
+        waits.append({"resets": resets, "since": since, "until": max(since, min(until, ended))})
     return waits
 
 
-def _overlap(wait: tuple[float, float], start: float | None, end: float) -> float:
-    return max(0.0, min(wait[1], end) - max(wait[0], start or end))
+def _overlap(wait: dict[str, Any], start: float | None, end: float) -> float:
+    return float(max(0.0, min(wait["until"], end) - max(wait["since"], start or end)))
 
 
 def period(plan: str | None, records: list[dict[str, Any]]) -> dict[str, Any]:
-    """What one plan delivered: the work landed, its quality, its time, and its share of each window."""
+    """What one plan delivered: the work landed, its rework, its time, and its share of each window. A usage
+    limit counts once however many runs waited for its reset, as when a run restarts and pauses again.
+    """
     landed = [item for record in records for item in record["landed"]]
     metered = [record for record in records if record["used"]]
     metered_tickets = sum(len(record["landed"]) for record in metered)
     minutes = [item["active_minutes"] for item in landed if "active_minutes" in item]
-    waits = [wait for record in records for wait in record["waits"]]
+    waited: dict[str, float] = {}
+    for record in records:
+        for wait in record["waits"]:
+            waited[wait["resets"]] = waited.get(wait["resets"], 0.0) + wait["until"] - wait["since"]
+    fixes = {kind: sum(record["fixes"][kind] for record in records) for kind in FIXES}
     multiple = PLANS[plan]["multiple"] if plan in PLANS else None
     shares = {window: _share(metered, window) for window in WINDOWS}
     five = shares["five_hour"]["per_ticket"]
@@ -289,17 +327,15 @@ def period(plan: str | None, records: list[dict[str, Any]]) -> dict[str, Any]:
         "to": _iso(max(record["ended"] for record in records)) if records else None,
         "landed": len(landed),
         "first_pass_rate": sum(item["first_pass"] for item in landed) / len(landed) if landed else None,
-        "gate_failures_per_landed": sum(item["gate_failures"] for item in landed) / len(landed)
-        if landed
-        else None,
-        "stuck": sum(record["stuck"] for record in records),
+        "fixes_per_landed": {kind: count / len(landed) for kind, count in fixes.items()} if landed else None,
+        "stuck": len(set().union(*(record["stuck"] for record in records))),
         "median_minutes": statistics.median(minutes) if minutes else None,
         "metered_tickets": metered_tickets,
         "five_hour": shares["five_hour"],
         "seven_day": shares["seven_day"],
         "pro_windows_per_ticket": five / 100 * multiple if five is not None and multiple else None,
-        "waits": len(waits),
-        "waited_hours": sum(until - since for since, until in waits) / 3600,
+        "waits": len(waited),
+        "waited_hours": sum(waited.values()) / 3600,
         "limit_stops": sum(record["limit_stops"] for record in records),
         "preliminary": metered_tickets < MIN_TICKETS,
     }
@@ -307,7 +343,8 @@ def period(plan: str | None, records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _share(records: list[dict[str, Any]], window: str) -> dict[str, Any]:
     """A window's share per landed ticket, in percent: the runs' total over their tickets, with the lowest and
-    the highest run. Each record may carry a `factor` that scales its share to another plan's window.
+    the highest run that landed one. A run that landed nothing counts toward the total, since its work went
+    into tickets that landed later. Each record may carry a `factor` that scales its share to another plan.
     """
     used = landed = 0.0
     each = []
@@ -335,13 +372,16 @@ def current_plan(spans: tuple[PlanSpan, ...], now: float) -> str | None:
 
 
 def estimate(records: list[dict[str, Any]], plan: str | None) -> dict[str, Any] | None:
-    """The share of each window one ticket needs on the plan. The plan's own runs give it once they landed
-    enough tickets under a meter reading; until then every attributed run counts, scaled by the multiples.
+    """The share of each window one ticket needs on the plan, and the tickets the loop lands in 5 hours of
+    running. The plan's own runs give them once they landed enough tickets under a meter reading; until then
+    every attributed run counts, its shares scaled by the multiples. The confidence follows the plan's own
+    tickets, since a scaled share rests on Anthropic's multiple.
     """
-    metered = [record for record in records if record["used"] and record["landed"]]
+    metered = [record for record in records if record["used"]]
     own = [record for record in metered if record["plan"] == plan]
+    own_tickets = sum(len(record["landed"]) for record in own)
     scaled = False
-    if sum(len(record["landed"]) for record in own) >= MIN_TICKETS or plan not in PLANS:
+    if own_tickets >= MIN_TICKETS or plan not in PLANS:
         basis = own
     else:
         basis = [
@@ -353,23 +393,31 @@ def estimate(records: list[dict[str, Any]], plan: str | None) -> dict[str, Any] 
     tickets = sum(len(record["landed"]) for record in basis)
     if not tickets:
         return None
-    minutes = [
-        item["active_minutes"] for record in basis for item in record["landed"] if "active_minutes" in item
+    hours = sum(record["hours"] for record in basis)
+    rates = [
+        len(record["landed"]) / record["hours"] * WINDOW_HOURS
+        for record in basis
+        if record["landed"] and record["hours"]
     ]
     return {
         "scaled": scaled,
         "plans": sorted({str(record["plan"]) for record in basis}),
         "tickets": tickets,
+        "own_tickets": own_tickets,
         "runs": len(basis),
         "from": _iso(min(record["started"] for record in basis)),
         "to": _iso(max(record["ended"] for record in basis)),
         "five_hour": _share(basis, "five_hour"),
         "seven_day": _share(basis, "seven_day"),
-        "median_minutes": statistics.median(minutes) if minutes else None,
+        "landed_per_window": {
+            "per_ticket": tickets / hours * WINDOW_HOURS if hours else None,
+            "low": min(rates) if rates else None,
+            "high": max(rates) if rates else None,
+        },
         "confidence": "high"
-        if tickets >= CONFIDENT_TICKETS
+        if own_tickets >= CONFIDENT_TICKETS
         else "medium"
-        if tickets >= MIN_TICKETS
+        if own_tickets >= MIN_TICKETS
         else "low",
     }
 
@@ -430,29 +478,45 @@ def _need(tickets: int, each: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def capacity(
-    each: dict[str, Any] | None, plan: str | None, parallel: int, meter: dict[str, Any], left: int | None
+    each: dict[str, Any] | None, plan: str | None, meter: dict[str, Any], left: int | None
 ) -> dict[str, Any] | None:
-    """What the plan allows against what the loop can do. In a 5-hour window the loop lands as many tickets
-    as its time allows, unless the plan's share runs out first: then the plan is the limit.
+    """What the plan allows against what the loop does. In 5 hours of running the loop lands some tickets.
+    The plan limits it when even the cheapest run's share would not fit them in a 5-hour window, and does not
+    when even the dearest run's share would. Between the two, the data cannot tell yet.
     """
-    if each is None or each["five_hour"]["per_ticket"] in (None, 0):
+    if each is None or not each["five_hour"]["per_ticket"]:
         return None
-    five = each["five_hour"]["per_ticket"]
-    week = each["seven_day"]["per_ticket"]
-    by_time = WINDOW_MINUTES / each["median_minutes"] * parallel if each["median_minutes"] else None
-    by_usage = 100 / five
+    five, week = each["five_hour"], each["seven_day"]["per_ticket"]
+    by_usage = 100 / five["per_ticket"]
+    # The fewest tickets a window fits, at the dearest run's share, and the most, at the cheapest one's.
+    fewest = 100 / five["high"] if five["high"] else by_usage
+    most = 100 / five["low"] if five["low"] else None
+    by_time = each["landed_per_window"]["per_ticket"]
+    if by_time is None:
+        limit = "unknown"
+    elif most is not None and most < by_time:
+        limit = "plan"
+    elif fewest >= by_time:
+        limit = "loop"
+    else:
+        limit = "unclear"
     weekly = meter.get("seven_day")
     week_left = (
         max(0.0, 100 - weekly["utilization"] * 100) / week
         if week and weekly and not weekly.get("past")
         else None
     )
+
+    def gain(fits: float | None, factor: float) -> float | None:
+        """How many more tickets the loop lands per window when the plan fits `factor` times as many."""
+        if by_time is None or fits is None:
+            return None
+        return float(min(by_time, fits * factor) / min(by_time, fits))
+
     upgrades = []
     for key, other in PLANS.items():
         if plan in PLANS and other["multiple"] > PLANS[plan]["multiple"]:
             factor = other["multiple"] / PLANS[plan]["multiple"]
-            effective = min(by_time, by_usage) if by_time else by_usage
-            more = min(by_time, by_usage * factor) if by_time else by_usage * factor
             upgrades.append(
                 {
                     "plan": key,
@@ -460,13 +524,18 @@ def capacity(
                     "price_more": other["price"] - PLANS[plan]["price"],
                     "five_hour_tickets": by_usage * factor,
                     "week_tickets": 100 / week * factor if week else None,
-                    "gain": more / effective if effective else None,
+                    "gain": gain(by_usage, factor),
+                    # The gain at the cheapest run's share, and at the dearest one's.
+                    "gain_low": gain(most, factor) if most is not None else 1.0,
+                    "gain_high": gain(fewest, factor),
                 }
             )
     return {
         "five_hour_by_usage": by_usage,
+        "five_hour_fewest": fewest,
+        "five_hour_most": most,
         "five_hour_by_time": by_time,
-        "plan_limits": by_time is not None and by_usage < by_time,
+        "limit": limit,
         "week_tickets": 100 / week if week else None,
         "week_left_tickets": week_left,
         "weeks_for_backlog": left * week / 100 if week and left is not None else None,
@@ -486,12 +555,13 @@ def verdict(
         }
     name = PLANS[plan]["name"]
     tickets = own["metered_tickets"] if own else 0
+    waits = own["waits"] if own else 0
     collect = []
     if tickets < MIN_TICKETS:
         collect.append(
             f"Land {MIN_TICKETS - tickets} more tickets on {name} with a meter reading ({tickets} so far)."
         )
-    if own and own["waits"] == 0:
+    if not waits:
         collect.append(f"Note whether {name} ever makes the loop wait for a usage limit. It has not yet.")
     collect.append(f"Watch the weekly meter across one full week on {name}, from one reset to the next.")
     if each is None or room is None:
@@ -500,23 +570,28 @@ def verdict(
             "says": "No run has landed a ticket under a meter reading yet.",
             "collect": collect,
         }
-    waits = own["waits"] if own else 0
-    if room["plan_limits"]:
-        says = (
-            f"{name} runs out before the loop does. A 5-hour window fits about "
-            f"{room['five_hour_by_usage']:.1f} tickets by usage, and the loop lands about "
-            f"{room['five_hour_by_time']:.1f} in 5 hours."
-        )
+    fits = (
+        f"about {room['five_hour_fewest']:.1f} to {room['five_hour_most']:.1f}"
+        if room["five_hour_most"] is not None
+        else f"at least {room['five_hour_fewest']:.1f}"
+    )
+    pace = (
+        f"A 5-hour window fits {fits} tickets by usage, and the loop lands about "
+        f"{room['five_hour_by_time']:.1f} in 5 hours of running."
+        if room["five_hour_by_time"] is not None
+        else f"A 5-hour window fits {fits} tickets by usage."
+    )
+    says = {
+        "plan": f"{name} runs out before the loop does. {pace}",
+        "loop": f"{name} is not the limit. {pace}",
+        "unclear": f"The data cannot tell yet whether {name} or the loop's own pace is the limit. {pace}",
+        "unknown": f"No run time to compare with yet. {pace}",
+    }[room["limit"]]
+    state = {"plan": "limits", "loop": "fits"}.get(room["limit"], "unclear")
+    if waits:
+        times = "once" if waits == 1 else f"{waits} times"
+        says = f"{name} has made the loop wait for a usage limit {times}. {says}"
         state = "limits"
-    elif waits:
-        says = (
-            f"{name} made the loop wait for a usage limit {waits} times, though a 5-hour window fits more "
-            "tickets than the loop lands in it. Your own sessions share the meter."
-        )
-        state = "limits"
-    else:
-        says = f"{name} is not the limit. A 5-hour window fits more tickets than the loop lands in it."
-        state = "fits"
     if room["weeks_for_backlog"] is not None and room["weeks_for_backlog"] > 1:
         says += f" The open tickets need about {room['weeks_for_backlog']:.1f} weeks of the weekly allowance."
     if tickets < MIN_TICKETS:
@@ -530,7 +605,6 @@ def view(
     backlog: Backlog | None,
     spans: tuple[PlanSpan, ...],
     landed_status: str,
-    parallel: int,
     meter: dict[str, Any],
 ) -> dict[str, Any]:
     records = run_records(state_dir, spans)
@@ -545,7 +619,7 @@ def view(
     each = estimate(records, plan)
     landed = {item["key"] for record in records for item in record["landed"]}
     work = backlog_view(backlog.snapshot if backlog else None, landed, landed_status, each)
-    room = capacity(each, plan, parallel, meter, work["left"] if work else None)
+    room = capacity(each, plan, meter, work["left"] if work else None)
     return {
         "plan": {"key": plan, **PLANS[plan]} if plan in PLANS else None,
         "periods": periods,
@@ -583,7 +657,6 @@ class Forecaster:
             self.backlog,
             config.plans,
             config.landed_status,
-            config.parallel,
             plan_meter(config.state_dir),
         )
         return {"project": config.name, **found}

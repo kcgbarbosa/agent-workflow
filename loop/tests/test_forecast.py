@@ -136,7 +136,7 @@ def test_each_plan_reports_its_own_shares_and_the_time_to_land_less_the_waits(tm
 
     assert pro["landed"] == 2
     assert pro["first_pass_rate"] == 0.5
-    assert pro["gate_failures_per_landed"] == 0.5
+    assert pro["fixes_per_landed"]["ticket_gate"] == 0.5
     # DEMO-3 took 70 minutes, of which 30 waited for the limit. DEMO-2 took 20.
     assert pro["median_minutes"] == pytest.approx(30.0)
     assert pro["waits"] == 1 and pro["waited_hours"] == pytest.approx(0.5)
@@ -219,39 +219,112 @@ def test_the_open_work_leaves_out_what_landed_and_waits_on_open_blockers() -> No
     assert backlog_view(None, set(), "In Review", each) is None
 
 
-def test_the_plan_limits_the_loop_only_when_a_window_runs_out_before_the_loops_time() -> None:
-    def each(five: float) -> dict[str, Any]:
-        return {
-            "five_hour": {"per_ticket": five, "low": five, "high": five},
-            "seven_day": {"per_ticket": 2.0, "low": 2.0, "high": 2.0},
-            "median_minutes": 30.0,
-        }
+def each_ticket(five: float, low: float, high: float, rate: float) -> dict[str, Any]:
+    return {
+        "five_hour": {"per_ticket": five, "low": low, "high": high},
+        "seven_day": {"per_ticket": 2.0, "low": 2.0, "high": 2.0},
+        "landed_per_window": {"per_ticket": rate, "low": rate, "high": rate},
+    }
 
+
+def test_the_plan_limits_the_loop_only_when_every_run_says_so() -> None:
     meter_now = {"seven_day": {"utilization": 0.5, "past": False}}
-    # 30 minutes a ticket lands 10 in 5 hours. At 20% a ticket, 5 fit: the plan is the limit.
-    tight = capacity(each(20.0), "max-5x", 1, meter_now, 30)
+    # The loop lands 10 tickets in 5 hours of running. At 20% a ticket in every run, 5 fit: the plan limits.
+    tight = capacity(each_ticket(20.0, 20.0, 20.0, 10.0), "max-5x", meter_now, 30)
     assert tight is not None
-    assert tight["plan_limits"]
+    assert tight["limit"] == "plan"
     assert tight["five_hour_by_usage"] == pytest.approx(5.0)
     assert tight["week_left_tickets"] == pytest.approx(25.0)
     assert tight["weeks_for_backlog"] == pytest.approx(0.6)
-    # Max 20x fits 20, but the loop's time caps it at 10: twice what it lands now, for $100 more.
+    # Max 20x fits 20, but the loop's pace caps it at 10: twice what it lands now, for $100 more.
     [upgrade] = tight["upgrades"]
     assert upgrade["plan"] == "max-20x" and upgrade["price_more"] == 100
     assert upgrade["gain"] == pytest.approx(2.0)
 
-    roomy = capacity(each(5.0), "max-5x", 1, meter_now, 30)
-    assert roomy is not None and not roomy["plan_limits"]
+    roomy = capacity(each_ticket(5.0, 5.0, 5.0, 10.0), "max-5x", meter_now, 30)
+    assert roomy is not None and roomy["limit"] == "loop"
     assert roomy["upgrades"][0]["gain"] == pytest.approx(1.0)
 
+    # The runs range from 5% to 20% a ticket, so a window fits 5 to 20 against the 10 the loop lands.
+    wide = capacity(each_ticket(10.0, 5.0, 20.0, 10.0), "max-5x", meter_now, 30)
+    assert wide is not None and wide["limit"] == "unclear"
+    assert (wide["five_hour_fewest"], wide["five_hour_most"]) == pytest.approx((5.0, 20.0))
+    assert (wide["upgrades"][0]["gain_low"], wide["upgrades"][0]["gain_high"]) == pytest.approx((1.0, 2.0))
+
     own = {"metered_tickets": 20, "waits": 0}
-    assert verdict("max-5x", own, each(5.0), roomy)["state"] == "fits"
-    assert verdict("max-5x", own, each(20.0), tight)["state"] == "limits"
-    early = verdict("max-5x", own | {"metered_tickets": 2}, each(20.0), tight)
+    assert verdict("max-5x", own, each_ticket(5.0, 5.0, 5.0, 10.0), roomy)["state"] == "fits"
+    assert verdict("max-5x", own, each_ticket(20.0, 20.0, 20.0, 10.0), tight)["state"] == "limits"
+    unclear = verdict("max-5x", own, each_ticket(10.0, 5.0, 20.0, 10.0), wide)
+    assert unclear["state"] == "unclear"
+    assert "cannot tell yet" in unclear["says"] and "about 5.0 to 20.0" in unclear["says"]
+    waited = verdict("max-5x", own | {"waits": 1}, each_ticket(10.0, 5.0, 20.0, 10.0), wide)
+    assert waited["state"] == "limits" and "wait for a usage limit once" in waited["says"]
+    early = verdict("max-5x", own | {"metered_tickets": 2}, each_ticket(20.0, 20.0, 20.0, 10.0), tight)
     assert early["state"] == "preliminary"
     assert early["says"].startswith("Preliminary.")
     assert "Land 3 more tickets on Max 5x" in early["collect"][0]
     assert verdict(None, None, None, None)["state"] == "unknown"
+
+
+def restarts(tmp_path: Path) -> Path:
+    """A Pro run that lands nothing, fails its merge gate, waits for a limit, and stops on a stuck ticket.
+    A restart waits for the same reset, finds the ticket stuck again, and lands another after a code review
+    with findings and a UI review with faults.
+    """
+    log = f"{tmp_path}/DEMO-1/runs/DEMO-2/merge-gate-1.log"
+    reset = "The usage limit resets at 2026-10-12T12:00:00+00:00."
+    write_lines(
+        tmp_path / "DEMO-1" / "decisions.jsonl",
+        [
+            line("DEMO-1", "DEMO-1", "start", "ok", "2026-10-12T10:00:00+00:00"),
+            line("DEMO-1", "DEMO-2", "start", "new", "2026-10-12T10:00:00+00:00"),
+            line(
+                "DEMO-1", "DEMO-2", "agent", "done", "2026-10-12T10:05:00+00:00", plan=meter((0, 0.2), (0, 0))
+            ),
+            line("DEMO-1", "DEMO-2", "make check", "fail", "2026-10-12T10:05:00+00:00", detail=log),
+            line("DEMO-1", "DEMO-2", "agent", "usage-pause", "2026-10-12T10:10:00+00:00", detail=reset),
+            line("DEMO-1", "DEMO-2", "stuck", "stuck", "2026-10-12T10:30:00+00:00"),
+            line("DEMO-1", "DEMO-1", "start", "ok", "2026-10-12T11:00:00+00:00"),
+            line("DEMO-1", "DEMO-2", "start", "restart", "2026-10-12T11:00:00+00:00"),
+            line("DEMO-1", "DEMO-2", "agent", "usage-pause", "2026-10-12T11:01:00+00:00", detail=reset),
+            line("DEMO-1", "DEMO-2", "stuck", "stuck", "2026-10-12T12:10:00+00:00"),
+            line("DEMO-1", "DEMO-3", "start", "new", "2026-10-12T12:10:00+00:00"),
+            line("DEMO-1", "DEMO-3", "code-review", "findings", "2026-10-12T12:20:00+00:00"),
+            line("DEMO-1", "DEMO-3", "ui-gate", "fail", "2026-10-12T12:30:00+00:00"),
+            line(
+                "DEMO-1",
+                "DEMO-3",
+                "agent",
+                "done",
+                "2026-10-12T12:40:00+00:00",
+                plan=meter((0.2, 0.3), (0, 0)),
+            ),
+            line("DEMO-1", "DEMO-3", "land", "landed", "2026-10-12T12:50:00+00:00"),
+        ],
+    )
+    return tmp_path
+
+
+def test_a_limit_counts_once_across_restarts_and_stuck_counts_tickets(tmp_path: Path) -> None:
+    pro = period("pro", run_records(restarts(tmp_path), SPANS))
+
+    assert pro["waits"] == 1
+    # The first run waited 20 minutes before it ended, and the restart 59 until the reset.
+    assert pro["waited_hours"] == pytest.approx(79 / 60)
+    assert pro["stuck"] == 1
+    assert pro["fixes_per_landed"] == {"ticket_gate": 0, "merge_gate": 1, "code_review": 1, "ui_review": 1}
+
+
+def test_a_run_that_landed_nothing_still_counts_toward_the_share_and_the_pace(tmp_path: Path) -> None:
+    each = estimate(run_records(restarts(tmp_path), SPANS), "pro")
+
+    assert each is not None and not each["scaled"]
+    # 20% in the run that landed nothing and 10% in the one that landed DEMO-3.
+    assert each["five_hour"] == pytest.approx({"per_ticket": 30.0, "low": 10.0, "high": 10.0})
+    # One ticket in 10 + 51 minutes of running less the waits.
+    assert each["landed_per_window"]["per_ticket"] == pytest.approx(300 / 61)
+    assert each["landed_per_window"]["high"] == pytest.approx(300 / 51)
+    assert each["confidence"] == "low" and each["own_tickets"] == 1
 
 
 # --- Jira ---
@@ -361,7 +434,7 @@ class Forecast:
         self.refreshed = 0
 
     def view(self) -> dict[str, Any]:
-        return view(self.state_dir, None, SPANS, "In Review", 1, {})
+        return view(self.state_dir, None, SPANS, "In Review", {})
 
     def refresh(self) -> bool:
         self.refreshed += 1
