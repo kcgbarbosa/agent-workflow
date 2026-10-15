@@ -24,6 +24,8 @@ The user has asked for a **retrospective**. You are suggesting improvements to t
 
 4. Present these candidates to the user, in order of severity.
 
+5. If a project-scoped skill changed, update `docs/project-skills.md` in agent-workflow.
+
 ## Reference
 
 ### Implementation vs Review

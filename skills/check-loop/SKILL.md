@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Check loop
 
-KC wants a status of the loop that reads in ten seconds. KC has ADHD, so the reply is the [Report](#report) and nothing else. When KC names a worry in the arguments, such as "PITCH-52 looks slow", the report answers it first.
+KC wants a status of the loop that reads in ten seconds. KC has ADHD, so the reply is the [Report](#report) and nothing else. When KC names a worry in the arguments, such as "TIDE-52 looks slow", the report answers it first.
 
 ## 1. Refresh on the loop
 
@@ -14,7 +14,7 @@ The loop changes often. Read its current version before you judge a run:
 
 - [`../setup-loop/loop.md`](../setup-loop/loop.md), the fixed design: what each step should do.
 - `git -C ~/dev/agent-workflow fetch -q`, then `git -C ~/dev/agent-workflow log --oneline -10 -- loop skills/setup-loop` and `git -C ~/dev/agent-workflow status -sb`: the latest loop changes, and whether this checkout is behind origin.
-- The repo's `loop.toml` and `docs/agents/loop.md`. The repo is the pane path of the `<name>-loop` tmux session, from `tmux display -p -t <name>-loop '#{pane_current_path}'`. With no session, it is `~/dev/pitchridge`.
+- The repo's `loop.toml` and `docs/agents/loop.md`. The repo is the pane path of the `<name>-loop` tmux session, from `tmux display -p -t <name>-loop '#{pane_current_path}'`. With no session, ask KC which repo.
 
 Done when you can say what each step, gate, and limit of this run should be.
 
@@ -58,7 +58,7 @@ For each flag, name the **proper fix**: the change at the root cause, made where
 Then decide who makes the proper fix:
 
 - **I can do it** when the fix is a change to code, config, or docs that you can make, test, and open as a pull request.
-- **You're needed** when the fix needs something only KC holds: a product or scope decision, a spend, an account, a secret, an admin control such as WorkOS roles, or a merge.
+- **You're needed** when the fix needs something only KC holds: a product or scope decision, a spend, an account, a secret, an admin control such as identity-provider roles, or a merge.
 - **No fix needed** when the loop handles it by design, such as a pause for the plan limit. Name the rule.
 
 Done when every flag has its proper fix and a verdict.
@@ -68,15 +68,15 @@ Done when every flag has its proper fix and a verdict.
 Plain words, local times, durations in minutes. A blank line between every line, so each one stands alone. No headings, tables, or preamble.
 
 ```
-🟡 PITCH-14 Spec Answers · running 49 min
+🟡 TIDE-14 Tide alerts · running 49 min
 
 ✅ 2 landed · 🔄 1 running · ⏳ 2 waiting · 🛑 0 stuck
 
-🔄 PITCH-52: UI review, 4 min in
+🔄 TIDE-52: UI review, 4 min in
 
-⚠️ **PITCH-53 stuck**: auto mode denied `docker volume rm` on its own stack
+⚠️ **TIDE-53 stuck**: auto mode denied `docker volume rm` on its own stack
 
-🔧 Fix: the loop's agent settings allow removing a `pitchridge-<key>` volume
+🔧 Fix: the loop's agent settings allow removing a `tidepool-<key>` volume
 
 👉 **I can do it**, as a loop PR in agent-workflow. Want me to?
 

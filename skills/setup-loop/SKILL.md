@@ -8,13 +8,13 @@ disable-model-invocation: true
 
 The **loop** is a script that builds one Epic unattended. The script makes every decision: which ticket runs next, whether a ticket passed, what lands on the Epic branch. Agents only implement tickets.
 
-[loop.md](loop.md) holds the fixed design and the settings each repo fills in. This skill fills in the settings for the current repo and plans the build.
+[loop.md](loop.md) holds the fixed design and names the settings each repo fills in. [values.md](values.md) says how to find and choose each value, with the check that shows it is wrong. This skill fills in the settings for the current repo and plans the build.
 
 ## Process
 
 ### 1. Explore
 
-Find the facts behind every settings section of loop.md yourself. Look at:
+Find the facts behind every settings section of loop.md yourself. Read the Find paragraph of each section in values.md, and look at:
 
 - the issue tracker doc (`docs/agents/issue-tracker.md`) and the children of a real Epic, to see how blocking edges are stored
 - the Makefile, package scripts, and CI workflows, for the gate commands
@@ -27,13 +27,15 @@ Find the facts behind every settings section of loop.md yourself. Look at:
 
 An existing `docs/agents/loop.md` means a re-run. Start from its values.
 
-Done when each settings section has a found value or a named decision for the user.
+Done when each settings section has a found value or a named decision for the user, and no hard-coded port, status name, or link type is left unread.
 
 ### 2. Settle
 
-Invoke the `grilling` skill to settle the open decisions, with the settings sections as the design tree. Recommend the value from `~/dev/pitchridge/docs/agents/loop.md`, the worked example, when it fits this repo, and say why when it does not.
+Invoke the `grilling` skill to settle the open decisions, with the settings sections as the design tree. Recommend the choice from the Choose paragraph of the section in values.md, with its reason, and say why when this repo differs.
 
-Done when every settings section holds a value, or "not used" with the reason.
+Run the Check list of each section against the repo before you call its value settled. A check that fails is a ticket for step 4, not a reason to change the value.
+
+Done when every settings section holds a value, or "not used" with the reason, and every check has a result.
 
 ### 3. Write
 
@@ -41,8 +43,8 @@ Draft `loop.toml` at the repo root with every key a settings section names, then
 
 - the issue tracker doc: the rule from the Human steps section, so `to-tickets` follows it
 - the workflow doc: the loop builds an Epic, and `implement` stays for a single ticket
-- the go-live checklist, if the repo has one: an item to undo each development-only setting, such as full connector access
-- the `## Agent skills` block of the repo's `AGENTS.md` or `CLAUDE.md`: one line pointing to `docs/agents/loop.md`, and one line routing a loop failure: a wrong value is fixed in this repo's `loop.toml` or `docs/agents/loop.md`; anything else is a loop bug, fixed in `~/dev/agent-workflow`, where `loop/` and `skills/setup-loop/loop.md` change in one pull request
+- the go-live checklist, if the repo has one: an item to undo each development-only setting, such as the headless sign-in of the UI review and its test users
+- the `## Agent skills` block of the repo's `AGENTS.md`: one line pointing to `docs/agents/loop.md`, and one line routing a loop failure: a wrong value is fixed in this repo's `loop.toml` or `docs/agents/loop.md`; anything else is a loop bug, fixed in `~/dev/agent-workflow`, where `loop/` and `skills/setup-loop/loop.md` change in one pull request
 
 Show the drafts, take edits, then write.
 

@@ -46,15 +46,15 @@ The machine README, `~/.local/share/chezmoi/README.md`, holds how to reach each 
 
 ### Run
 
-Settles who starts a run, and where. The command is `loop start <Epic key>` in the main checkout, with `--on <branch>` to stack the Epic (rule 14).
+Settles who starts a run, and where. The command is `loop start <Epic key>` in the main checkout, with `--on <branch>` to stack the Epic (rule 14). The run lock is a file on the host, so two hosts can both start a run on the same Epic. A person keeps it to one run at a time across hosts.
 
 ### Tracker
 
-Settles the tracker and how the Epic's children and blocking edges are stored. `[tracker]` gives `kind` and `url`. Jira is the only adapter. Set `name_landed_keys_only = true` when the tracker's automation closes each issue that a merged pull request names. The Epic PR then gives a ticket that did not land by its summary, not its key. The default is `false`.
+Settles the tracker and how the Epic's children and blocking edges are stored. `[tracker]` gives `kind` and `url`. Jira is the only adapter. It reads the children of an Epic as the issues with `parent = <Epic key>`, and a blocking edge as a "Blocks" issue link. It signs in with basic auth, the account email and an API token without scopes, on the site URL. It marks a stuck ticket with the Jira Flagged field, so the site needs that field. Set `name_landed_keys_only = true` when the tracker's automation closes each issue that a merged pull request names. The Epic PR then gives a ticket that did not land by its summary, not its key. The default is `false`.
 
 ### Status and stuck marker
 
-Settles which status changes the loop makes, which the tracker's automation makes, and how a stuck ticket shows. `tracker.in_progress` and `tracker.landed` name the loop's statuses.
+Settles which status changes the loop makes, which the tracker's automation makes, and how a stuck ticket shows. `tracker.in_progress` and `tracker.landed` name the loop's statuses. Each must match a status name of the workflow exactly, and the workflow must offer a transition to it from the status that a ticket has at that point. The loop never sets the done status, because a landed ticket is on the Epic branch, not on `main`.
 
 ### Human steps
 
@@ -66,16 +66,17 @@ Settles where the key goes in commits. The script names each branch `feat/<KEY>-
 
 ### Gates
 
-Settles the ticket gate, the merge gate, and what CI runs. `[gates]` gives `ticket`, `merge`, and `timeout_minutes`. `agent_hint` adds a line to each ticket file for what the gate command does not say, such as what the tests need from the stack.
+Settles the ticket gate, the merge gate, and what CI runs. `[gates]` gives `ticket`, `merge`, and `timeout_minutes`. `agent_hint` adds a line to each ticket file for what the gate command does not say, such as what the tests need from the stack. A gate is an argument list that the script runs with no shell, so a pipe or `&&` in it does not work: put them in a script or a make target. A gate runs without the repo's secrets (Secrets), so it must pass with development defaults.
 
 ### Stack per worktree
 
 Settles how two tickets run full stacks side by side. `[stack]` gives the base `ports` and the `port_step` per slot, and the script sets `COMPOSE_PROJECT_NAME` to `<name>-<key>`. A repo with no stack leaves it out.
+Slot 0 is the main checkout, so a person's own stack keeps the base ports. The Epic branch uses slot 1, and the tickets in flight use slot 2 and up, so the highest slot is `parallel` + 1. For each key under `ports`, the script sets an env var of that name to the slot's port, and the repo's Compose files and dev server configs read it.
 Every Epic uses the same slot, so the slot ports must be free when a run starts. At start, the script stops each `<name>-<key>` project that an earlier run left, and it stops the Epic stack when the run ends. Before each gate, it stops the stack of that gate, so the gate starts on new containers. A container from a failed start can start later with no published port. The volumes stay.
 
 ### UI review
 
-Settles the UI paths, the review skill, the browser, sign-in, and what the review checks. `[ui]` gives `path`, `skill`, and `accepted_unchecked`: phrases for the parts that the review is known not to check, such as a screen that needs a bucket name (rule 5). A repo with no UI leaves it out, and the UI gate never fires.
+Settles the UI paths, the review skill, the browser, sign-in, and what the review checks. `[ui]` gives `path`, `skill`, and `accepted_unchecked`: phrases for the parts that the review is known not to check, such as a screen that needs a bucket name (rule 5). `path` is one folder prefix, and a changed file counts when its path starts with it. A file named `*.test.*` or `*.spec.*`, or under `__tests__/`, never counts. The skill is a skill of the repo, and the script gives it the run folder in the `LOOP_RUN_DIR` env var and in its prompt. A repo with no UI leaves it out, and the UI gate never fires.
 
 ### Demo
 
@@ -91,11 +92,11 @@ Settles which MCP servers the agent gets. When the repo has a `.mcp.json`, every
 
 ### Notifications
 
-Settles the channel, the events, and what a message may contain. `notify.url` is the ntfy server, and the `NTFY_TOPIC` secret is the topic.
+Settles the channel, the events, and what a message may contain. `notify.url` is the ntfy server, and the `NTFY_TOPIC` secret is the topic. A message holds a key and a status only. Anyone who knows the topic can read the messages, so the topic is a secret.
 
 ### Secrets
 
-Settles which secrets the loop needs and where each one lives. `[secrets]` maps each env var to its Bitwarden `item` and `field`. The script needs `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `NTFY_TOPIC`, and passes every secret to each agent.
+Settles which secrets the loop needs and where each one lives. `[secrets]` maps each env var to its Bitwarden `item` and `field`. The script needs `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `NTFY_TOPIC`, and passes every secret to each agent run as an env var. The gates and the stack commands do not get them.
 `loop secrets` copies them from Bitwarden to `~/.local/state/<name>-loop/secrets.json`, with mode 600, so a run needs no unlock. Run it once per host, and again after a secret changes. A run reads Bitwarden only when the file is missing.
 
 ### Hosts

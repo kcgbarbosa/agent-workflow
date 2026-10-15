@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Links each skill and subagent tier in this repo, and AGENTS.md as CLAUDE.md, into ~/.claude, and installs the loop command.
+# Links each skill and subagent tier in this repo, the shared files in config/, and AGENTS.md as CLAUDE.md, into ~/.claude, and installs the loop command.
 # Safe to run again.
 set -euo pipefail
 
@@ -42,10 +42,25 @@ for link in "$dest"/agents/*; do
   esac
 done
 
-# A trial subagent's worktree branches from the default branch unless this setting says otherwise.
-if ! grep -qs '"baseRef": *"head"' "$dest/settings.json"; then
-  echo 'agent-workflow: the trial tier needs "worktree": {"baseRef": "head"} in ~/.claude/settings.json' >&2
-fi
+# The shared files win over a file made by hand. The old file is kept as <name>.bak, or <name>.bak.<time> when that exists.
+for file in settings.json statusline.sh keybindings.json notify.sh; do
+  target="$dest/$file"
+  if [ -L "$target" ]; then
+    case "$(readlink "$target")" in
+      "$repo"/config/*) ;;
+      *)
+        echo "agent-workflow: skipped $file, $target is a link to somewhere else" >&2
+        continue
+        ;;
+    esac
+  elif [ -e "$target" ]; then
+    backup="$target.bak"
+    [ ! -e "$backup" ] && [ ! -L "$backup" ] || backup="$target.bak.$(date +%Y%m%d%H%M%S).$$"
+    mv "$target" "$backup"
+    echo "agent-workflow: moved $target to $backup" >&2
+  fi
+  ln -sfn "$repo/config/$file" "$target"
+done
 
 if [ -e "$dest/CLAUDE.md" ] && [ ! -L "$dest/CLAUDE.md" ]; then
   echo "agent-workflow: skipped CLAUDE.md, $dest/CLAUDE.md is a real file. Remove it, then run this again" >&2
