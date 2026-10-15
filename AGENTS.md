@@ -31,6 +31,8 @@ These are common instructions for KC's agents across all scenarios.
   Label an inference as an inference. When something cannot be checked, say UNKNOWN and say why.
 - Compare contents with `git diff --no-index`, `diff` or `cmp` before calling two files duplicates or proposing to delete or reset one.
   `git diff <a> <b>` filters by path and prints nothing on a clean tree. KC keeps rewritten copies of docs as style references.
+- A local checkout can be behind its remote or on another branch. Before you say that a skill, a file, or a feature is missing, or that a tool rejects a config key, run `git fetch` and look at `origin/main`.
+  The skills in `~/.claude/skills` are symlinks into `~/dev/agent-workflow`, so the branch of that checkout decides which skills exist. Keep it on `main`, and edit it from a `git worktree`.
 
 ## Commit message conventions
 
