@@ -568,6 +568,25 @@ def test_the_lines_of_what_the_user_sees_come_from_the_list_under_the_heading() 
     assert loop_run.user_sees("Goal. Read a file.\n", "What the user sees") == []
 
 
+def test_each_gate_gets_no_terminal_as_stdin(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    # A pipe stands in for the terminal that `loop start` runs under.
+    read, write = os.pipe()
+    saved = os.dup(0)
+    os.dup2(read, 0)
+    try:
+        assert world.run() == 0
+    finally:
+        os.dup2(saved, 0)
+        for fd in (read, write, saved):
+            os.close(fd)
+
+    gates = world.records("make")
+    assert gates and all(record["stdin_null"] for record in gates)
+
+
 def test_a_ui_change_lands_only_after_a_ui_review_and_its_screenshots_reach_the_ticket(world: World) -> None:
     world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}], "DEMO-2-ui": [{"screenshot": True}]})

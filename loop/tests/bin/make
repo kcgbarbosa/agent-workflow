@@ -17,7 +17,12 @@ import time
 from pathlib import Path
 
 targets = sys.argv[1:]
-record = {"targets": targets, "cwd": os.getcwd(), "project": os.environ.get("COMPOSE_PROJECT_NAME")}
+record = {
+    "targets": targets,
+    "cwd": os.getcwd(),
+    "project": os.environ.get("COMPOSE_PROJECT_NAME"),
+    "stdin_null": os.stat(0).st_rdev == os.stat(os.devnull).st_rdev,
+}
 for name in ("make.jsonl", "commands.jsonl"):
     with Path(os.environ["FAKE_CLAUDE_DIR"], name).open("a") as calls:
         calls.write(json.dumps({**record, "tool": "make"}) + "\n")
