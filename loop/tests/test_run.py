@@ -579,6 +579,8 @@ def test_a_ui_change_lands_only_after_a_ui_review_and_its_screenshots_reach_the_
     assert "return `blocked` with what is missing" in review["prompt"]
     assert "List in `unchecked` only a part that the seeded data cannot show" in review["prompt"]
     assert review["resume"] is None and review["model"] == REVIEW_MODEL
+    assert "Run each command in the foreground" in review["prompt"]
+    assert review["no_background"] == "1" and world.calls("DEMO-2")[0]["no_background"] is None
     assert len(world.calls("DEMO-2")) == 1
     assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
 

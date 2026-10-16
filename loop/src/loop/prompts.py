@@ -60,8 +60,9 @@ REVIEW_RULES = (
     "Change no file, and do not commit or push. Return in `findings` each problem that breaks the behaviour, "
     "the ticket, or a documented standard. List polish that blocks nothing, such as a name or a spacing, in "
     "`notes` instead. Leave out a judgement call that you would not change. "
-    "Wait for every subagent you start to return, and stop every background task you start, such as a dev "
-    "server, before you give your result, which ends the session."
+    "Wait for every subagent you start to return. Run each command in the foreground, with a timeout long "
+    "enough for it, because your result ends the session and nothing waits for a background task. Stop each "
+    "server you start, such as a dev server, before you give your result."
 )
 CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. " + REVIEW_RULES
 ACCEPTANCE_PROMPT = (

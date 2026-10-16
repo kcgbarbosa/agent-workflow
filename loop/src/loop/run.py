@@ -68,6 +68,8 @@ CODE_REVIEW_FIX_FILE = "code-review.fix"
 # The faults of a UI review go back to the head agent this often. A fault left after that lands with the
 # ticket and keeps the Epic PR a draft, because it costs less to fix by hand than to review again.
 UI_FIX_ROUNDS = 1
+# A review ends at its result, so a background task it starts dies unread. The head agent keeps them.
+FOREGROUND_ONLY = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
 TIMED_OUT = 124
 # A session with a background task, such as a dev server, stays open after its status. A subagent that
 # still runs at the status wakes the session for a late turn, so the loop waits this long for it.
@@ -960,6 +962,7 @@ class EpicRun:
             **self.config.stack_env(run.slot, run.ticket.key),
             **self.secrets,
             "LOOP_RUN_DIR": str(run.run_dir),
+            **(FOREGROUND_ONLY if schema == REVIEW_SCHEMA else {}),
         }
         run.agent_log = next_log(run.run_dir, "agent", ".jsonl")
         errors_log = run.agent_log.with_suffix(".err")
