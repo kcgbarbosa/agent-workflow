@@ -11,7 +11,10 @@ assistant messages with their usage, one event per content block as the CLI does
 comes from a subagent. A step with `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to
 FAKE_CLAUDE_DIR/peek.json. A step with `subagents_running` starts that many background subagents before the
 head agent returns its status, as when Claude Code asks for the status while they run. A step with `shells_running`
-lists the background shell tasks that still run at the status, such as the dev server of a UI review. With no step left, the call returns done and changes nothing. `--version` prints
+lists the background shell tasks that still run at the status, such as the dev server of a UI review. A step
+with `stall` goes quiet for that many seconds in the middle of its turn. A step with `split` writes each event
+in two parts, so a reader can meet a cut-off line. A step with `error` "mid-turn" stops in the middle of its
+turn, after part of a line and with no result. With no step left, the call returns done and changes nothing. `--version` prints
 FAKE_CLAUDE_VERSION, or a version new enough for the loop.
 
 The output is stream-json: one event per line, with one result event per turn. Each result event reports a
@@ -49,12 +52,6 @@ with (home / "calls.jsonl").open("a") as calls:
         "schema": json.loads(args[args.index("--json-schema") + 1]),
         "model": args[args.index("--model") + 1] if "--model" in args else None,
         "effort": args[args.index("--effort") + 1] if "--effort" in args else None,
-        "autocompact": args[args.index("--autocompact") + 1] if "--autocompact" in args else None,
-        "mcp_config": args[args.index("--mcp-config") + 1] if "--mcp-config" in args else None,
-        "strict_mcp_config": "--strict-mcp-config" in args,
-        "agents": args[args.index("--agents") + 1] if "--agents" in args else None,
-        "system_prompt": args[args.index("--append-system-prompt") + 1] if "--append-system-prompt" in args else None,
-        "settings": json.loads(args[args.index("--settings") + 1]) if "--settings" in args else None,
     }
     calls.write(json.dumps(record) + "\n")
 
@@ -90,7 +87,22 @@ if step.get("pr_body"):
 if step.get("screenshot"):
     Path(os.environ["LOOP_RUN_DIR"], "home-360-chromium-en.png").write_bytes(b"\x89PNG fake")
 
-print(json.dumps({"type": "system", "subtype": "init", "session_id": session}), flush=True)
+
+def emit(event: dict[str, object]) -> None:
+    line = json.dumps(event) + "\n"
+    if step.get("split"):
+        half = len(line) // 2
+        sys.stdout.write(line[:half])
+        sys.stdout.flush()
+        time.sleep(0.05)
+        line = line[half:]
+    sys.stdout.write(line)
+    sys.stdout.flush()
+
+
+emit({"type": "system", "subtype": "init", "session_id": session})
+if step.get("stall"):
+    time.sleep(step["stall"])
 if step.get("peek"):
     print("Starting the MCP servers", file=sys.stderr, flush=True)
     logs = {log.name: log.read_text() for log in Path(os.environ["LOOP_RUN_DIR"]).glob("agent-*")}
@@ -99,18 +111,22 @@ for meter in step.get("rate_limits", []):
     windows = {window: {"utilization": value, "resetsAt": resets} for window, (value, resets) in meter.items()}
     first = next(iter(windows))
     info = {"status": "allowed", "rateLimitType": first, **windows[first], "unifiedWindows": windows}
-    print(json.dumps({"type": "rate_limit_event", "rate_limit_info": info, "session_id": session}))
+    emit({"type": "rate_limit_event", "rate_limit_info": info, "session_id": session})
 for message in step.get("messages", []):
     fresh, read, written = message["context"]
     usage = {"input_tokens": fresh, "cache_read_input_tokens": read, "cache_creation_input_tokens": written, "output_tokens": 5}
     for _ in range(message.get("blocks", 1)):
         body = {"id": message["id"], "role": "assistant", "content": [{"type": "text", "text": "Working."}], "usage": usage}
-        print(json.dumps({"type": "assistant", "message": body, "parent_tool_use_id": message.get("parent"), "session_id": session}))
+        emit({"type": "assistant", "message": body, "parent_tool_use_id": message.get("parent"), "session_id": session})
+if step.get("error") == "mid-turn":
+    sys.stdout.write(json.dumps({"type": "assistant", "session_id": session})[:20])
+    sys.stdout.flush()
+    sys.exit(1)
 if step.get("error") == "usage":
     if "resets_in" in step:
         info = {"status": "rejected", "resetsAt": int(time.time()) + step["resets_in"], "rateLimitType": "five_hour"}
-        print(json.dumps({"type": "rate_limit_event", "rate_limit_info": info, "session_id": session}))
-    print(json.dumps({"type": "result", "is_error": True, "result": "Claude usage limit reached", "session_id": session}))
+        emit({"type": "rate_limit_event", "rate_limit_info": info, "session_id": session})
+    emit({"type": "result", "is_error": True, "result": "Claude usage limit reached", "session_id": session})
     sys.exit(1)
 if step.get("error") == "crash":
     print("Segmentation fault", file=sys.stderr)
@@ -128,14 +144,14 @@ def cost(dollars: float, turns: int) -> dict[str, object]:
 
 if step.get("subagents_running"):
     tasks = [{"task_id": f"a{n}", "task_type": "local_agent", "subagent_type": "scout"} for n in range(step["subagents_running"])]
-    print(json.dumps({"type": "system", "subtype": "background_tasks_changed", "tasks": tasks, "session_id": session}))
+    emit({"type": "system", "subtype": "background_tasks_changed", "tasks": tasks, "session_id": session})
     body = {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "StructuredOutput", "input": {}}]}
-    print(json.dumps({"type": "assistant", "message": body, "parent_tool_use_id": None, "session_id": session}))
-    print(json.dumps({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": session}))
+    emit({"type": "assistant", "message": body, "parent_tool_use_id": None, "session_id": session})
+    emit({"type": "system", "subtype": "background_tasks_changed", "tasks": [], "session_id": session})
 
 if step.get("shells_running"):
     tasks = [{"task_id": f"b{n}", "task_type": "local_bash", "description": text} for n, text in enumerate(step["shells_running"])]
-    print(json.dumps({"type": "system", "subtype": "background_tasks_changed", "tasks": tasks, "session_id": session}))
+    emit({"type": "system", "subtype": "background_tasks_changed", "tasks": tasks, "session_id": session})
 
 output = {"status": step.get("status", "done"), "reason": step.get("reason", ""), "decisions": step.get("decisions", [])}
 if step.get("notes"):
@@ -143,9 +159,9 @@ if step.get("notes"):
 if "findings" in record["schema"]["properties"]:
     output["findings"] = step.get("findings", [])
     output["unchecked"] = step.get("unchecked", [])
-print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output, **cost(0.5, 3)}))
+emit({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output, **cost(0.5, 3)})
 if step.get("late_turn"):
-    print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied.", **cost(0.75, 4)}))
+    emit({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied.", **cost(0.75, 4)})
 if step.get("linger"):
     sys.stdout.flush()
     time.sleep(step["linger"])

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""A fake GitHub CLI for the loop tests. It records each call and opens no pull request.
+"""A fake GitHub CLI for the loop tests. It records each call, and keeps each PR it creates.
 
-A file `pr-exists` in FAKE_CLAUDE_DIR makes `gh pr list` find an open Epic PR.
+The PRs live in FAKE_CLAUDE_DIR/prs.json, so `gh pr list --head <branch>` finds the open PR of a branch, and
+`gh pr edit` and `gh pr ready` change it.
 """
 
 import json
@@ -10,11 +11,31 @@ import sys
 from pathlib import Path
 
 args = sys.argv[1:]
-with Path(os.environ["FAKE_CLAUDE_DIR"], "gh.jsonl").open("a") as calls:
-    body = Path(args[args.index("--body-file") + 1]).read_text() if "--body-file" in args else None
+fakes = Path(os.environ["FAKE_CLAUDE_DIR"])
+body = Path(args[args.index("--body-file") + 1]).read_text() if "--body-file" in args else None
+with (fakes / "gh.jsonl").open("a") as calls:
     calls.write(json.dumps({"args": args, "body": body}) + "\n")
 
-if args[:2] == ["pr", "list"] and Path(os.environ["FAKE_CLAUDE_DIR"], "pr-exists").exists():
-    print("https://github.com/kcgbarbosa/demo/pull/98")
-if args[:2] == ["pr", "create"]:
-    print("https://github.com/kcgbarbosa/demo/pull/99")
+store = fakes / "prs.json"
+prs = json.loads(store.read_text()) if store.exists() else []
+
+
+def value(flag: str) -> str:
+    return args[args.index(flag) + 1]
+
+
+if args[:2] == ["pr", "list"]:
+    state = value("--state") if "--state" in args else "open"
+    for pr in prs:
+        if pr["head"] == value("--head") and pr["state"] == state:
+            print(pr["url"])
+elif args[:2] == ["pr", "create"]:
+    url = f"https://github.com/kcgbarbosa/demo/pull/{99 + len(prs)}"
+    pr = {"url": url, "head": value("--head"), "base": value("--base"), "title": value("--title")}
+    prs.append({**pr, "body": body, "draft": "--draft" in args, "state": "open"})
+    print(url)
+elif args[:2] == ["pr", "edit"]:
+    next(pr for pr in prs if pr["url"] == args[2])["body"] = body
+elif args[:2] == ["pr", "ready"]:
+    next(pr for pr in prs if pr["url"] == args[2])["draft"] = "--undo" in args
+store.write_text(json.dumps(prs))

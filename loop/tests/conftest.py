@@ -1,13 +1,16 @@
-"""The loop tests drive full runs against a temporary git repo, a fake Jira, and a fake `claude` command.
+"""The loop tests run `loop run` as a subprocess against a temporary git repo, a fake Jira, and fake commands.
 
-The fake commands in `bin/` come first on PATH, so no test calls the real Jira, ntfy, GitHub, or `claude`.
+The fake commands in `bin/` come first on PATH, so no test calls the real Jira, ntfy, GitHub, Docker, or
+`claude`. The run's home folder is in the test's own folder, so its state and secrets are too.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,9 +20,9 @@ import pytest
 from fake_jira import FakeJira
 
 from loop import config
-from loop.run import run
 
 BIN = Path(__file__).parent / "bin"
+LOOP_WITH_FAST_CLOCK = Path(__file__).parent / "loop_clock.py"
 EPIC = "DEMO-1"
 SECRETS = {"JIRA_EMAIL": "kc@example.com", "JIRA_API_TOKEN": "secret-token", "NTFY_TOPIC": "secret-topic"}
 
@@ -86,8 +89,12 @@ class World:
     jira: FakeJira
     repo: Path
     origin: Path
-    state: Path
+    home: Path
     fakes: Path
+
+    @property
+    def state(self) -> Path:
+        return self.home / ".local/state/demo-loop"
 
     def plan(self, steps: dict[str, list[dict[str, Any]]]) -> None:
         (self.fakes / "plan.json").write_text(json.dumps(steps))
@@ -99,9 +106,18 @@ class World:
         extra: str = "",
         base: str | None = None,
         ui_extra: str = "",
+        stdin: int = subprocess.DEVNULL,
     ) -> int:
+        """Runs `loop run` and returns its exit code. Its output shows when the test fails."""
         write_config(self.repo, self.jira.url, parallel, landed_keys_only, extra, ui_extra)
-        return run(EPIC, config.load(self.repo, state_dir=self.state), SECRETS, base)
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "secrets.json").write_text(json.dumps(SECRETS))
+        on = ["--on", base] if base else []
+        command = [sys.executable, str(LOOP_WITH_FAST_CLOCK), "run", EPIC, "--repo", str(self.repo), *on]
+        env = {**os.environ, "HOME": str(self.home)}
+        finished = subprocess.run(command, env=env, stdin=stdin, capture_output=True, text=True, timeout=300)
+        print(finished.stdout, finished.stderr, sep="\n")
+        return finished.returncode
 
     def push_branch(self, branch: str, files: dict[str, str], start: str = "origin/main") -> None:
         """Pushes a commit of the files on the branch, as another Epic's PR branch."""
@@ -112,6 +128,33 @@ class World:
         sh(self.repo, "git", "commit", "-q", "-m", f"feat: {branch}")
         sh(self.repo, "git", "push", "-q", "origin", branch)
         sh(self.repo, "git", "switch", "-q", "main")
+
+    def results(self, ticket: str | None = None, step: str | None = None) -> list[str]:
+        """The results in the log, of one ticket or step when named."""
+        return [
+            line["result"]
+            for line in self.decisions()
+            if (ticket is None or line["ticket"] == ticket) and (step is None or line["step"] == step)
+        ]
+
+    def first_session(self, key: str) -> str:
+        """The session of the ticket's first agent run."""
+        lines = self.decisions()
+        return str(
+            next(line["session"] for line in lines if (line["ticket"], line["step"]) == (key, "agent"))
+        )
+
+    def run_dir(self, key: str) -> Path:
+        return self.state / EPIC / "runs" / key
+
+    def gh(self, *args: str) -> list[dict[str, Any]]:
+        """The `gh` calls whose arguments start with these."""
+        return [call for call in self.records("gh") if call["args"][: len(args)] == list(args)]
+
+    def prs(self) -> list[dict[str, Any]]:
+        """The PRs that the fake `gh` keeps, oldest first."""
+        path = self.fakes / "prs.json"
+        return list(json.loads(path.read_text())) if path.exists() else []
 
     def records(self, name: str) -> list[dict[str, Any]]:
         path = self.fakes / f"{name}.jsonl"
@@ -164,7 +207,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
 
     jira = FakeJira()
     jira.add(EPIC, "The Loop", issue_type="Epic")
-    world = World(jira, repo, origin, tmp_path / "state", fakes)
+    world = World(jira, repo, origin, tmp_path / "home", fakes)
     world.plan({})
     yield world
     jira.close()
