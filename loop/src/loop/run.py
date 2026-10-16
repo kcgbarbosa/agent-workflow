@@ -967,7 +967,9 @@ class EpicRun:
         run.agent_log = next_log(run.run_dir, "agent", ".jsonl")
         errors_log = run.agent_log.with_suffix(".err")
         with run.agent_log.open("w") as stdout, errors_log.open("w") as stderr:
-            process = subprocess.Popen(command, cwd=run.worktree, env=env, stdout=stdout, stderr=stderr)
+            process = subprocess.Popen(
+                command, cwd=run.worktree, env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr
+            )
             returncode, cut_short = self.wait_for_agent(process, run.agent_log, name)
         errors = errors_log.read_text()
         # Each turn ends with a result event. A background subagent that finishes after the status
@@ -1083,7 +1085,10 @@ class EpicRun:
         limit = f"{self.config.gate_timeout_minutes}m"
         with log_file.open("w") as log:
             wrapped = ["timeout", "--kill-after=60", limit, *command]
-            result = subprocess.run(wrapped, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT)
+            # `timeout` puts the command in a background process group, where a terminal on stdin stops it.
+            result = subprocess.run(
+                wrapped, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT
+            )
         if result.returncode == TIMED_OUT:
             with log_file.open("a") as log:
                 log.write(f"The {what} ran past {self.config.gate_timeout_minutes} minutes.\n")
@@ -1121,7 +1126,9 @@ class EpicRun:
         self, command: list[str], cwd: Path, stack: dict[str, str] | None = None
     ) -> subprocess.CompletedProcess[str]:
         env = {**self.child_env(), **(stack or {})}
-        return subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True)
+        return subprocess.run(
+            command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True
+        )
 
     def child_env(self) -> dict[str, str]:
         # The Bitwarden session key unlocks the whole vault, so no child process gets it.
