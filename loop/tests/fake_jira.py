@@ -32,6 +32,7 @@ class Issue:
     issue_type: str = "Task"
     comments: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)
+    attachment_sizes: list[int] = field(default_factory=list)
     statuses: list[str] = field(default_factory=list)
     # The description: a paragraph for each text, and a bullet list for each run of "- " texts.
     body: list[str] = field(default_factory=list)
@@ -82,6 +83,10 @@ class FakeJira:
                 "issuelinks": links,
                 "parent": {"key": issue.parent} if issue.parent else None,
                 FLAGGED: [{"value": "Impediment"}] if issue.flagged else None,
+                "attachment": [
+                    {"filename": name, "size": size}
+                    for name, size in zip(issue.attachments, issue.attachment_sizes, strict=True)
+                ],
             },
         }
 
@@ -198,6 +203,8 @@ class FakeJira:
                         else:
                             found = re.search(rb'filename="([^"]+)"', body)
                             issue.attachments.append(found[1].decode() if found else "")
+                            content = body.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n--", 1)[0]
+                            issue.attachment_sizes.append(len(content))
                         reached(f"jira:POST {match[1]} {match[2]}")
                         return self._send({}, 201)
                 self._send({"errorMessages": ["not found"]}, 404)

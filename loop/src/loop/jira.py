@@ -123,6 +123,10 @@ class Jira:
             }
             self._request("POST", f"/rest/api/3/issue/{key}/attachments", data=data, headers=headers)
 
+    def attachments(self, key: str) -> list[tuple[str, int]]:
+        data = self._request("GET", f"/rest/api/3/issue/{key}?fields=attachment")
+        return [(item["filename"], int(item["size"])) for item in data["fields"].get("attachment") or []]
+
     def flagged_field(self) -> str:
         """The id of the Flagged custom field. Each Jira site gives it a different id."""
         if self._flagged_field is None:

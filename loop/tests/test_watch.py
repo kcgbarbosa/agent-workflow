@@ -320,6 +320,9 @@ def test_a_running_ticket_shows_its_current_step_and_its_last_activity(tmp_path:
             gate("DEMO-4", "ticket", 1, "pass", 7, home),
             step("DEMO-4-review", "agent", "done", time=at(9)),
             step("DEMO-4", "code-review", "pass", time=at(9)),
+            step("DEMO-5", "start", "new", time=at(0)),
+            step("DEMO-5", "build", "pass", time=at(3)),
+            step("DEMO-5", "code-review", "started", time=at(4)),
         ],
     )
     tool = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls", "description": "List"}}
@@ -343,6 +346,7 @@ def test_a_running_ticket_shows_its_current_step_and_its_last_activity(tmp_path:
     assert tickets["DEMO-2"]["step"] == {"name": "agent", "since": at(0), "paused": False}
     assert tickets["DEMO-3"]["step"] == {"name": "ticket-gate", "since": at(5), "paused": False}
     assert tickets["DEMO-4"]["step"] == {"name": "ui-review", "since": at(9), "paused": False}
+    assert tickets["DEMO-5"]["step"] == {"name": "code-review", "since": at(4), "paused": False}
     assert [item.get("summary") or item.get("text") for item in tickets["DEMO-2"]["recent"]] == [
         "Reading the ticket.",
         "List",

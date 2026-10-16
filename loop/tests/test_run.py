@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 from pathlib import Path
 
@@ -377,14 +378,15 @@ def test_a_remote_branch_with_the_key_is_adopted_as_a_restart(world: World) -> N
     assert world.epic_file("early.txt").exists() and world.epic_file("a.txt").exists()
 
 
-def test_a_restart_counts_as_a_fix_attempt(world: World) -> None:
+def test_a_restart_uses_no_fix_attempt(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC, status="In Progress")
     sh(world.repo, "git", "branch", "feat/DEMO-2-first-part")
     world.plan({"DEMO-2": [{"write": {"TICKET_FAIL": "x"}}]})
 
     world.run()
 
-    assert len(world.calls("DEMO-2")) == 2
+    # The build, then one fix for each of the two fix attempts.
+    assert len(world.calls("DEMO-2")) == 3
     assert world.jira.issues["DEMO-2"].flagged
 
 
@@ -439,12 +441,49 @@ def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the
 
     assert world.run() == 0
 
-    (review,) = world.calls("DEMO-2-review")
-    assert review["resume"] is None
+    review, again = world.calls("DEMO-2-review")
+    assert review["resume"] is None and again["resume"] is None
     first, fix = world.calls("DEMO-2")
     assert fix["resume"] == world.first_session("DEMO-2") and finding in fix["prompt"]
     assert world.epic_file("a.txt").read_text() == "b"
-    assert world.results("DEMO-2", "code-review") == ["findings"]
+    # The fix is a new commit, so it gets a review of its own.
+    assert world.results("DEMO-2", "code-review") == ["findings", "pass"]
+
+
+def test_code_review_findings_after_the_first_fix_use_fix_attempts(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    finding = "a.txt:1 holds the wrong letter."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": str(n)}} for n in range(4)],
+            "DEMO-2-review": [{"findings": [finding]}] * 4,
+        }
+    )
+
+    world.run()
+
+    # The first round of findings is free, and the fix attempts cap the rounds after it.
+    assert len(world.calls("DEMO-2-review")) == 4 and len(world.calls("DEMO-2")) == 4
+    assert world.jira.issues["DEMO-2"].flagged
+
+
+def test_a_commit_after_a_passed_review_gets_a_new_code_review_and_keeps_the_ui_review(world: World) -> None:
+    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
+    world.plan(
+        {
+            "DEMO-2": [
+                {"write": {"frontend/src/home.tsx": "x", "MERGE_FAIL": "x"}},
+                {"delete": ["MERGE_FAIL"]},
+            ],
+            "DEMO-2-ui": [{"screenshot": True}],
+        }
+    )
+
+    assert world.run() == 0
+
+    assert world.results("DEMO-2", "code-review") == ["pass", "pass"]
+    assert len(world.calls("DEMO-2-ui")) == 1
+    assert "merge(DEMO-2): Change the home screen" in world.epic_log()
 
 
 def test_a_restart_skips_the_code_review_and_passes_on_the_findings_not_yet_fixed(world: World) -> None:
@@ -469,16 +508,17 @@ def test_a_restart_skips_the_code_review_and_passes_on_the_findings_not_yet_fixe
 def test_code_review_findings_go_back_to_the_head_session_and_use_no_fix_attempt(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC, status="In Progress")
     sh(world.repo, "git", "branch", "feat/DEMO-2-first-part")
+    # The gate fails twice, which takes both fix attempts, and the review still sends its findings back.
     world.plan(
         {
-            "DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}, {"delete": ["TICKET_FAIL"]}, {}],
+            "DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}, {}, {"delete": ["TICKET_FAIL"]}, {}],
             "DEMO-2-review": [{"findings": ["a.txt:1 is wrong."]}],
         }
     )
 
     assert world.run() == 0
 
-    assert len(world.calls("DEMO-2")) == 3
+    assert len(world.calls("DEMO-2")) == 4
     assert not world.jira.issues["DEMO-2"].flagged
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
 
@@ -695,6 +735,25 @@ def test_a_finish_review_that_saves_no_screenshots_keeps_the_mark(world: World) 
     assert "--draft" in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
 
 
+def test_the_open_ui_items_in_the_epic_pr_come_from_the_log(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
+    part = "/admin/materials: the seed has one row, not three."
+    plan = {
+        "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
+        "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
+        "DEMO-3": [{"write": {"b.txt": "b"}}],
+    }
+    world.plan(plan)
+    assert world.run() == 0
+    shutil.rmtree(world.run_dir("DEMO-2"))
+    world.jira.add("DEMO-3", "Add the second part", parent=EPIC)
+
+    assert world.run() == 0
+
+    (pr,) = world.prs()
+    assert pr["draft"] and "**UI review left open:** DEMO-2 (1)." in pr["body"]
+
+
 def test_a_part_that_loop_toml_accepts_as_unchecked_is_a_note_and_the_epic_pr_is_ready(world: World) -> None:
     world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
     part = "/admin/materials: the seed has one row, not three."
@@ -741,43 +800,17 @@ def test_a_restart_keeps_the_screenshots_of_the_same_commit(world: World) -> Non
     assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
 
 
-def test_a_later_commit_that_changes_no_ui_code_needs_no_new_ui_review(world: World) -> None:
-    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
-    world.plan(
-        {
-            "DEMO-2": [
-                {"write": {"frontend/src/home.tsx": "x"}},
-                {"error": "usage"},
-                {"write": {"notes.txt": "n"}},
-            ],
-            "DEMO-2-ui": [{"screenshot": True}],
-        }
-    )
-    (world.fakes / "merge-gate-fails").touch()
-    assert world.run() == 1
-    (world.fakes / "merge-gate-fails").unlink()
-
-    assert world.run() == 0
-
-    assert len(world.calls("DEMO-2-ui")) == 1
-    assert world.epic_file("notes.txt").exists()
-
-
 def test_a_later_commit_that_changes_ui_code_gets_a_new_ui_review(world: World) -> None:
     world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
     world.plan(
         {
             "DEMO-2": [
-                {"write": {"frontend/src/home.tsx": "x"}},
-                {"error": "usage"},
-                {"write": {"frontend/src/home.tsx": "y"}},
+                {"write": {"frontend/src/home.tsx": "x", "MERGE_FAIL": "x"}},
+                {"write": {"frontend/src/home.tsx": "y"}, "delete": ["MERGE_FAIL"]},
             ],
             "DEMO-2-ui": [{"screenshot": True}, {"screenshot": True}],
         }
     )
-    (world.fakes / "merge-gate-fails").touch()
-    assert world.run() == 1
-    (world.fakes / "merge-gate-fails").unlink()
 
     assert world.run() == 0
 

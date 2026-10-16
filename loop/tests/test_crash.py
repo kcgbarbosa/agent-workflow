@@ -11,6 +11,8 @@ import signal
 import pytest
 from conftest import EPIC, World, sh
 
+from loop.prompts import STUCK_COMMENT
+
 NOTE = "A judgement call that follows the docs."
 PR_BODY = "## Summary\n\nBuilds the Loop."
 EPIC_BRANCH = f"feat/{EPIC}-the-loop"
@@ -33,8 +35,9 @@ def two_tickets(world: World) -> None:
 
 
 def assert_built_once(world: World) -> None:
-    """Each ticket landed once, with each status once, no comment, attachment or finished review twice, and
-    one PR. Origin holds the Epic branch."""
+    """Each ticket landed once, with each status once, no comment or attachment twice, one review result of
+    each kind, and one PR. Origin holds the Epic branch. A killed session can still finish as an orphan, so
+    the reviews count by the results the loop logged."""
     merges = collections.Counter(s for s in world.epic_log() if s.startswith("merge("))
     assert merges == {"merge(DEMO-2): Add the first part": 1, "merge(DEMO-3): Add the second part": 1}
     for key in ("DEMO-2", "DEMO-3"):
@@ -44,8 +47,8 @@ def assert_built_once(world: World) -> None:
         repeated = [text for text, count in collections.Counter(issue.comments).items() if count > 1]
         assert repeated == [], key
         assert len(issue.attachments) == len(set(issue.attachments)), key
-        assert world.finished(f"{key}-review") == 1, key
-    assert world.finished("DEMO-2-ui") == 1
+        assert world.results(key, "code-review") == ["pass"], key
+    assert world.results("DEMO-2", "ui-gate") == ["pass"]
     assert len(world.gh("pr", "create")) == 1
     (pr,) = world.prs()
     assert not pr["draft"]
@@ -53,32 +56,23 @@ def assert_built_once(world: World) -> None:
     assert sh(world.origin, "git", "rev-parse", EPIC_BRANCH) == local
 
 
-# Strict, so the ticket that fixes a scenario also removes its mark.
-AGENT_AGAIN = pytest.mark.xfail(
-    strict=True, reason="#58: a restart runs the agent again, so its notes reach the ticket twice"
-)
-LANDED_UNTRACKED = pytest.mark.xfail(
-    strict=True,
-    reason="#58: the rerun skips a ticket that landed, so its screenshots and status never reach Jira",
-)
-
 # Each point as the fakes and the hooks name it, with the time it fires. They follow one run's order.
 IN_A_STEP = [
     pytest.param("claude:DEMO-2", 1, id="build-agent"),
-    pytest.param("make:lint test", 1, id="ticket-gate", marks=AGENT_AGAIN),
-    pytest.param("claude:DEMO-2-review", 1, id="code-review", marks=AGENT_AGAIN),
-    pytest.param("claude:DEMO-2-ui", 1, id="ui-review", marks=AGENT_AGAIN),
-    pytest.param("make:check", 1, id="land-merge-gate", marks=AGENT_AGAIN),
-    pytest.param(f"pre-push:{EPIC_BRANCH}", 1, id="land-after-merge-before-push", marks=LANDED_UNTRACKED),
+    pytest.param("make:lint test", 1, id="ticket-gate"),
+    pytest.param("claude:DEMO-2-review", 1, id="code-review"),
+    pytest.param("claude:DEMO-2-ui", 1, id="ui-review"),
+    pytest.param("make:check", 1, id="land-merge-gate"),
+    pytest.param(f"pre-push:{EPIC_BRANCH}", 1, id="land-after-merge-before-push"),
     pytest.param("make:check", 3, id="finish-merge-gate"),
     pytest.param(f"claude:{EPIC}-pr", 1, id="finish-pr-body"),
 ]
 AFTER_A_SIDE_EFFECT = [
     pytest.param("jira:POST DEMO-2 transitions", 1, id="status-in-progress"),
-    pytest.param("jira:POST DEMO-2 comment", 1, id="notes-comment", marks=AGENT_AGAIN),
-    pytest.param("push:feat/DEMO-2", 1, id="ticket-push", marks=AGENT_AGAIN),
-    pytest.param(f"push:{EPIC_BRANCH}", 1, id="epic-push", marks=LANDED_UNTRACKED),
-    pytest.param("jira:POST DEMO-2 attachments", 1, id="screenshots-attached", marks=LANDED_UNTRACKED),
+    pytest.param("jira:POST DEMO-2 comment", 1, id="notes-comment"),
+    pytest.param("push:feat/DEMO-2", 1, id="ticket-push"),
+    pytest.param(f"push:{EPIC_BRANCH}", 1, id="epic-push"),
+    pytest.param("jira:POST DEMO-2 attachments", 1, id="screenshots-attached"),
     pytest.param("jira:POST DEMO-2 transitions", 2, id="status-landed"),
     pytest.param("gh:pr create", 1, id="pr-created"),
 ]
@@ -95,9 +89,6 @@ def test_a_rerun_after_a_kill_builds_each_ticket_once(world: World, point: str, 
     assert_built_once(world)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="#58: the rerun skips a flagged ticket, so its stuck comment never comes"
-)
 def test_a_rerun_after_a_kill_between_the_flag_and_its_comment_comments_the_stuck_ticket(
     world: World,
 ) -> None:
@@ -110,8 +101,22 @@ def test_a_rerun_after_a_kill_between_the_flag_and_its_comment_comments_the_stuc
 
     issue = world.jira.issues["DEMO-2"]
     assert issue.flagged
-    stuck = [text for text in issue.comments if "stuck" in text.lower()]
+    stuck = [text for text in issue.comments if text.startswith(STUCK_COMMENT)]
     assert len(stuck) == 1
+
+
+def test_a_restart_after_the_ticket_gate_passed_goes_on_with_no_agent_run(world: World) -> None:
+    two_tickets(world)
+    world.kill_at("claude:DEMO-2-review")
+
+    assert world.run(parallel=1) == -signal.SIGKILL
+    # The kill can cut off the last line of the log.
+    with (world.state / EPIC / "decisions.jsonl").open("a") as log:
+        log.write('{"time": "2026-')
+    assert world.run(parallel=1) == 0
+
+    assert len(world.calls("DEMO-2")) == 1
+    assert_built_once(world)
 
 
 @pytest.mark.xfail(
