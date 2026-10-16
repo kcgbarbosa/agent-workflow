@@ -35,7 +35,6 @@ def runs(name: str) -> list[str]:
 
 
 def active(names: list[str]) -> set[str]:
-    """The units of these names that are active."""
     if not names:
         return set()
     states = systemctl("is-active", *names, check=False).split()

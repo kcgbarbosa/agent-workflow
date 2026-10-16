@@ -98,5 +98,4 @@ STUCK_COMMENT = "The loop stopped this ticket."
 DECISIONS_COMMENT = "The agent made these decisions for KC to check:"
 NOTES_COMMENT = "The agent noted these:"
 UI_OPEN_COMMENT = "The UI review left these open:"
-# The rule for when the head agent hands work to the subagent tiers in `tiers.py`.
 DISPATCH = Path(__file__).with_name("dispatch.md")

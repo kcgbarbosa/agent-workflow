@@ -99,7 +99,6 @@ def main_checkout() -> Path:
 
 
 def check_tools(config: Config) -> None:
-    """Every prerequisite, before the run starts."""
     needed = (*TOOLS, *config.tools, *(["docker"] if config.stack else []))
     missing = [tool for tool in dict.fromkeys(needed) if shutil.which(tool) is None]
     if missing:
@@ -116,7 +115,6 @@ def check_tools(config: Config) -> None:
 
 
 def claude_problem(version: str) -> str | None:
-    """Why the loop cannot run this `claude`, or None when it can."""
     if tuple(int(part) for part in version.split(".") if part) >= MIN_CLAUDE:
         return None
     needed = ".".join(map(str, MIN_CLAUDE))

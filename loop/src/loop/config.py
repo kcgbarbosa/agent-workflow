@@ -101,7 +101,6 @@ class Config:
     state_dir: Path
 
     def stack_env(self, slot: int, key: str) -> dict[str, str]:
-        """The env vars that give a worktree its own Compose project and ports."""
         if self.stack is None:
             return {}
         env = {port: str(base + self.stack.port_step * slot) for port, base in self.stack.ports.items()}

@@ -39,7 +39,6 @@ def parse(text: str) -> dict[str, str]:
 
 
 def load() -> dict[str, dict[str, str]]:
-    """Every tier by name."""
     tiers = {}
     for path in files():
         tier = parse(path.read_text())

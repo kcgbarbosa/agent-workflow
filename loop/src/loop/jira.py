@@ -1,5 +1,3 @@
-"""The Jira REST client of the loop."""
-
 from __future__ import annotations
 
 import base64
@@ -66,7 +64,6 @@ class Jira:
         return [self._ticket(issue) for issue in issues]
 
     def search(self, jql: str, fields: list[str]) -> list[dict[str, Any]]:
-        """The raw issues a JQL query finds, every page."""
         issues: list[dict[str, Any]] = []
         token: str | None = None
         while True:
@@ -80,7 +77,6 @@ class Jira:
                 return issues
 
     def comments(self, key: str) -> list[str]:
-        """The text of each comment on the ticket, oldest first."""
         texts: list[str] = []
         while True:
             path = f"/rest/api/3/issue/{key}/comment?orderBy=created&startAt={len(texts)}"
@@ -91,7 +87,6 @@ class Jira:
                 return texts
 
     def transition(self, key: str, status: str) -> bool:
-        """Moves the ticket to the status. Returns False when no transition leads there."""
         data = self._request("GET", f"/rest/api/3/issue/{key}/transitions")
         for transition in data.get("transitions", []):
             if transition.get("to", {}).get("name") == status:

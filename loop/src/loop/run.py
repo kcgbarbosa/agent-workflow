@@ -359,7 +359,7 @@ class EpicRun:
             return self.stuck(ticket, f"The loop failed: {error}", log, slot)
 
     def frontier(self) -> list[Ticket]:
-        """Open tickets that are not stuck, whose blockers are done in the tracker or landed."""
+        """Open tickets that are not stuck, whose blockers are done in Jira or landed."""
         tickets = self.jira.children(self.epic_key)
 
         def landed(key: str) -> bool:
@@ -1264,7 +1264,7 @@ class EpicRun:
         (run.run_dir / "ticket.md").write_text(text)
 
     def write_board(self, tickets: list[Ticket], landed: set[str]) -> None:
-        """The tickets as the frontier last read them, for `loop watch`, which reads no tracker."""
+        """The tickets as the frontier last read them, for `loop watch`, which does not read Jira."""
         board = {
             "time": datetime.now(UTC).isoformat(timespec="seconds"),
             "epic": self.epic_key,
@@ -1323,7 +1323,7 @@ class EpicRun:
             self.jira.flag(key)
 
     def track(self, key: str, step: str, call: Callable[[], object]) -> None:
-        """A tracker call that fails is logged. It does not stop the ticket."""
+        """A Jira call that fails is logged. It does not stop the ticket."""
         try:
             result = call()
             self.log(key, f"tracker-{step}", "fail" if result is False else "ok")

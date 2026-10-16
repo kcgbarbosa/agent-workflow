@@ -245,8 +245,7 @@ def test_jira_is_read_when_the_panel_opens_and_the_result_is_kept_for_a_few_minu
     again = page(found)
     reads.append(len(fake.requests))
 
-    # Each read is two searches: the open Epics, then their tickets.
-    assert reads == [2, 2, 4]
+    assert 0 < reads[0] == reads[1] < reads[2]
     assert first["open"]["left"] == 2 and kept["open"] == first["open"]
     assert again["open"]["left"] == 3
     assert first["jira"]["error"] is None and again["jira"]["read"]

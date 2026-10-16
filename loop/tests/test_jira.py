@@ -44,6 +44,16 @@ def test_the_search_is_a_read_and_tries_again(fake: FakeJira) -> None:
     assert sleeps == [5.0]
 
 
+def test_the_children_of_an_epic_come_from_every_page_of_the_search(fake: FakeJira) -> None:
+    fake.add("DEMO-3", "Add the second part", parent="DEMO-1")
+    fake.add("DEMO-4", "Add the third part", parent="DEMO-1")
+
+    keys = [ticket.key for ticket in client(fake.url, []).children("DEMO-1")]
+
+    assert keys == ["DEMO-2", "DEMO-3", "DEMO-4"]
+    assert fake.requests.count(("POST", "/rest/api/3/search/jql")) == 2
+
+
 def test_a_write_is_sent_once(fake: FakeJira) -> None:
     sleeps: list[float] = []
     fake.errors = [503]

@@ -100,7 +100,7 @@ Write the rule in the issue tracker doc, so `to-tickets` follows it:
 **Choose.**
 
 - `list` is the list command of `docs/agents/testing.md`, with `{key}` for the ticket, such as `["make", "acceptance-list", "ticket={key}"]`. It prints one title per line and needs no stack.
-- Keep `heading` at its default unless the ticket template names the list another way.
+- The `to-tickets` skill heads the list "What the user sees", which is the heading the loop reads.
 - A repo whose `docs/agents/testing.md` says "No acceptance suite" leaves the table out.
 
 **Check.**
@@ -181,7 +181,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 ## Agent
 
-**Choose.** Keep the defaults of loop.md until a run's cost says otherwise. To cut the plan usage of a run, lower `effort` before you change `model`. Lower `context_tokens` only when the cost report shows long sessions, because each turn sends the whole context again.
+**Choose.** Keep the defaults of loop.md until a run's cost says otherwise. To cut the plan usage of a run, lower `effort` before you change `model`.
 
 **Check.** `loop report` after the first Epic. The tickets with the most turns and the largest peak context show where the cost goes.
 
@@ -228,9 +228,9 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 ## Logs
 
-**Choose.** Nothing, unless port 8790 is taken on the host. Then set `[watch]` `port`. The watch page opens at `http://127.0.0.1:<port>` on the host. From a phone or another machine, open the host's tailnet address on the same port.
+**Choose.** Nothing. The watch page opens at `http://127.0.0.1:8790` on the host. From a phone or another machine, open the host's tailnet address on the same port. Free port 8790 when another process holds it.
 
-**Check.** After `loop start`, `systemctl --user is-active loop-watch-<port>` prints `active`, and the page answers on the port.
+**Check.** After `loop start`, `systemctl --user is-active loop-watch-8790` prints `active`, and the page answers on the port.
 
 ## Host setup
 
@@ -256,4 +256,4 @@ BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
 | A test fails for a missing key in the loop only           | A secret a gate needs. Use a development default               |
 | The UI review is blocked, or saves no screenshots         | The sign-in, the skill, or `LOOP_RUN_DIR`                      |
 | The watch page shows red tool calls                       | An action that auto mode denies. Plan it as a human step       |
-| The run costs more than the plan allows                   | `effort`, `context_tokens`, then `parallel`                    |
+| The run costs more than the plan allows                   | `effort`, then `parallel`                                      |

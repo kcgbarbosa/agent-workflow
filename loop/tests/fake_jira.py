@@ -18,6 +18,8 @@ from killpoint import reached
 FLAGGED = "customfield_10021"
 # A read of the comments gets them two at a time, so a ticket with more comments takes more than one page.
 COMMENT_PAGE = 2
+# A search gets two issues a page, so an Epic with more children takes more than one page.
+SEARCH_PAGE = 2
 CATEGORY = {"To Do": "new", "In Progress": "indeterminate", "In Review": "indeterminate", "Done": "done"}
 
 
@@ -188,8 +190,14 @@ class FakeJira:
                         reached(f"ntfy:{body.decode()}")
                         return self._send({})
                     if path == "/rest/api/3/search/jql":
-                        jql = json.loads(body)["jql"]
-                        return self._send({"issues": fake._search(jql), "isLast": True})
+                        request = json.loads(body)
+                        start = int(request.get("nextPageToken", 0))
+                        hits = fake._search(request["jql"])
+                        issues = {"issues": hits[start : start + SEARCH_PAGE]}
+                        if start + SEARCH_PAGE < len(hits):
+                            token = str(start + SEARCH_PAGE)
+                            return self._send({**issues, "nextPageToken": token, "isLast": False})
+                        return self._send({**issues, "isLast": True})
                     match = re.fullmatch(
                         r"/rest/api/3/issue/([A-Z]+-\d+)/(transitions|comment|attachments)", path
                     )
