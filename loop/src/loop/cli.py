@@ -1,48 +1,43 @@
 """The `loop` command. It builds one Epic unattended, with the settings in the repo's `loop.toml`.
 
-loop start <Epic key>   starts a run in its own tmux session
-loop run <Epic key>     the run itself, which `loop start` runs in that session
+loop start <Epic key>   starts a run as a systemd user unit
+loop stop <Epic key>    stops the run, which logs `stopped` and stops its stacks
+loop run <Epic key>     the run itself, which the unit runs
 loop secrets            copies the secrets from Bitwarden to this host, after `bw unlock`
-loop watch              serves a web page of the runs on this host, which `loop start` opens
+loop watch              serves a web page of the runs on this host, as the service that `loop start` starts
 loop report [<Epic key>] breaks down what the latest run cost, against the run before it on this host
 """
 
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
-import time
-import urllib.request
-from collections.abc import Callable, Iterator
+import threading
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from . import config as config_file
-from . import process, report
+from . import process, report, units
 from . import watch as watch_page
 from .claude import MIN_CLAUDE, claude_version
 from .config import Config, ConfigError
 from .forecast import Forecaster
 from .run import run
 from .tracker import TrackerError
+from .units import UnitError
 from .update import Stale, source_checkout, update
 
-TOOLS = ("git", "claude", "gh")
+TOOLS = ("git", "claude", "gh", "systemd-inhibit")
 SECRETS_FILE = watch_page.SECRETS_FILE
-RUN_LOCK = watch_page.RUN_LOCK
-START_POLLS = 60
-# A check such as `docker info` or `bw sync` that has not answered by then is taken as failed.
+# A check such as `docker info` or `bw status` that has not answered by then is taken as failed.
 QUIET_SECONDS = 120
-START_POLL_SECONDS = 2
-WATCH_POLLS = 20
-CODE_CHECK_SECONDS = 2
+NO_SECRETS = "Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
 
 
 class Refused(Exception):
@@ -51,7 +46,7 @@ class Refused(Exception):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="loop", description="Builds one Epic unattended.")
-    parser.add_argument("command", choices=("start", "run", "secrets", "watch", "report"))
+    parser.add_argument("command", choices=("start", "stop", "run", "secrets", "watch", "report"))
     parser.add_argument("epic", metavar="<Epic key>", nargs="?")
     parser.add_argument(
         "--against", metavar="<Epic key>", help="report: compare with this Epic's latest run instead"
@@ -63,19 +58,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--json", action="store_true", help="report: print JSON")
     parser.add_argument("--repo", type=Path, help="the main checkout. Defaults to the one around this folder")
-    arguments = sys.argv[1:] if argv is None else argv
-    args = parser.parse_args(arguments)
-    if args.command in ("start", "run") and not re.fullmatch(r"[A-Z]+-\d+", args.epic or ""):
-        print("Usage: loop start <Epic key>, for example loop start TIDE-42", file=sys.stderr)
+    args = parser.parse_args(argv)
+    if args.command in ("start", "stop", "run") and not re.fullmatch(units.EPIC_KEY, args.epic or ""):
+        command = args.command
+        print(f"Usage: loop {command} <Epic key>, for example loop {command} TIDE-42", file=sys.stderr)
         return 2
     try:
         repo = args.repo.resolve() if args.repo else main_checkout()
-        if args.command == "start" and (checkout := source_checkout()) is not None:
-            updated = update(checkout)
-            print(updated.message, flush=True)
-            if updated.new_code:
-                # This process still runs the old code, which can refuse a loop.toml key that is new.
-                os.execv(sys.executable, [sys.executable, "-m", "loop", *arguments])
+        if args.command == "start":
+            new_code = False
+            if (checkout := source_checkout()) is not None:
+                updated = update(checkout)
+                print(updated.message, flush=True)
+                new_code = updated.new_code
+            return start(repo, args.epic, args.on, new_code)
+        if args.command == "stop":
+            return stop(repo, args.epic)
         config = config_file.load(repo)
         if args.command == "secrets":
             return copy_secrets(config)
@@ -83,14 +81,12 @@ def main(argv: list[str] | None = None) -> int:
             return watch(config)
         if args.command == "report":
             return print_report(config, args.epic, args.against, args.json)
-        if args.command == "start":
-            return start(args.epic, config, args.on)
         check_tools(config)
         secrets = read_secrets(config)
         check_services(config, secrets)
-        with one_run(config.state_dir, args.epic), awake(config.name, args.epic):
+        with awake(config.name, args.epic):
             return run(args.epic, config, secrets, args.on)
-    except (Refused, ConfigError, Stale) as error:
+    except (Refused, ConfigError, Stale, UnitError) as error:
         print(f"The loop refuses to run. {error}", file=sys.stderr)
         return 2
 
@@ -105,15 +101,7 @@ def main_checkout() -> Path:
 
 def check_tools(config: Config) -> None:
     """Every prerequisite, before the run starts."""
-    inhibitor = "caffeinate" if sys.platform == "darwin" else "systemd-inhibit"
-    bitwarden = not secrets_file(config).exists()
-    needed = (
-        *TOOLS,
-        *(["bw"] if bitwarden else []),
-        *config.tools,
-        *(["docker"] if config.stack else []),
-        inhibitor,
-    )
+    needed = (*TOOLS, *config.tools, *(["docker"] if config.stack else []))
     missing = [tool for tool in dict.fromkeys(needed) if shutil.which(tool) is None]
     if missing:
         raise Refused(f"These commands are missing: {', '.join(missing)}.")
@@ -124,10 +112,6 @@ def check_tools(config: Config) -> None:
         problems.append("Docker does not answer. Start Docker, or check the docker group.")
     if _quiet(["gh", "auth", "status"]) != 0:
         problems.append("The GitHub CLI is not signed in. Run `gh auth login`.")
-    if bitwarden and not bitwarden_unlocked():
-        problems.append(
-            "Bitwarden is locked. Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
-        )
     if problems:
         raise Refused(" ".join(problems))
 
@@ -167,17 +151,14 @@ def copy_secrets(config: Config) -> int:
 
 
 def read_secrets(config: Config) -> dict[str, str]:
-    """The secrets from the file of `loop secrets`, or else from Bitwarden."""
+    """The secrets from the file of `loop secrets`, the only place a run reads them."""
     path = secrets_file(config)
     if not path.exists():
-        return bitwarden_secrets(config)
+        raise Refused(f"This host has no secrets file. {NO_SECRETS}")
     secrets = json.loads(path.read_text())
     missing = [env for env in config.secrets if not secrets.get(env)]
     if missing:
-        raise Refused(
-            f"{path} has no value for {', '.join(missing)}. "
-            "Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
-        )
+        raise Refused(f"{path} has no value for {', '.join(missing)}. {NO_SECRETS}")
     return {env: secrets[env] for env in config.secrets}
 
 
@@ -207,36 +188,14 @@ def check_services(config: Config, secrets: dict[str, str]) -> None:
 
 
 @contextmanager
-def one_run(state_dir: Path, epic_key: str) -> Iterator[None]:
-    """Refuses a second run of this repo on this host. KC keeps to one run across hosts."""
-    state_dir.mkdir(parents=True, exist_ok=True)
-    with (state_dir / RUN_LOCK).open("a+") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise Refused("Another run is active on this host.") from error
-        # `loop watch` reads which run is active from the lock, and does not take the lock itself.
-        lock.truncate(0)
-        lock.write(json.dumps({"pid": os.getpid(), "epic": epic_key}))
-        lock.flush()
-        try:
-            yield
-        finally:
-            lock.truncate(0)
-
-
-@contextmanager
 def awake(name: str, epic_key: str) -> Iterator[None]:
-    """Holds off sleep until this process ends."""
-    pid = str(os.getpid())
-    if sys.platform == "darwin":
-        command = ["caffeinate", "-ims", "-w", pid]
-    else:
-        command = [
-            "systemd-inhibit", "--what=sleep:idle", f"--who={name}-loop",
-            f"--why=The loop builds {epic_key}", "--mode=block",
-            "tail", f"--pid={pid}", "-f", "/dev/null",
-        ]  # fmt: skip
+    """Holds off sleep until this process ends. It runs beside the run, which is the unit's main process
+    (loop.md rule 12)."""
+    command = [
+        "systemd-inhibit", "--what=sleep:idle", f"--who={name}-loop",
+        f"--why=The loop builds {epic_key}", "--mode=block",
+        "tail", f"--pid={os.getpid()}", "-f", "/dev/null",
+    ]  # fmt: skip
     inhibitor = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         inhibitor.wait(timeout=2)
@@ -244,62 +203,40 @@ def awake(name: str, epic_key: str) -> Iterator[None]:
         pass
     else:
         message = inhibitor.stderr.read().decode() if inhibitor.stderr else ""
-        raise Refused(f"`{command[0]}` cannot hold off sleep: {message.strip()}")
+        raise Refused(f"`systemd-inhibit` cannot hold off sleep: {message.strip()}")
     try:
         yield
     finally:
         inhibitor.terminate()
 
 
-def start(epic_key: str, config: Config, base: str | None = None) -> int:
-    """Starts `loop run` in its own tmux session, so the run outlives the agent or shell that starts it."""
-    bw_session = os.environ.get("BW_SESSION")
-    if not bw_session and not secrets_file(config).exists():
-        raise Refused(
-            "This host has no secrets file. Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
-        )
-    if shutil.which("tmux") is None:
-        raise Refused("tmux is missing.")
-    session = f"{config.name}-loop"
-    target = f"={session}:"
-    if _quiet(["tmux", "has-session", "-t", f"={session}"]) == 0:
-        if _tmux(["display-message", "-p", "-t", target, "#{pane_dead}"]) == "1":
-            _tmux(["kill-session", "-t", f"={session}"])
-        else:
-            raise Refused(f"A loop run is active. See it with `tmux attach -t {session}`.")
-    on = ["--on", base] if base else []
-    command = shlex.join([sys.executable, "-m", "loop", "run", epic_key, "--repo", str(config.repo), *on])
-    repo = str(config.repo)
-    _tmux(["new-session", "-d", "-s", session, "-c", repo])
-    _tmux(["set-option", "-p", "-t", target, "remain-on-exit", "on"])
-    # A tmux pane takes its env from the tmux server, so BW_SESSION goes in with -e.
-    session_env = ["-e", f"BW_SESSION={bw_session}"] if bw_session else []
-    _tmux(["respawn-pane", "-k", "-t", target, "-c", repo, *session_env, command])
+def start(repo: Path, epic_key: str, base: str | None, new_code: bool) -> int:
+    """Starts the run as a systemd user unit, so it outlives the agent or shell that starts it, and the
+    dashboard as a user service. The run checks the rest of the prerequisites itself."""
+    name, port = config_file.peek(repo)
+    if not (config_file.state_dir_of(name) / SECRETS_FILE).exists():
+        raise Refused(f"This host has no secrets file. {NO_SECRETS}")
+    if active := units.runs(name):
+        unit = units.run_unit(name, active[0])
+        raise Refused(f"A run is active: {unit}. `loop stop {active[0]}` stops it.")
+    unit = units.start_run(repo, name, epic_key, base)
+    units.start_watch(repo, port, restart=new_code)
+    page = open_watch(port, name, epic_key)
+    print(f"The loop is building {epic_key}. Watch it at {page}, or with `journalctl --user -fu {unit}`.")
+    return 0
 
-    # The run prints "<time> <Epic key> start ok" once its checks pass. A refusal ends the pane first.
-    # A short run can also end before the first look, so the line counts before the dead pane does.
-    for _ in range(START_POLLS):
-        time.sleep(START_POLL_SECONDS)
-        dead = _tmux(["display-message", "-p", "-t", target, "#{pane_dead}"]) == "1"
-        pane = _tmux(["capture-pane", "-p", "-S", "-", "-t", target])
-        if f" {epic_key} start ok" in pane:
-            page = open_watch(config, epic_key)
-            print(f"The loop is building {epic_key}. Watch it at {page}, or with `tmux attach -t {session}`.")
-            return 0
-        if dead:
-            print("\n".join(line for line in pane.splitlines() if line), file=sys.stderr)
-            print("The loop did not start.", file=sys.stderr)
-            return 1
-    print(
-        f"The loop has not started after 2 minutes. See it with `tmux attach -t {session}`.", file=sys.stderr
-    )
-    return 1
+
+def stop(repo: Path, epic_key: str) -> int:
+    name, _ = config_file.peek(repo)
+    if not units.stop_run(name, epic_key):
+        print(f"No run of {epic_key} is active.", file=sys.stderr)
+        return 1
+    print(f"The loop stopped {epic_key}. `loop start {epic_key}` goes on with the same tickets.")
+    return 0
 
 
 def watch(config: Config) -> int:
-    """Serves the page until the process stops, and restarts it when its code changes. It changes nothing the
-    loop reads.
-    """
+    """Serves the page until the process stops. It changes nothing the loop reads."""
     forecast = Forecaster(config)
     try:
         servers = watch_page.serve(config.state_dir, config.watch_port, forecast=forecast)
@@ -311,37 +248,10 @@ def watch(config: Config) -> int:
     sys.stdout.flush()
     forecast.start()
     try:
-        wait_for_new_code(code_stamp, time.sleep)
+        threading.Event().wait()
     except KeyboardInterrupt:
-        return 0
-    # The open page reloads itself when the page on disk changes, and it needs the API of the same code.
-    print("loop watch restarts on its new code.", flush=True)
-    for server in servers:
-        server.shutdown()
-        server.server_close()
-    os.execv(sys.executable, [sys.executable, "-m", "loop", *sys.argv[1:]])
-
-
-def code_stamp() -> tuple[tuple[str, int], ...]:
-    """The modified time of each file of the loop's code, which a `git pull` or `loop start` changes."""
-    found = []
-    for path in sorted(Path(__file__).parent.glob("*.py")):
-        try:
-            found.append((path.name, path.stat().st_mtime_ns))
-        except OSError:
-            continue  # A pull removed it after the glob.
-    return tuple(found)
-
-
-def wait_for_new_code(stamp: Callable[[], object], sleep: Callable[[float], None]) -> None:
-    """Returns once the code differs from its start and has held still for one check, as after a pull."""
-    first = seen = stamp()
-    while True:
-        sleep(CODE_CHECK_SECONDS)
-        now = stamp()
-        if now != first and now == seen:
-            return
-        seen = now
+        pass
+    return 0
 
 
 def print_report(config: Config, epic_key: str | None, against: str | None, as_json: bool) -> int:
@@ -359,39 +269,16 @@ def print_report(config: Config, epic_key: str | None, against: str | None, as_j
     return 0
 
 
-def open_watch(config: Config, epic_key: str) -> str:
-    """Starts `loop watch` when nothing answers on its port, opens the page, and returns its address."""
-    page = watch_page.url(config.watch_port, epic_key, project=config.name)
-    if not watch_answers(config.watch_port):
-        session = f"{config.name}-watch"
-        # A session whose server does not answer is left from a watch that failed.
-        _tmux(["kill-session", "-t", f"={session}"])
-        command = shlex.join([sys.executable, "-m", "loop", "watch", "--repo", str(config.repo)])
-        _tmux(["new-session", "-d", "-s", session, "-c", str(config.repo), command])
-        for _ in range(WATCH_POLLS):
-            if watch_answers(config.watch_port):
-                break
-            time.sleep(0.25)
-    opener = "open" if sys.platform == "darwin" else "xdg-open"
-    display = sys.platform == "darwin" or os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
-    if display and shutil.which(opener):
+def open_watch(port: int, name: str, epic_key: str) -> str:
+    """Opens the page on this host's screen, and returns its tailnet address, which opens on any device in the
+    tailnet."""
+    opener = "xdg-open"
+    if (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")) and shutil.which(opener):
         subprocess.Popen(
-            [opener, page], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
-        )
-    # 127.0.0.1 opens only on this host. The tailnet address also opens on the phone and the other host.
-    return watch_page.url(config.watch_port, epic_key, watch_page.addresses()[-1], config.name)
-
-
-def watch_answers(port: int) -> bool:
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/epics", timeout=2):
-            return True
-    except OSError:
-        return False
-
-
-def _tmux(args: list[str]) -> str:
-    return subprocess.run(["tmux", *args], capture_output=True, text=True).stdout.strip()
+            [opener, watch_page.url(port, epic_key, project=name)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+        )  # fmt: skip
+    return watch_page.url(port, epic_key, watch_page.addresses()[-1], name)
 
 
 def _quiet(command: list[str], cwd: Path | None = None) -> int:

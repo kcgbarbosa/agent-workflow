@@ -18,6 +18,7 @@ from .tracker import Tracker
 FILE = "loop.toml"
 # The engine reads these secrets itself. A repo adds the ones its agents need.
 REQUIRED_SECRETS = ("JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC")
+WATCH_PORT = 8790
 
 
 class ConfigError(Exception):
@@ -110,17 +111,35 @@ class Config:
 
 
 def load(repo: Path, state_dir: Path | None = None) -> Config:
+    data = _read(repo)
+    try:
+        return _parse(repo, data, state_dir)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ConfigError(f"{repo / FILE}: {error}") from error
+
+
+def peek(repo: Path) -> tuple[str, int]:
+    """The name and the watch port, with no check of the other keys, so that `loop start` on the old code
+    hands a file with a new key to the new code."""
+    top = _Table(_read(repo), "")
+    try:
+        return top.text("name"), top.table("watch", optional=True).number("port", WATCH_PORT)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ConfigError(f"{repo / FILE}: {error}") from error
+
+
+def state_dir_of(name: str) -> Path:
+    return Path.home() / ".local/state" / f"{name}-loop"
+
+
+def _read(repo: Path) -> dict[str, Any]:
     path = repo / FILE
     try:
-        data = tomllib.loads(path.read_text())
+        return tomllib.loads(path.read_text())
     except FileNotFoundError as error:
         raise ConfigError(f"{path} is missing. The setup-loop skill writes it.") from error
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"{path} is not valid TOML: {error}") from error
-    try:
-        return _parse(repo, data, state_dir)
-    except (KeyError, TypeError, ValueError) as error:
-        raise ConfigError(f"{path}: {error}") from error
 
 
 def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
@@ -194,13 +213,13 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         agent_context_tokens=agent.number("context_tokens", 200_000),
         agent_hint=top.text("agent_hint", ""),
         tools=top.texts("tools", ()),
-        watch_port=watch.number("port", 8790),
+        watch_port=watch.number("port", WATCH_PORT),
         backlog_minutes=watch.number("backlog_minutes", 5),
         plans=_plans(watch.tables("plans")),
         stack=stack,
         demo=demo,
         secrets=secrets,
-        state_dir=state_dir or Path.home() / ".local/state" / f"{name}-loop",
+        state_dir=state_dir or state_dir_of(name),
     )
     tables = (
         top,

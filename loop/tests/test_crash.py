@@ -163,9 +163,6 @@ def test_a_restart_after_the_ticket_gate_passed_goes_on_with_no_agent_run(world:
     assert_built_once(world)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="#60: the run does not handle SIGTERM, so it ends with no stopped line"
-)
 def test_sigterm_stops_the_run_with_a_stopped_line_and_the_stacks_down(world: World) -> None:
     two_tickets(world)
     # The session goes on after the signal, so the loop has to stop it.

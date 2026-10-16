@@ -381,9 +381,8 @@ def test_a_usage_limit_that_resets_soon_pauses_and_resumes_the_session(world: Wo
     assert resumed["resume"] is not None
     started = (world.run_dir("DEMO-2") / "agent-1.jsonl").read_text()
     assert resumed["resume"] in started
-    # The wait lasts to a minute past the reset.
-    (pause,) = world.records("sleeps")
-    assert 170 <= pause["seconds"] <= 181
+    # The wait lasts to a minute past the reset, in steps that look for a stop.
+    assert 170 <= sum(pause["seconds"] for pause in world.records("sleeps")) <= 181
     assert world.results("DEMO-2", "agent") == ["usage-limit", "usage-pause", "done"]
     assert world.jira.notifications[0] == f"{EPIC} paused"
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
@@ -651,8 +650,8 @@ def test_the_lines_of_what_the_user_sees_come_from_the_list_under_the_heading() 
 def test_a_gate_whose_docker_compose_run_touches_the_terminal_finishes_under_a_run_with_one(
     world: World,
 ) -> None:
-    # Under tmux, `docker compose run` in a gate sets the terminal up. From a background process group, that
-    # stops the group, and the gate never ends.
+    # In a terminal, `docker compose run` in a gate sets the terminal up. From a background process group,
+    # that stops the group, and the gate never ends.
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"a.txt": "a", "GATE_TTY": "x"}}]})
 
