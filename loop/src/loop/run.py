@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -724,7 +725,7 @@ class EpicRun:
                 )
                 continue
             shots = screenshots(run_dir)
-            self.track(key, "attach", lambda key=key, shots=shots: self.tracker.attach(key, shots))
+            self.track(key, "attach", functools.partial(self.tracker.attach, key, shots))
             self.record_ui_review(run, review, head, detail="At the finish. ")
 
     def point_demo(self, run_dir: Path) -> tuple[str, Path] | None:
