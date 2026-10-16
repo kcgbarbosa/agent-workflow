@@ -88,7 +88,6 @@ if step.get("screenshot"):
     Path(os.environ["LOOP_RUN_DIR"], "home-360-chromium-en.png").write_bytes(b"\x89PNG fake")
 
 
-
 def emit(event: dict[str, object]) -> None:
     line = json.dumps(event) + "\n"
     if step.get("split"):

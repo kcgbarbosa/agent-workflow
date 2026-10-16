@@ -20,7 +20,10 @@ def test_the_agent_command_line(tmp_path: Path) -> None:
     epic = EpicRun(EPIC, loaded, SECRETS)
     worktree = tmp_path / "worktree"
     worktree.mkdir()
-    ticket = Ticket("DEMO-2", "Add the first part", "Task", "To Do", False, False, (), "")
+    ticket = Ticket(
+        key="DEMO-2", summary="Add the first part", issue_type="Task", status="To Do",
+        done=False, flagged=False, blockers=(), text="",
+    )  # fmt: skip
     run = TicketRun(ticket, 2, "feat/DEMO-2-add-the-first-part", worktree, tmp_path / "run", restart=False)
     agents, dispatch, settings = json.dumps(tiers.load()), DISPATCH.read_text(), agent_settings(loaded)
     limit = f"{loaded.agent_timeout_minutes}m"

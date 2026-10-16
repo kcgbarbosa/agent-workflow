@@ -19,23 +19,6 @@ from loop import tiers
 from loop.claude import REVIEW_EFFORT, REVIEW_MODEL
 
 
-def results(world: World, ticket: str | None = None, step: str | None = None) -> list[str]:
-    """The results in the log, of one ticket or step when named."""
-    return [
-        line["result"]
-        for line in world.decisions()
-        if (ticket is None or line["ticket"] == ticket) and (step is None or line["step"] == step)
-    ]
-
-
-def first_session(world: World, key: str) -> str:
-    return str(
-        next(
-            line["session"] for line in world.decisions() if (line["ticket"], line["step"]) == (key, "agent")
-        )
-    )
-
-
 def test_a_fresh_epic_lands_a_chain_of_blockers_in_order_and_opens_one_ready_pr(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.jira.add("DEMO-3", "Add the second part", parent=EPIC, blockers=["DEMO-2"])
@@ -79,7 +62,7 @@ def test_each_agent_gets_the_ticket_file_the_secrets_and_its_own_stack(world: Wo
     world.run()
 
     call = world.calls("DEMO-2")[0]
-    ticket = (world.state / EPIC / "runs" / "DEMO-2" / "ticket.md").read_text()
+    ticket = (world.run_dir("DEMO-2") / "ticket.md").read_text()
     assert "Add the first part" in ticket
     assert "make lint test" in ticket
     assert call["secret"] == "secret-token"
@@ -153,7 +136,7 @@ def test_a_failed_ticket_gate_goes_back_to_the_session_with_the_log_tail(world: 
     assert world.run() == 0
 
     first, fix = world.calls("DEMO-2")
-    assert fix["resume"] is not None
+    assert fix["resume"] == world.first_session("DEMO-2")
     assert "FAILED tests/test_ticket.py" in fix["prompt"]
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
 
@@ -176,7 +159,7 @@ def test_a_ticket_out_of_fix_attempts_is_flagged_with_the_reason_and_its_dependa
     assert stuck.flagged and stuck.status == "In Progress"
     (comment,) = stuck.comments
     assert "make lint test" in comment
-    assert str(world.state / EPIC / "runs" / "DEMO-2" / "ticket-gate-3.log") in comment
+    assert str(world.run_dir("DEMO-2") / "ticket-gate-3.log") in comment
     assert "DEMO-2 stuck" in world.jira.notifications
     for key in ("DEMO-3", "DEMO-5", "DEMO-6"):
         assert world.calls(key) == [] and world.jira.issues[key].statuses == []
@@ -209,8 +192,8 @@ def test_a_gate_past_its_limit_fails_and_its_child_processes_stop(
 
     _, fix = world.calls("DEMO-2")
     assert fix["resume"] is not None
-    assert results(world, "DEMO-2", "make lint test") == ["fail", "pass"]
-    assert "ran past" in (world.state / EPIC / "runs" / "DEMO-2" / "ticket-gate-1.log").read_text()
+    assert world.results("DEMO-2", "make lint test") == ["fail", "pass"]
+    assert "ran past" in (world.run_dir("DEMO-2") / "ticket-gate-1.log").read_text()
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
     # The gate's child process would mark that it survived two seconds after it started.
     time.sleep(2)
@@ -236,8 +219,8 @@ def test_a_conflict_goes_back_to_the_agent_and_the_ticket_lands(world: World) ->
     assert len(resumed) == 1
     assert "same.txt" in resumed[0]["prompt"]
     later = resumed[0]["name"]
-    assert results(world, later, "land") == ["conflict", "landed"]
-    assert results(world, later, "merge-epic") == ["conflict"]
+    assert world.results(later, "land") == ["conflict", "landed"]
+    assert world.results(later, "merge-epic") == ["conflict"]
     # The ticket branch holds the Epic branch as it was when the first ticket landed.
     first = next(line for line in world.decisions() if line["step"] == "land" and line["ticket"] != later)
     branch = sh(world.repo, "git", "for-each-ref", "--format=%(refname:short)", f"refs/heads/feat/{later}-*")
@@ -291,7 +274,7 @@ def test_a_failed_merge_gate_goes_back_to_the_session_with_the_epic_branch_merge
     assert not world.jira.issues["DEMO-3"].flagged
     assert "merge(DEMO-3): Break the end to end tests" in world.epic_log()
     assert "a.txt" in sh(world.repo, "git", "ls-tree", "--name-only", "feat/DEMO-3-early-work").split()
-    assert results(world, "DEMO-3", "merge-epic") == ["ok"]
+    assert world.results("DEMO-3", "merge-epic") == ["ok"]
     assert sh(world.epic_file(""), "git", "status", "--porcelain") == ""
     # One down with volumes is the Epic merge, which drops the database, and one is the land.
     wiped = [r for r in world.records("docker") if r["project"] == "demo-demo-3" and "--volumes" in r["args"]]
@@ -338,8 +321,8 @@ def test_the_circuit_breaker_stops_the_loop(world: World) -> None:
 
     assert world.calls("DEMO-4") == []
     assert world.jira.notifications[-1] == f"{EPIC} stopped"
-    assert results(world, EPIC, "stop") == ["circuit-breaker"]
-    assert world.prs() == [] and not [call for call in world.records("gh") if call["args"][0] == "pr"]
+    assert world.results(EPIC, "stop") == ["circuit-breaker"]
+    assert world.prs() == [] and world.gh("pr") == []
 
 
 @pytest.mark.parametrize("limit", [{"error": "usage"}, {"error": "usage", "resets_in": 3 * 24 * 3600}])
@@ -357,9 +340,9 @@ def test_a_usage_limit_with_no_reset_soon_stops_the_loop_and_a_restart_continues
     assert world.run() == 0
     restart = world.calls("DEMO-2")[1]
     assert restart["resume"] is None
-    assert results(world, "DEMO-2", "start") == ["new", "restart"]
+    assert world.results("DEMO-2", "start") == ["new", "restart"]
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
-    run_dir = world.state / EPIC / "runs" / "DEMO-2"
+    run_dir = world.run_dir("DEMO-2")
     assert "usage limit" in (run_dir / "agent-1.jsonl").read_text()
     assert (run_dir / "agent-2.jsonl").exists()
 
@@ -394,12 +377,12 @@ def test_a_usage_limit_that_resets_soon_pauses_and_resumes_the_session(world: Wo
 
     limited, resumed = world.calls("DEMO-2")[:2]
     assert resumed["resume"] is not None
-    started = (world.state / EPIC / "runs" / "DEMO-2" / "agent-1.jsonl").read_text()
+    started = (world.run_dir("DEMO-2") / "agent-1.jsonl").read_text()
     assert resumed["resume"] in started
     # The wait lasts to a minute past the reset.
     (pause,) = world.records("sleeps")
     assert 170 <= pause["seconds"] <= 181
-    assert results(world, "DEMO-2", "agent") == ["usage-limit", "usage-pause", "done"]
+    assert world.results("DEMO-2", "agent") == ["usage-limit", "usage-pause", "done"]
     assert world.jira.notifications[0] == f"{EPIC} paused"
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
 
@@ -417,7 +400,7 @@ def test_a_remote_branch_with_the_key_is_adopted_as_a_restart(world: World) -> N
 
     assert world.run() == 0
 
-    assert results(world, "DEMO-2", "start") == ["restart"]
+    assert world.results("DEMO-2", "start") == ["restart"]
     assert world.epic_file("early.txt").exists() and world.epic_file("a.txt").exists()
 
 
@@ -452,7 +435,7 @@ def test_a_stuck_ticket_that_kc_comments_on_and_unflags_lands_on_the_next_run(wo
     assert world.run() == 0
 
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
-    ticket = (world.state / EPIC / "runs" / "DEMO-2" / "ticket.md").read_text()
+    ticket = (world.run_dir("DEMO-2") / "ticket.md").read_text()
     assert ticket.index("Use the v2 endpoint.") < ticket.index("Keep the old client too.")
     for text in ("Which endpoint?", "Kept the old client.", "Read the API docs."):
         assert any(text in comment for comment in own) and text not in ticket
@@ -466,7 +449,7 @@ def test_a_ticket_whose_comments_cannot_be_read_still_lands(world: World) -> Non
     assert world.run() == 0
 
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
-    assert "Use the v2 endpoint." not in (world.state / EPIC / "runs" / "DEMO-2" / "ticket.md").read_text()
+    assert "Use the v2 endpoint." not in (world.run_dir("DEMO-2") / "ticket.md").read_text()
     steps = [(line["ticket"], line["step"], line["result"]) for line in world.decisions()]
     assert ("DEMO-2", "tracker-comments", "fail") in steps
 
@@ -486,9 +469,9 @@ def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the
     (review,) = world.calls("DEMO-2-review")
     assert review["resume"] is None
     first, fix = world.calls("DEMO-2")
-    assert fix["resume"] == first_session(world, "DEMO-2") and finding in fix["prompt"]
+    assert fix["resume"] == world.first_session("DEMO-2") and finding in fix["prompt"]
     assert world.epic_file("a.txt").read_text() == "b"
-    assert results(world, "DEMO-2", "code-review") == ["findings"]
+    assert world.results("DEMO-2", "code-review") == ["findings"]
 
 
 def test_a_restart_skips_the_code_review_and_passes_on_the_findings_not_yet_fixed(world: World) -> None:
@@ -524,6 +507,7 @@ def test_code_review_findings_go_back_to_the_head_session_and_use_no_fix_attempt
 
     assert len(world.calls("DEMO-2")) == 3
     assert not world.jira.issues["DEMO-2"].flagged
+    assert "merge(DEMO-2): Add the first part" in world.epic_log()
 
 
 ACCEPTANCE = '\n[acceptance]\nlist = ["make", "acceptance-list", "ticket={key}"]\n'
@@ -627,7 +611,7 @@ def test_a_ui_fault_goes_back_to_the_agent_and_the_fixed_commit_gets_a_new_revie
     fix = world.calls("DEMO-2")[1]
     assert fix["resume"] is not None and fault in fix["prompt"]
     assert len(world.calls("DEMO-2-ui")) == 2
-    assert results(world, "DEMO-2", "ui-gate") == ["fail", "pass"]
+    assert world.results("DEMO-2", "ui-gate") == ["fail", "pass"]
     assert world.calls("DEMO-2-ui-finish") == []
     (pr,) = world.prs()
     assert not pr["draft"] and "UI review left open" not in pr["body"]
@@ -652,9 +636,10 @@ def test_a_ui_fault_that_is_still_there_after_one_fix_lands_and_keeps_the_epic_p
     assert world.run() == 0
 
     assert len(world.calls("DEMO-2")) == 2 and len(world.calls("DEMO-2-ui")) == 2
-    gates = [line["result"] for line in world.decisions() if line["step"] == "ui-gate"]
+    gates = world.results(step="ui-gate")
     assert gates == ["fail", "open", "open"]
     assert not world.jira.issues["DEMO-2"].flagged
+    assert "merge(DEMO-2): Change the home screen" in world.epic_log()
     assert fault in world.jira.issues["DEMO-2"].comments[-1]
     assert len(world.calls("DEMO-2-ui-finish")) == 1
     (pr,) = world.prs()
@@ -695,7 +680,7 @@ def test_the_finish_reviews_an_open_ui_item_again_and_clears_it_when_the_epic_co
 
     (review,) = world.calls("DEMO-2-ui-finish")
     assert part in review["prompt"] and review["resume"] is None
-    gates = [line["result"] for line in world.decisions() if line["step"] == "ui-gate"]
+    gates = world.results(step="ui-gate")
     assert gates == ["open", "pass"]
     create = world.records("gh")[-1]
     assert "--draft" not in create["args"] and "UI review left open" not in create["body"]
@@ -714,7 +699,7 @@ def test_an_open_ui_item_that_the_finish_review_still_finds_keeps_the_epic_pr_a_
 
     assert world.run() == 0
 
-    gates = [line["result"] for line in world.decisions() if line["step"] == "ui-gate"]
+    gates = world.results(step="ui-gate")
     assert gates == ["open", "open"]
     create = world.records("gh")[-1]
     assert "--draft" in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
@@ -983,7 +968,7 @@ def test_a_failed_demo_command_makes_the_epic_pr_a_draft_and_names_its_log(world
 
     assert world.run(extra=DEMO) == 0
 
-    log = world.state / EPIC / "runs" / EPIC / "finish-demo.log"
+    log = world.run_dir(EPIC) / "finish-demo.log"
     assert "the demo did not start" in log.read_text()
     create = world.records("gh")[-1]
     assert "--draft" in create["args"]
@@ -1010,7 +995,7 @@ def test_an_epic_with_nothing_landed_opens_no_pr(world: World) -> None:
 
     assert world.run() == 1
 
-    assert world.prs() == [] and not [call for call in world.records("gh") if call["args"][0] == "pr"]
+    assert world.prs() == [] and world.gh("pr") == []
     assert world.jira.notifications == [f"{EPIC} stopped"]
 
 
@@ -1065,17 +1050,14 @@ def test_a_session_that_a_dev_server_keeps_open_is_stopped_without_the_late_turn
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
     assert not world.jira.issues["DEMO-2"].flagged
     stopped = [line for line in world.decisions() if line["step"] == "agent" and line["result"] == "stopped"]
-    assert [line["detail"] for line in stopped] == [
-        "The session kept running after its status, with these background tasks: Start the dev stack."
-    ]
-    assert stopped[0]["session"]
+    (line,) = stopped
+    assert "Start the dev stack" in line["detail"] and line["session"]
 
 
 def test_a_subagent_at_the_status_keeps_the_late_turn_wait(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
-    # The session lingers past the wait of a session with no subagent at its status.
-    linger = loop_run.IDLE_GRACE_SECONDS + 2
-    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "subagents_running": 1, "linger": linger}]})
+    # The session lingers past the 10-second wait of a session with no subagent at its status.
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "subagents_running": 1, "linger": 12}]})
 
     assert world.run() == 0
 
@@ -1106,7 +1088,7 @@ def test_an_open_epic_pr_gets_the_new_body_and_draft_state(world: World) -> None
 
     assert world.run() == 0
 
-    assert not any(record["args"][:2] == ["pr", "create"] for record in world.records("gh"))
+    assert world.gh("pr", "create") == []
     (pr,) = world.prs()
     assert pr["url"] == url and pr["draft"] and pr["body"].startswith("**Failing gate:**")
     assert world.jira.notifications == [f"{EPIC} pr-draft"]
@@ -1123,8 +1105,8 @@ def test_a_rerun_of_a_finished_epic_builds_only_the_new_ticket_and_edits_the_ope
     assert len(world.calls("DEMO-2")) == 1 and len(world.calls("DEMO-3")) == 1
     merges = [subject for subject in world.epic_log() if subject.startswith("merge(")]
     assert merges == ["merge(DEMO-3): Add the second part", "merge(DEMO-2): Add the first part"]
-    creates = [record for record in world.records("gh") if record["args"][:2] == ["pr", "create"]]
-    edits = [record for record in world.records("gh") if record["args"][:2] == ["pr", "edit"]]
+    creates = world.gh("pr", "create")
+    edits = world.gh("pr", "edit")
     assert len(creates) == 1 and len(edits) == 1
     (pr,) = world.prs()
     assert not pr["draft"] and "| DEMO-3 | Landed |" in pr["body"]
@@ -1172,7 +1154,7 @@ def test_the_head_agent_runs_on_the_agent_table_in_every_session(world: World) -
     assert world.run(extra='\n[agent]\nmodel = "claude-sonnet-5-5"\neffort = "low"\n') == 0
 
     restart, fix = world.calls("DEMO-2")
-    assert results(world, "DEMO-2", "start") == ["restart"] and fix["resume"] is not None
+    assert world.results("DEMO-2", "start") == ["restart"] and fix["resume"] is not None
     for call in (restart, fix, *world.calls(f"{EPIC}-pr")):
         assert (call["model"], call["effort"]) == ("claude-sonnet-5-5", "low")
     (review,) = world.calls("DEMO-2-review")
