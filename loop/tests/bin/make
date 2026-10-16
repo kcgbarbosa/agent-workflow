@@ -4,7 +4,8 @@
 TICKET_FAIL fails every gate. MERGE_FAIL fails `make check` only, and so does a file `merge-gate-fails` in
 FAKE_CLAUDE_DIR, for a failure outside the code. A file `merge-gate-fails-after` there holds a number, and
 `make check` fails once it has run that many times, as the finish gate does after one landed ticket. GATE_HANG starts a child process and
-hangs. The child touches FAKE_CLAUDE_DIR/gate-child-survived if it still runs two seconds later. A file
+hangs. The child touches FAKE_CLAUDE_DIR/gate-child-survived if it still runs two seconds later. GATE_TTY
+runs the tests in a container with `docker compose run`, which sets the terminal up when it has one. A file
 `demo-fails` in FAKE_CLAUDE_DIR fails `make demo`. `make acceptance-list` prints the file `acceptance-titles.txt`
 of the tree, one acceptance test title per line. Each call reaches the kill point `make:<targets>`.
 """
@@ -41,6 +42,8 @@ if Path("GATE_HANG").exists():
     subprocess.Popen([sys.executable, "-c", child])
     time.sleep(10)
     sys.exit(2)
+if Path("GATE_TTY").exists():
+    sys.exit(subprocess.run(["docker", "compose", "run", "--rm", "api", "pytest"]).returncode)
 if "demo" in targets and Path(os.environ["FAKE_CLAUDE_DIR"], "demo-fails").exists():
     print("the demo did not start")
     sys.exit(2)

@@ -39,34 +39,6 @@ def agent_status(result: dict[str, Any]) -> dict[str, Any] | None:
     return output
 
 
-def subagents_at_status(events: list[dict[str, Any]]) -> int:
-    """The subagents still running when the head agent first returned its status.
-
-    Claude Code asks for the status as soon as a turn ends, so a head agent that ends its turn to wait for a
-    background subagent returns its status before its work is done.
-    """
-    running = 0
-    for event in events:
-        if event.get("type") == "system" and event.get("subtype") == "background_tasks_changed":
-            tasks = event.get("tasks") or []
-            running = sum(1 for task in tasks if task.get("task_type") == "local_agent")
-        elif event.get("type") == "assistant" and event.get("parent_tool_use_id") is None:
-            blocks = event.get("message", {}).get("content") or []
-            tools = [block.get("name") for block in blocks if block.get("type") == "tool_use"]
-            if "StructuredOutput" in tools:
-                return running
-    return 0
-
-
-def background_tasks(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The background tasks that run at the end of the events, such as a dev server or a subagent."""
-    tasks: list[dict[str, Any]] = []
-    for event in events:
-        if event.get("type") == "system" and event.get("subtype") == "background_tasks_changed":
-            tasks = event.get("tasks") or []
-    return tasks
-
-
 def usage_reset(events: list[dict[str, Any]]) -> float | None:
     """The time, in epoch seconds, when the usage limit that stopped a run resets."""
     for event in reversed(events):

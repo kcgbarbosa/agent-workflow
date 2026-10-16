@@ -13,7 +13,6 @@ import mimetypes
 import os
 import re
 import statistics
-import subprocess
 import threading
 import time
 from collections.abc import Iterator
@@ -25,7 +24,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import report
+from . import process, report
 from .stream import agent_plan
 
 RUN_LOCK = "run.lock"
@@ -1027,8 +1026,8 @@ def addresses() -> list[str]:
     """Localhost, and this host's tailnet address when it has one. No other network reaches the page."""
     found = ["127.0.0.1"]
     try:
-        result = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5)
-    except OSError, subprocess.TimeoutExpired:
+        result = process.run(["tailscale", "ip", "-4"], minutes=5 / 60)
+    except OSError:
         return found
     if result.returncode == 0 and result.stdout.strip():
         found.append(result.stdout.split()[0])

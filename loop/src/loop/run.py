@@ -5,7 +5,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 import threading
 import time
 import traceback
@@ -17,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from . import repo, tiers
+from . import process, repo, tiers
 from .claude import REVIEW_EFFORT, REVIEW_MODEL, TRIALS, agent_settings, run_setup
 from .config import Config
 from .prompts import (
@@ -26,7 +25,6 @@ from .prompts import (
     CODE_REVIEW_PROMPT,
     DECISIONS_COMMENT,
     DISPATCH,
-    EARLY_STATUS_PROMPT,
     LANDED_KEYS_PROMPT,
     NOTES_COMMENT,
     PR_PROMPT,
@@ -40,15 +38,7 @@ from .prompts import (
     USAGE_RESUME_PROMPT,
 )
 from .repo import git, out
-from .stream import (
-    agent_plan,
-    agent_status,
-    agent_usage,
-    background_tasks,
-    json_lines,
-    subagents_at_status,
-    usage_reset,
-)
+from .stream import agent_plan, agent_status, agent_usage, json_lines, usage_reset
 from .tracker import Ticket, TrackerError
 from .watch import BOARD
 
@@ -68,15 +58,11 @@ CODE_REVIEW_FIX_FILE = "code-review.fix"
 # The faults of a UI review go back to the head agent this often. A fault left after that lands with the
 # ticket and keeps the Epic PR a draft, because it costs less to fix by hand than to review again.
 UI_FIX_ROUNDS = 1
-# A review ends at its result, so a background task it starts dies unread. The head agent keeps them.
-FOREGROUND_ONLY = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
-TIMED_OUT = 124
-# A session with a background task, such as a dev server, stays open after its status. A subagent that
-# still runs at the status wakes the session for a late turn, so the loop waits this long for it.
-EXIT_GRACE_SECONDS = 120.0
-# Without such a subagent, no late turn is worth a wait, and a dev server never ends by itself.
-IDLE_GRACE_SECONDS = 10.0
-EXIT_POLL_SECONDS = 2.0
+# A session ends at its status, so a background task or subagent it starts would end unread or wake it too
+# late. Every Agent and Bash call then runs in the foreground.
+NO_BACKGROUND = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
+# The status is a session's last word, so a session that still runs this long after it is stopped.
+STATUS_GRACE_SECONDS = 10.0
 LOG_TAIL_LINES = 80
 # Slot 0 is the main checkout, and the Epic branch has its own slot.
 EPIC_SLOT = 1
@@ -102,8 +88,6 @@ class AgentResult:
     session: str
     findings: list[str] = field(default_factory=list)
     unchecked: list[str] = field(default_factory=list)
-    # The subagents still running when the status came, which Claude Code then asked for too early.
-    subagents_running: int = 0
 
 
 @dataclass
@@ -737,7 +721,15 @@ class EpicRun:
             return None
         command = tuple(item.replace("{branch}", self.epic_branch) for item in demo.command)
         log_file = run_dir / "finish-demo.log"
-        passed = self.limited(command, self.epic_worktree, self.child_env(), log_file, "demo command") == 0
+        finished = process.run(
+            command,
+            self.epic_worktree,
+            self.child_env(),
+            minutes=self.config.gate_timeout_minutes,
+            stdout=log_file,
+            stderr="stdout",
+        )
+        passed = finished.ok
         self.log(self.epic_key, "demo", "ok" if passed else "fail", detail=str(log_file))
         return None if passed else (" ".join(command), log_file)
 
@@ -873,27 +865,18 @@ class EpicRun:
     ) -> AgentResult:
         """Runs `claude -p` with an empty context, or resumes a session.
 
-        A usage limit that resets soon pauses the run, and the session then resumes where it stopped. A
-        `blocked` status that came while subagents still ran resumes the session once, so it can finish.
+        A usage limit that resets soon pauses the run, and the session then resumes where it stopped.
         """
         name = name or run.ticket.key
-        resumed = False
         while True:
             try:
-                result = self.agent_run(run, prompt, session, name, schema, model, effort)
+                return self.agent_run(run, prompt, session, name, schema, model, effort)
             except UsageLimit as error:
                 if error.reset is None or error.reset - time.time() > MAX_USAGE_WAIT_SECONDS:
                     raise
                 self.pause_until(error.reset, name)
                 if error.session:
                     prompt, session = USAGE_RESUME_PROMPT, error.session
-                continue
-            if result.status == "blocked" and result.subagents_running and not resumed:
-                detail = f"The status came while {result.subagents_running} subagents still ran."
-                self.log(name, "agent", "early-status", session=result.session, detail=detail)
-                prompt, session, resumed = EARLY_STATUS_PROMPT, result.session, True
-                continue
-            return result
 
     def pause_until(self, reset: float, name: str) -> None:
         """Waits for the usage limit to reset. Parallel runs that hit the same limit notify once."""
@@ -916,14 +899,7 @@ class EpicRun:
         model: str | None,
         effort: str | None,
     ) -> list[str]:
-        command = [
-            "timeout",
-            "--kill-after=60",
-            f"{self.config.agent_timeout_minutes}m",
-            "claude",
-            "-p",
-            prompt,
-        ]
+        command = ["claude", "-p", prompt]
         if session:
             command += ["--resume", session]
         if model:
@@ -962,25 +938,34 @@ class EpicRun:
             **self.config.stack_env(run.slot, run.ticket.key),
             **self.secrets,
             "LOOP_RUN_DIR": str(run.run_dir),
-            **(FOREGROUND_ONLY if schema == REVIEW_SCHEMA else {}),
+            **NO_BACKGROUND,
         }
         run.agent_log = next_log(run.run_dir, "agent", ".jsonl")
         errors_log = run.agent_log.with_suffix(".err")
-        with run.agent_log.open("w") as stdout, errors_log.open("w") as stderr:
-            process = subprocess.Popen(
-                command, cwd=run.worktree, env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr
-            )
-            returncode, cut_short = self.wait_for_agent(process, run.agent_log, name)
+        finished = process.run(
+            command,
+            run.worktree,
+            env,
+            minutes=self.config.agent_timeout_minutes,
+            stdout=run.agent_log,
+            stderr=errors_log,
+            stop=self.after_status(run.agent_log),
+            on_kill=lambda: self.stack_down(run.worktree, run.slot, run.ticket.key, volumes=False),
+        )
         errors = errors_log.read_text()
-        # Each turn ends with a result event. A background subagent that finishes after the status
-        # wakes the session for one more turn, and that turn's result can have no status.
+        # Each turn ends with a result event, and a later turn's result can have no status.
         events = json_lines(run.agent_log.read_text())
         results = [event for event in events if event.get("type") == "result"]
         data = results[-1] if results else {}
         cost, plan = agent_usage(data, events), agent_plan(events)
-        if returncode == TIMED_OUT and not cut_short:
+        if finished.timed_out:
             self.log(name, "agent", "timeout", session=session, usage=cost, plan=plan)
             raise AgentFailed(f"The agent ran past {self.config.agent_timeout_minutes} minutes.")
+        if finished.stopped:
+            stopped = next((event["session_id"] for event in events if event.get("session_id")), None)
+            detail = "The session kept running after its status."
+            self.log(name, "agent", "stopped", session=stopped, detail=detail)
+        returncode = finished.returncode
         message = f"{data.get('result', '')}\n{errors}"
         if data.get("is_error") or not data:
             if data.get("api_error_status") in (429, "429") or USAGE_LIMIT.search(message):
@@ -1006,7 +991,7 @@ class EpicRun:
         self.record_notes(run.ticket, [str(item) for item in output.get("notes", [])])
         findings = [str(item) for item in output.get("findings", [])]
         unchecked = [str(item) for item in output.get("unchecked", [])]
-        return AgentResult(status, reason, session_id, findings, unchecked, subagents_at_status(events))
+        return AgentResult(status, reason, session_id, findings, unchecked)
 
     def record_decisions(self, ticket: Ticket, decisions: list[str]) -> None:
         """Comments the open questions on the ticket. They stay out of the Epic PR."""
@@ -1024,75 +1009,45 @@ class EpicRun:
     def bullets(heading: str, items: list[str]) -> str:
         return heading + "\n" + "\n".join(f"- {item}" for item in items)
 
-    def wait_for_agent(self, process: subprocess.Popen[bytes], log: Path, name: str) -> tuple[int, bool]:
-        """Waits for the agent to exit. Returns its exit code, and whether the loop stopped it.
-
-        `claude -p` does not exit while a background task runs, such as the dev server that a UI review
-        starts, and the task can run until its own time limit. The loop stops a session that has given
-        its status and has not exited in the grace time, as the status is its last word. A late turn
-        that comes within the grace time still counts, and only a subagent that ran at the status gets
-        the long grace.
-        """
+    @staticmethod
+    def after_status(log: Path) -> Callable[[], bool]:
+        """A check that is True once the session's status is in its log and the grace time has passed."""
         given: float | None = None
-        grace = EXIT_GRACE_SECONDS
         size = -1
-        while True:
-            try:
-                return process.wait(timeout=EXIT_POLL_SECONDS), False
-            except subprocess.TimeoutExpired:
-                pass
+
+        def due() -> bool:
+            nonlocal given, size
             if given is None and log.stat().st_size != size:
                 size = log.stat().st_size
-                events = json_lines(log.read_text())
-                if any(agent_status(event) for event in events if event.get("type") == "result"):
+                results = [event for event in json_lines(log.read_text()) if event.get("type") == "result"]
+                if any(agent_status(result) for result in results):
                     given = time.monotonic()
-                    grace = EXIT_GRACE_SECONDS if subagents_at_status(events) else IDLE_GRACE_SECONDS
-            elif given is not None and time.monotonic() - given >= grace:
-                events = json_lines(log.read_text())
-                tasks = [str(task.get("description", "")) for task in background_tasks(events)]
-                running = f", with these background tasks: {'; '.join(tasks)}" if tasks else ""
-                session = next((event["session_id"] for event in events if event.get("session_id")), None)
-                detail = f"The session kept running after its status{running}."
-                self.log(name, "agent", "stopped", session=session, detail=detail)
-                # `timeout` passes the signal on to the whole group that it started.
-                process.terminate()
-                try:
-                    return process.wait(timeout=75), True
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    return process.wait(), True
+            return given is not None and time.monotonic() - given >= STATUS_GRACE_SECONDS
+
+        return due
 
     def gate(
         self, command: tuple[str, ...], cwd: Path, stack: dict[str, str], log_file: Path, key: str
     ) -> bool:
-        """Runs a gate under `timeout`, as the agent runs, so that a gate past its limit stops with its child
-        processes. The output goes to the log file, so the run waits on no pipe that a child holds open.
+        """Runs a gate at the gate timeout, with its output in the log file. Its stack goes down when the
+        gate runs past the limit, and before it starts, because a container from a failed start can start
+        later with no published port.
         """
-        env = {**self.child_env(), **stack}
         if stack:
-            # A container from a start that failed, such as on a port that was in use, can start later
-            # with no published port. A gate on new containers does not depend on an earlier start.
             self.command(["docker", "compose", "down"], cwd, stack)
-        passed = self.limited(command, cwd, env, log_file, "gate") == 0
+        finished = process.run(
+            command,
+            cwd,
+            {**self.child_env(), **stack},
+            minutes=self.config.gate_timeout_minutes,
+            stdout=log_file,
+            stderr="stdout",
+            on_kill=(lambda: self.command(["docker", "compose", "down"], cwd, stack)) if stack else None,
+        )
+        passed = finished.ok
         commit = out(cwd, "rev-parse", "HEAD")
         self.log(key, " ".join(command), "pass" if passed else "fail", commit=commit, detail=str(log_file))
         return passed
-
-    def limited(
-        self, command: tuple[str, ...], cwd: Path, env: dict[str, str], log_file: Path, what: str
-    ) -> int:
-        """Runs a command under `timeout` at the gate timeout, with its output in the log file."""
-        limit = f"{self.config.gate_timeout_minutes}m"
-        with log_file.open("w") as log:
-            wrapped = ["timeout", "--kill-after=60", limit, *command]
-            # `timeout` puts the command in a background process group, where a terminal on stdin stops it.
-            result = subprocess.run(
-                wrapped, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT
-            )
-        if result.returncode == TIMED_OUT:
-            with log_file.open("a") as log:
-                log.write(f"The {what} ran past {self.config.gate_timeout_minutes} minutes.\n")
-        return result.returncode
 
     def push(self, worktree: Path, branch: str, key: str) -> None:
         result = git(worktree, "push", "--set-upstream", "origin", branch, check=False)
@@ -1122,13 +1077,10 @@ class EpicRun:
         command = ["docker", "compose", "down", *(["--volumes"] if volumes else [])]
         self.command(command, worktree, self.config.stack_env(slot, key))
 
-    def command(
-        self, command: list[str], cwd: Path, stack: dict[str, str] | None = None
-    ) -> subprocess.CompletedProcess[str]:
+    def command(self, command: list[str], cwd: Path, stack: dict[str, str] | None = None) -> process.Finished:
+        """A short command, such as `gh` or `docker compose down`, at the gate timeout."""
         env = {**self.child_env(), **(stack or {})}
-        return subprocess.run(
-            command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True
-        )
+        return process.run(command, cwd, env, minutes=self.config.gate_timeout_minutes)
 
     def child_env(self) -> dict[str, str]:
         # The Bitwarden session key unlocks the whole vault, so no child process gets it.

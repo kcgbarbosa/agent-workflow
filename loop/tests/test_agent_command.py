@@ -26,7 +26,6 @@ def test_the_agent_command_line(tmp_path: Path) -> None:
     )  # fmt: skip
     run = TicketRun(ticket, 2, "feat/DEMO-2-add-the-first-part", worktree, tmp_path / "run", restart=False)
     agents, dispatch, settings = json.dumps(tiers.load()), DISPATCH.read_text(), agent_settings(loaded)
-    limit = f"{loaded.agent_timeout_minutes}m"
 
     def tail(schema: str, name: str) -> list[str]:
         return [
@@ -37,7 +36,7 @@ def test_the_agent_command_line(tmp_path: Path) -> None:
 
     head = epic.agent_command(run, "/implement", None, "DEMO-2", AGENT_SCHEMA, "claude-sonnet-5-5", "low")
     assert head == [
-        "timeout", "--kill-after=60", limit, "claude", "-p", "/implement",
+        "claude", "-p", "/implement",
         "--model", "claude-sonnet-5-5", "--effort", "low", "--autocompact", "200000",
         *tail(AGENT_SCHEMA, "DEMO-2"),
     ]  # fmt: skip
@@ -46,7 +45,7 @@ def test_the_agent_command_line(tmp_path: Path) -> None:
     (worktree / ".mcp.json").write_text('{"mcpServers": {}}\n')
     fix = epic.agent_command(run, "Fix it.", "s-1", "DEMO-2", AGENT_SCHEMA, "claude-sonnet-5-5", "low")
     assert fix == [
-        "timeout", "--kill-after=60", limit, "claude", "-p", "Fix it.", "--resume", "s-1",
+        "claude", "-p", "Fix it.", "--resume", "s-1",
         "--model", "claude-sonnet-5-5", "--effort", "low", "--autocompact", "200000",
         "--mcp-config", str(worktree / ".mcp.json"), "--strict-mcp-config",
         *tail(AGENT_SCHEMA, "DEMO-2"),

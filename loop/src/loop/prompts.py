@@ -60,9 +60,8 @@ REVIEW_RULES = (
     "Change no file, and do not commit or push. Return in `findings` each problem that breaks the behaviour, "
     "the ticket, or a documented standard. List polish that blocks nothing, such as a name or a spacing, in "
     "`notes` instead. Leave out a judgement call that you would not change. "
-    "Wait for every subagent you start to return. Run each command in the foreground, with a timeout long "
-    "enough for it, because your result ends the session and nothing waits for a background task. Stop each "
-    "server you start, such as a dev server, before you give your result."
+    "Give each command a timeout long enough for it. Stop each server you start, such as a dev server, "
+    "before you give your result."
 )
 CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. " + REVIEW_RULES
 ACCEPTANCE_PROMPT = (
@@ -89,11 +88,6 @@ REVIEW_FIX_PROMPT = (
 )
 RESTART_PROMPT = "A previous run was interrupted. Check the diff against the ticket and continue."
 USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work."
-EARLY_STATUS_PROMPT = (
-    "Claude Code asked for your status while subagents that you started still ran, so it came before "
-    "your work was done. Continue the work from where you stopped. Send again each subagent whose report "
-    "you do not have, and set `run_in_background: false` on each Agent call."
-)
 PR_PROMPT = (
     "/pr Write the body of the Epic pull request for the diff `{merge_base}..HEAD` to the file "
     "`{body_file}`. Do not commit, push, or open the pull request. In Evidence, give this ticket "
