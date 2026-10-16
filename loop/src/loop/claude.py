@@ -27,7 +27,7 @@ TRIALS = Path(".claude/worktrees")
 def claude_version() -> str:
     """The version that `claude --version` prints, such as 2.1.301, or "" when it prints none."""
     try:
-        result = process.run(["claude", "--version"], minutes=0.5)
+        result = process.run(["claude", "--version"], seconds=30)
     except OSError:
         return ""
     match = re.search(r"\d+\.\d+\.\d+", result.stdout)

@@ -38,7 +38,15 @@ from .prompts import (
     USAGE_RESUME_PROMPT,
 )
 from .repo import git, out
-from .stream import agent_plan, agent_status, agent_usage, json_lines, usage_reset
+from .stream import (
+    after_status,
+    agent_plan,
+    agent_status,
+    agent_usage,
+    first_session,
+    json_lines,
+    usage_reset,
+)
 from .tracker import Ticket, TrackerError
 from .watch import BOARD
 
@@ -58,10 +66,8 @@ CODE_REVIEW_FIX_FILE = "code-review.fix"
 # The faults of a UI review go back to the head agent this often. A fault left after that lands with the
 # ticket and keeps the Epic PR a draft, because it costs less to fix by hand than to review again.
 UI_FIX_ROUNDS = 1
-# A session ends at its status, so a background task or subagent it starts would end unread or wake it too
-# late. Every Agent and Bash call then runs in the foreground.
 NO_BACKGROUND = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
-# The status is a session's last word, so a session that still runs this long after it is stopped.
+# The loop stops a session that still runs this long after its status.
 STATUS_GRACE_SECONDS = 10.0
 LOG_TAIL_LINES = 80
 # Slot 0 is the main checkout, and the Epic branch has its own slot.
@@ -721,15 +727,7 @@ class EpicRun:
             return None
         command = tuple(item.replace("{branch}", self.epic_branch) for item in demo.command)
         log_file = run_dir / "finish-demo.log"
-        finished = process.run(
-            command,
-            self.epic_worktree,
-            self.child_env(),
-            minutes=self.config.gate_timeout_minutes,
-            stdout=log_file,
-            stderr="stdout",
-        )
-        passed = finished.ok
+        passed = self.logged(command, self.epic_worktree, self.child_env(), log_file).ok
         self.log(self.epic_key, "demo", "ok" if passed else "fail", detail=str(log_file))
         return None if passed else (" ".join(command), log_file)
 
@@ -946,10 +944,10 @@ class EpicRun:
             command,
             run.worktree,
             env,
-            minutes=self.config.agent_timeout_minutes,
+            seconds=self.config.agent_timeout_minutes * process.MINUTE,
             stdout=run.agent_log,
             stderr=errors_log,
-            stop=self.after_status(run.agent_log),
+            stop=after_status(run.agent_log, STATUS_GRACE_SECONDS),
             on_kill=lambda: self.stack_down(run.worktree, run.slot, run.ticket.key, volumes=False),
         )
         errors = errors_log.read_text()
@@ -962,19 +960,17 @@ class EpicRun:
             self.log(name, "agent", "timeout", session=session, usage=cost, plan=plan)
             raise AgentFailed(f"The agent ran past {self.config.agent_timeout_minutes} minutes.")
         if finished.stopped:
-            stopped = next((event["session_id"] for event in events if event.get("session_id")), None)
             detail = "The session kept running after its status."
-            self.log(name, "agent", "stopped", session=stopped, detail=detail)
+            self.log(name, "agent", "stopped", session=first_session(events), detail=detail)
         returncode = finished.returncode
         message = f"{data.get('result', '')}\n{errors}"
         if data.get("is_error") or not data:
             if data.get("api_error_status") in (429, "429") or USAGE_LIMIT.search(message):
-                started = next((event.get("session_id") for event in events if event.get("session_id")), None)
-                stopped = data.get("session_id") or started or session
+                limited = data.get("session_id") or first_session(events) or session
                 detail = f"{name}: {message.strip()[:200]}"
                 # The run that meets the limit moved the meter most, so its line keeps the plan.
-                self.log(name, "agent", "usage-limit", session=stopped, detail=detail, usage=cost, plan=plan)
-                raise UsageLimit(detail, usage_reset(events), stopped)
+                self.log(name, "agent", "usage-limit", session=limited, detail=detail, usage=cost, plan=plan)
+                raise UsageLimit(detail, usage_reset(events), limited)
             self.log(name, "agent", "error", session=data.get("session_id"), usage=cost, plan=plan)
             raise AgentFailed(f"The agent exited with code {returncode}: {message.strip()[:300]}")
         output = next(filter(None, map(agent_status, reversed(results))), None)
@@ -1009,45 +1005,37 @@ class EpicRun:
     def bullets(heading: str, items: list[str]) -> str:
         return heading + "\n" + "\n".join(f"- {item}" for item in items)
 
-    @staticmethod
-    def after_status(log: Path) -> Callable[[], bool]:
-        """A check that is True once the session's status is in its log and the grace time has passed."""
-        given: float | None = None
-        size = -1
-
-        def due() -> bool:
-            nonlocal given, size
-            if given is None and log.stat().st_size != size:
-                size = log.stat().st_size
-                results = [event for event in json_lines(log.read_text()) if event.get("type") == "result"]
-                if any(agent_status(result) for result in results):
-                    given = time.monotonic()
-            return given is not None and time.monotonic() - given >= STATUS_GRACE_SECONDS
-
-        return due
-
     def gate(
         self, command: tuple[str, ...], cwd: Path, stack: dict[str, str], log_file: Path, key: str
     ) -> bool:
-        """Runs a gate at the gate timeout, with its output in the log file. Its stack goes down when the
-        gate runs past the limit, and before it starts, because a container from a failed start can start
-        later with no published port.
-        """
-        if stack:
+        """Runs a gate on new containers, because a container from a failed start can start later with no
+        published port."""
+
+        def down() -> None:
             self.command(["docker", "compose", "down"], cwd, stack)
-        finished = process.run(
-            command,
-            cwd,
-            {**self.child_env(), **stack},
-            minutes=self.config.gate_timeout_minutes,
-            stdout=log_file,
-            stderr="stdout",
-            on_kill=(lambda: self.command(["docker", "compose", "down"], cwd, stack)) if stack else None,
-        )
-        passed = finished.ok
+
+        if stack:
+            down()
+        passed = self.logged(
+            command, cwd, {**self.child_env(), **stack}, log_file, down if stack else None
+        ).ok
         commit = out(cwd, "rev-parse", "HEAD")
         self.log(key, " ".join(command), "pass" if passed else "fail", commit=commit, detail=str(log_file))
         return passed
+
+    def logged(
+        self,
+        command: tuple[str, ...],
+        cwd: Path,
+        env: dict[str, str],
+        log_file: Path,
+        on_kill: Callable[[], object] | None = None,
+    ) -> process.Finished:
+        """A gate or the demo command, at the gate timeout, with its output in the log file."""
+        seconds = self.config.gate_timeout_minutes * process.MINUTE
+        return process.run(
+            command, cwd, env, seconds=seconds, stdout=log_file, stderr="stdout", on_kill=on_kill
+        )
 
     def push(self, worktree: Path, branch: str, key: str) -> None:
         result = git(worktree, "push", "--set-upstream", "origin", branch, check=False)
@@ -1080,7 +1068,7 @@ class EpicRun:
     def command(self, command: list[str], cwd: Path, stack: dict[str, str] | None = None) -> process.Finished:
         """A short command, such as `gh` or `docker compose down`, at the gate timeout."""
         env = {**self.child_env(), **(stack or {})}
-        return process.run(command, cwd, env, minutes=self.config.gate_timeout_minutes)
+        return process.run(command, cwd, env, seconds=self.config.gate_timeout_minutes * process.MINUTE)
 
     def child_env(self) -> dict[str, str]:
         # The Bitwarden session key unlocks the whole vault, so no child process gets it.

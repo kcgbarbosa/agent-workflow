@@ -39,7 +39,7 @@ SECRETS_FILE = watch_page.SECRETS_FILE
 RUN_LOCK = watch_page.RUN_LOCK
 START_POLLS = 60
 # A check such as `docker info` or `bw sync` that has not answered by then is taken as failed.
-QUIET_MINUTES = 2
+QUIET_SECONDS = 120
 START_POLL_SECONDS = 2
 WATCH_POLLS = 20
 CODE_CHECK_SECONDS = 2
@@ -146,7 +146,7 @@ def secrets_file(config: Config) -> Path:
 
 
 def bitwarden_unlocked() -> bool:
-    status = process.run(["bw", "status"], minutes=QUIET_MINUTES).stdout
+    status = process.run(["bw", "status"], seconds=QUIET_SECONDS).stdout
     return '"status":"unlocked"' in status.replace(" ", "")
 
 
@@ -186,7 +186,7 @@ def bitwarden_secrets(config: Config) -> dict[str, str]:
     secrets: dict[str, str] = {}
     missing: list[str] = []
     for env, secret in config.secrets.items():
-        result = process.run(["bw", "get", secret.field, secret.item], minutes=QUIET_MINUTES)
+        result = process.run(["bw", "get", secret.field, secret.item], seconds=QUIET_SECONDS)
         if result.returncode == 0 and result.stdout.strip():
             secrets[env] = result.stdout.strip()
         else:
@@ -395,4 +395,4 @@ def _tmux(args: list[str]) -> str:
 
 
 def _quiet(command: list[str], cwd: Path | None = None) -> int:
-    return process.run(command, cwd, minutes=QUIET_MINUTES).returncode
+    return process.run(command, cwd, seconds=QUIET_SECONDS).returncode

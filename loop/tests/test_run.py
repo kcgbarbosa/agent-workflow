@@ -5,8 +5,10 @@ Jira, the `gh` calls, the notifications, and the results in the log, and no prom
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
+from pathlib import Path
 
 import pytest
 from conftest import EPIC, World, sh
@@ -168,26 +170,28 @@ def test_a_ticket_out_of_fix_attempts_is_flagged_with_the_reason_and_its_dependa
     assert f"{EPIC} pr-draft" in world.jira.notifications
 
 
+# A stubborn gate ignores SIGTERM, so only the SIGKILL after the grace time ends it.
+@pytest.mark.parametrize("hang", ["polite", "stubborn"])
 def test_a_gate_past_its_limit_fails_and_its_child_processes_and_containers_stop(
-    world: World, monkeypatch: pytest.MonkeyPatch
+    world: World, monkeypatch: pytest.MonkeyPatch, hang: str
 ) -> None:
     # A minute of the limits lasts a second, so the gate's limit of one minute ends it in a second.
     monkeypatch.setenv("FAKE_MINUTE_SECONDS", "1")
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
-    world.plan({"DEMO-2": [{"write": {"a.txt": "a", "GATE_HANG": "x"}}, {"delete": ["GATE_HANG"]}]})
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a", "GATE_HANG": hang}}, {"delete": ["GATE_HANG"]}]})
 
     assert world.run(gates_extra="timeout_minutes = 1") == 0
 
     _, fix = world.calls("DEMO-2")
     assert fix["resume"] is not None
     assert world.results("DEMO-2", "make lint test") == ["fail", "pass"]
-    assert "ran past its limit of 1 minutes" in (world.run_dir("DEMO-2") / "ticket-gate-1.log").read_text()
+    assert "ran past its time limit of 1 min" in (world.run_dir("DEMO-2") / "ticket-gate-1.log").read_text()
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
     commands = [(line["tool"], line.get("targets") or line["args"]) for line in world.records("commands")]
     hung = commands.index(("make", ["lint", "test"]))
     assert commands[hung + 1] == ("docker", ["compose", "down"])
-    # The gate's child process would mark that it survived two seconds after it started.
-    time.sleep(2)
+    # The gate's child process would mark that it survived four seconds after it started.
+    time.sleep(4)
     assert not (world.fakes / "gate-child-survived").exists()
 
 
@@ -538,8 +542,8 @@ def test_the_lines_of_what_the_user_sees_come_from_the_list_under_the_heading() 
 def test_a_gate_whose_docker_compose_run_touches_the_terminal_finishes_under_a_run_with_one(
     world: World,
 ) -> None:
-    # The freeze of 2026-10-16: under tmux, `docker compose run` in a merge gate set the terminal up from a
-    # background process group, and the terminal stopped the group.
+    # Under tmux, `docker compose run` in a gate sets the terminal up. From a background process group, that
+    # stops the group, and the gate never ends.
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"a.txt": "a", "GATE_TTY": "x"}}]})
 
@@ -1007,10 +1011,11 @@ def test_a_status_before_a_later_turn_with_none_still_counts(world: World) -> No
 
 def test_a_session_that_keeps_running_after_its_status_is_stopped_and_the_run_goes_on(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
-    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "linger": 60}]})
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "child": True, "linger": 60}]})
 
     started = time.monotonic()
     assert world.run() == 0
+    assert ended(world.fakes / "agent-child.pid")
 
     assert time.monotonic() - started < 30
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
@@ -1018,6 +1023,34 @@ def test_a_session_that_keeps_running_after_its_status_is_stopped_and_the_run_go
     stopped = [line for line in world.decisions() if line["step"] == "agent" and line["result"] == "stopped"]
     (line,) = stopped
     assert line["session"]
+
+
+def test_an_agent_past_its_limit_stops_with_its_processes_and_its_stack(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_MINUTE_SECONDS", "1")
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "child": True, "stall": 60}]})
+
+    world.run(limits_extra="agent_timeout_minutes = 1")
+
+    assert ended(world.fakes / "agent-child.pid")
+    assert world.results("DEMO-2", "agent") == ["timeout"]
+    assert world.jira.issues["DEMO-2"].flagged
+    downs = [r["project"] for r in world.records("docker") if r["args"][:2] == ["compose", "down"]]
+    assert "demo-demo-2" in downs
+
+
+def ended(pid_file: Path) -> bool:
+    """Whether the process of the pid file has ended within two seconds."""
+    pid = int(pid_file.read_text())
+    for _ in range(20):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.1)
+    return False
 
 
 def test_a_merge_that_fails_its_gate_never_reaches_the_frontier(world: World) -> None:

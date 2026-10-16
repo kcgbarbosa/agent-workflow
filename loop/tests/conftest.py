@@ -52,6 +52,7 @@ merge = ["make", "check"]
 
 [limits]
 parallel = {parallel}
+{limits_extra}
 
 [notify]
 url = "{tracker_url}/ntfy"
@@ -79,15 +80,17 @@ def write_config(
     extra: str = "",
     ui_extra: str = "",
     gates_extra: str = "",
+    limits_extra: str = "",
 ) -> None:
-    """The test config. `extra` adds tables at the end, such as `[agent]`. `ui_extra` and `gates_extra` add
-    keys to `[ui]` and `[gates]`."""
+    """The test config. `extra` adds tables at the end, such as `[agent]`. `ui_extra`, `gates_extra` and
+    `limits_extra` add keys to `[ui]`, `[gates]` and `[limits]`."""
     text = CONFIG.format(
         tracker_url=tracker_url,
         parallel=parallel,
         landed_keys_only=str(landed_keys_only).lower(),
         ui_extra=ui_extra,
         gates_extra=gates_extra,
+        limits_extra=limits_extra,
     )
     (repo / config.FILE).write_text(text + extra)
 
@@ -127,6 +130,7 @@ class World:
         base: str | None = None,
         ui_extra: str = "",
         gates_extra: str = "",
+        limits_extra: str = "",
         terminal: bool = False,
     ) -> int:
         """Runs `loop run` and returns its exit code. Its output shows when the test fails.
@@ -134,7 +138,9 @@ class World:
         With `terminal`, the run has a pseudo-terminal as its controlling terminal and stdin, and it is the
         terminal's foreground process group, as under tmux.
         """
-        write_config(self.repo, self.jira.url, parallel, landed_keys_only, extra, ui_extra, gates_extra)
+        write_config(
+            self.repo, self.jira.url, parallel, landed_keys_only, extra, ui_extra, gates_extra, limits_extra
+        )
         self.state.mkdir(parents=True, exist_ok=True)
         (self.state / "secrets.json").write_text(json.dumps(SECRETS))
         on = ["--on", base] if base else []

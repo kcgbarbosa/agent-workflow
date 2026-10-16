@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 # The usage fields the log keeps per model. A `costBasis` of "unknown" marks a cost the CLI guessed.
@@ -37,6 +40,27 @@ def agent_status(result: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(output, dict) or output.get("status") not in ("done", "blocked"):
         return None
     return output
+
+
+def first_session(events: list[dict[str, Any]]) -> str | None:
+    return next((str(event["session_id"]) for event in events if event.get("session_id")), None)
+
+
+def after_status(log: Path, grace: float) -> Callable[[], bool]:
+    """A check that turns True once the log holds a status and the grace time in seconds has passed."""
+    given: float | None = None
+    size = -1
+
+    def due() -> bool:
+        nonlocal given, size
+        if given is None and log.stat().st_size != size:
+            size = log.stat().st_size
+            results = [event for event in json_lines(log.read_text()) if event.get("type") == "result"]
+            if any(agent_status(result) for result in results):
+                given = time.monotonic()
+        return given is not None and time.monotonic() - given >= grace
+
+    return due
 
 
 def usage_reset(events: list[dict[str, Any]]) -> float | None:

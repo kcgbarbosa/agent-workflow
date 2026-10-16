@@ -1026,7 +1026,7 @@ def addresses() -> list[str]:
     """Localhost, and this host's tailnet address when it has one. No other network reaches the page."""
     found = ["127.0.0.1"]
     try:
-        result = process.run(["tailscale", "ip", "-4"], minutes=5 / 60)
+        result = process.run(["tailscale", "ip", "-4"], seconds=5)
     except OSError:
         return found
     if result.returncode == 0 and result.stdout.strip():
