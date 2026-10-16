@@ -63,6 +63,29 @@ def after_status(log: Path, grace: float) -> Callable[[], bool]:
     return due
 
 
+def meter_reader(log: Path) -> Callable[[], dict[str, dict[str, Any]]]:
+    """A check that returns the newest plan meter reading in the log so far, for each window, as its
+    utilization and reset. Each call reads only the whole lines the log gained since the last one."""
+    offset = 0
+    newest: dict[str, dict[str, Any]] = {}
+
+    def read() -> dict[str, dict[str, Any]]:
+        nonlocal offset, newest
+        with log.open("rb") as file:
+            file.seek(offset)
+            data = file.read()
+        end = data.rfind(b"\n") + 1
+        offset += end
+        plan = agent_plan(json_lines(data[:end].decode(errors="replace")))
+        newest = newest | {
+            window: {"utilization": value["end"], "resets_at": value["resets_at"]}
+            for window, value in plan.items()
+        }
+        return newest
+
+    return read
+
+
 def usage_reset(events: list[dict[str, Any]]) -> float | None:
     """The time, in epoch seconds, when the usage limit that stopped a run resets."""
     for event in reversed(events):

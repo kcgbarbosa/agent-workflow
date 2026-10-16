@@ -12,10 +12,10 @@ later turn can. A step with `rate_limits` writes one `rate_limit_event` per item
 reset of each window, as the CLI writes the plan meter. A step with `messages` writes the assistant messages
 with their usage, one event per content block as the CLI does, and a message with `parent` comes from a
 subagent. A step with `peek` saves what the agent logs in LOOP_RUN_DIR hold while it runs to
-FAKE_CLAUDE_DIR/peek.json. A step with `stall` goes quiet for that many seconds in the middle of its turn. A
-step with `split` writes each event in two parts, so a reader can meet a cut-off line. A step with `error`
-"mid-turn" stops in the middle of its turn, after part of a line and with no result. After its files, a call
-reaches the kill point `claude:<name>`, and a call that returns its status goes to
+FAKE_CLAUDE_DIR/peek.json. A step with `stall` goes quiet for that many seconds in the middle of its turn,
+after its plan meter. A step with `split` writes each event in two parts, so a reader can meet a cut-off line.
+A step with `error` "mid-turn" stops in the middle of its turn, after part of a line and with no result. After
+its files, a call reaches the kill point `claude:<name>`, and a call that returns its status goes to
 FAKE_CLAUDE_DIR/finished.jsonl. With no step left, the call returns done and changes nothing. `--version`
 prints FAKE_CLAUDE_VERSION, or a version new enough for the loop.
 
@@ -111,8 +111,6 @@ def emit(event: dict[str, object]) -> None:
 
 
 emit({"type": "system", "subtype": "init", "session_id": session})
-if step.get("stall"):
-    time.sleep(step["stall"])
 if step.get("peek"):
     print("Starting the MCP servers", file=sys.stderr, flush=True)
     logs = {log.name: log.read_text() for log in Path(os.environ["LOOP_RUN_DIR"]).glob("agent-*")}
@@ -122,6 +120,8 @@ for meter in step.get("rate_limits", []):
     first = next(iter(windows))
     info = {"status": "allowed", "rateLimitType": first, **windows[first], "unifiedWindows": windows}
     emit({"type": "rate_limit_event", "rate_limit_info": info, "session_id": session})
+if step.get("stall"):
+    time.sleep(step["stall"])
 for message in step.get("messages", []):
     fresh, read, written = message["context"]
     usage = {"input_tokens": fresh, "cache_read_input_tokens": read, "cache_creation_input_tokens": written, "output_tokens": 5}

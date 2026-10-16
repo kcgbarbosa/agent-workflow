@@ -36,3 +36,12 @@ def next_step(lines: list[dict[str, Any]], head: str, ui: Callable[[str], bool] 
         return False
 
     return next(step for step in STEPS if not passed(step))
+
+
+def current_step(lines: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The step a ticket is in, from its lines: the step whose `started` line has no result yet, and when it
+    started. None between two steps. The stuck step logs as the others do."""
+    last = next((line for line in reversed(lines) if line.get("step") in (*STEPS, "stuck")), None)
+    if last is None or last.get("result") != "started":
+        return None
+    return {"name": last["step"], "since": last.get("time")}

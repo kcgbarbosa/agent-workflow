@@ -38,6 +38,7 @@ from .prompts import (
     USAGE_RESUME_PROMPT,
 )
 from .repo import git, out
+from .report import read_lines
 from .steps import UI_PASSED, next_step
 from .stream import (
     after_status,
@@ -46,10 +47,11 @@ from .stream import (
     agent_usage,
     first_session,
     json_lines,
+    meter_reader,
     usage_reset,
 )
 from .tracker import Ticket, TrackerError
-from .watch import BOARD, read_lines
+from .watch import BOARD
 
 # A limit that resets later than this, such as the weekly one, stops the loop.
 MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60
@@ -997,8 +999,11 @@ class EpicRun:
         if limit.reset is None or limit.reset - now > MAX_USAGE_WAIT_SECONDS:
             return False
         until = datetime.fromtimestamp(limit.reset, UTC).isoformat(timespec="seconds")
-        self.log(limit.name, "agent", "usage-pause", detail=f"The usage limit resets at {until}.")
         end = limit.reset + PAST_RESET_SECONDS
+        resumes = datetime.fromtimestamp(max(end, self.paused_until), UTC).isoformat(timespec="seconds")
+        self.log(
+            limit.name, "agent", "usage-pause", detail=f"The usage limit resets at {until}.", resumes=resumes
+        )
         if end > now and now >= self.paused_until:
             self.notify(f"{self.epic_key} paused")
         self.paused_until = max(self.paused_until, end)
@@ -1068,6 +1073,7 @@ class EpicRun:
         run.agent_log = next_log(run.run_dir, "agent", ".jsonl")
         errors_log = run.agent_log.with_suffix(".err")
         ended = after_status(run.agent_log, STATUS_GRACE_SECONDS)
+        log_meter = self.meter_logger(name, run.agent_log)
         finished = process.run(
             command,
             run.worktree,
@@ -1075,7 +1081,7 @@ class EpicRun:
             seconds=self.config.agent_timeout_minutes * process.MINUTE,
             stdout=run.agent_log,
             stderr=errors_log,
-            stop=lambda: self.stopping.is_set() or ended(),
+            stop=lambda: log_meter() or self.stopping.is_set() or ended(),
             on_kill=lambda: self.stack_down(run.worktree, run.slot, run.ticket.key, volumes=False),
         )
         if finished.stopped:
@@ -1118,6 +1124,22 @@ class EpicRun:
         findings = [str(item) for item in output.get("findings", [])]
         unchecked = [str(item) for item in output.get("unchecked", [])]
         return AgentResult(status, reason, session_id, findings, unchecked)
+
+    def meter_logger(self, name: str, agent_log: Path) -> Callable[[], None]:
+        """Logs the plan meter while the agent runs, so the dashboard has a reading minutes old. A reading
+        that changed is logged at most once a minute."""
+        read = meter_reader(agent_log)
+        logged: dict[str, Any] = {}
+        logged_at = -process.MINUTE
+
+        def log_meter() -> None:
+            nonlocal logged, logged_at
+            reading = read()
+            if reading and reading != logged and time.monotonic() - logged_at >= process.MINUTE:
+                self.log(name, "meter", "read", meter=reading)
+                logged, logged_at = reading, time.monotonic()
+
+        return log_meter
 
     def record_decisions(self, ticket: Ticket, decisions: list[str]) -> None:
         """Comments the open questions on the ticket. They stay out of the Epic PR."""

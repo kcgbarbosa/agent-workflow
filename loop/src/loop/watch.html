@@ -333,10 +333,10 @@ const ICONS = {
     "M240,152v24a16,16,0,0,1-16,16H115.93a4,4,0,0,1-3.24-6.35L174.27,101a8.21,8.21,0,0,0-1.37-11.3,8,8,0,0,0-11.37,1.61l-72,99.06A4,4,0,0,1,86.25,192H32a16,16,0,0,1-16-16V153.13c0-1.79,0-3.57.13-5.33a4,4,0,0,1,4-3.8H48a8,8,0,0,0,8-8.53A8.17,8.17,0,0,0,47.73,128H23.92a4,4,0,0,1-3.87-5c12-43.84,49.66-77.13,95.52-82.28a4,4,0,0,1,4.43,4V72a8,8,0,0,0,8.53,8A8.17,8.17,0,0,0,136,71.73V44.67a4,4,0,0,1,4.43-4A112.18,112.18,0,0,1,236.23,123a4,4,0,0,1-3.88,5H208.27a8.17,8.17,0,0,0-8.25,7.47,8,8,0,0,0,8,8.53h27.92a4,4,0,0,1,4,3.86C240,149.23,240,150.61,240,152Z"],
 };
 const VIEWS = [["", "Overview"], ["tickets", "Tickets"], ["diagnostics", "Diagnostics"], ["usage", "Usage"]];
-const STEPS = [["agent", "Implementation"], ["ticket-gate", "Ticket gate"], ["code-review", "Code review"], ["ui-review", "UI review"], ["land", "Landing"]];
+const STEPS = [["build", "Implementation"], ["ticket-gate", "Ticket gate"], ["code-review", "Code review"], ["ui-gate", "UI review"], ["land", "Landing"]];
 const STATUS = { running: ["Running", "run"], paused: ["Paused", "warn"], completed: ["Completed", "ok"], failed: ["Failed", "bad"], blocked: ["Blocked", "bad"], stopped: ["Stopped", "warn"], idle: ["Idle", ""] };
 const HEALTH = { "on-track": ["On track", "ok"], attention: ["Needs attention", "warn"], blocked: ["Blocked", "bad"] };
-const COLUMN = { landed: ["Landed", "ok"], running: ["Running", "run"], stuck: ["Stuck", "bad"], waiting: ["Up next", ""], done: ["Done before this run", "ok"] };
+const COLUMN = { landed: ["Landed", "ok"], running: ["Running", "run"], stopped: ["Stopped", "warn"], stuck: ["Stuck", "bad"], waiting: ["Up next", ""], done: ["Done before this run", "ok"] };
 const QUEUE = { ready: ["Ready", "plain"], waiting: ["Waiting", ""], blocked: ["Blocked", "bad"] };
 const VERDICT = {
   passed: ["UI review passed", "ok"], unfixed: ["Passed with faults left unfixed", "warn"],
@@ -349,6 +349,8 @@ const STOPPED = {
   "nothing-landed": "The run ended with nothing landed.",
   "loop-error": "The loop itself failed.",
   stopped: "loop stop stopped the run. loop start goes on with the same tickets.",
+  killed: "The run was killed. loop start goes on with the same tickets, at the step each one stopped in.",
+  "base-missing": "The base branch of the Epic is not on origin.",
 };
 const WINDOWS = [["five_hour", "5-hour usage", "5-hour window"], ["seven_day", "Weekly usage", "weekly window"]];
 const QUEUE_SHOWN = 3;
@@ -467,11 +469,12 @@ async function route() {
 async function refresh() {
   if (ui.page === "home") return refreshHome();
   let projects;
-  try { [projects, ui.usage] = await Promise.all([getJson("/api/projects"), getJson("/api/usage")]); } catch { return; }
+  try { [projects, ui.usage] = await Promise.all([getJson("/api/home"), getJson("/api/usage")]); } catch { return; }
   ui.projects = projects;
   if (!ui.project) { go("", projects[0].name, ui.epic); return; }
-  if (!projects.some((p) => p.name === ui.project)) { go("", null, null); return; }
-  try { ui.epics = await getJson(api("/api/epics")); } catch { return; }
+  const project = projects.find((p) => p.name === ui.project);
+  if (!project) { go("", null, null); return; }
+  ui.epics = project.runs;
   renderContext();
   if (!ui.epics.length) {
     ui.view = null;
@@ -600,15 +603,9 @@ function watchTitle() {
   titleWatch.observe(title);
 }
 
-function pauseUntil(v) {
-  const pause = v.events.slice().reverse().find((e) => e.result === "usage-pause");
-  const match = pause && /resets at (\S+?)\.?$/.exec(pause.detail || "");
-  return match ? new Date(match[1]).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
-}
-
 function renderRun(v) {
   const last = v.events[v.events.length - 1];
-  const until = v.status === "paused" ? pauseUntil(v) : null;
+  const until = v.resumes ? new Date(v.resumes).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
   const [label, tone] = STATUS[v.status] || [v.status, ""];
   document.getElementById("run").replaceChildren(
     last ? h("span", { class: "last", title: `${last.ticket} ${last.step} ${last.result}` }, `Last step ${ago(last.time)}`) : "",
@@ -652,9 +649,11 @@ function usageCard(label, reading) {
 // --- Overview: the work queue ---
 function workQueue(v) {
   const working = v.tickets.filter((t) => t.column === "running");
+  const stopped = v.tickets.filter((t) => t.column === "stopped");
   const stuck = v.tickets.filter((t) => t.column === "stuck");
   const byKey = Object.fromEntries(v.tickets.map((t) => [t.key, t]));
   const groups = [h("div", { class: "group" }, h("h3", {}, "Currently working"), working.length ? working.map(currentCard) : stateNote(v))];
+  if (stopped.length) groups.push(h("div", { class: "group" }, h("h3", {}, "Stopped mid-step"), stopped.map(currentCard)));
   if (stuck.length) {
     groups.push(h("div", { class: "group" }, h("h3", {}, "Needs you"), h("ul", { class: "list" }, stuck.map((t) =>
       h("li", {}, h("button", { onclick: () => go(t.key) }, h("span", { class: "n" }, ""),
@@ -683,16 +682,17 @@ function stepper(step) {
 }
 
 function currentCard(t) {
-  const step = t.step || { name: "agent", since: null, paused: false };
+  const step = t.step || { name: null, since: null, paused: false };
   const health = t.health || { state: "on-track", reason: "" };
+  const state = t.column === "stopped" ? COLUMN.stopped : step.paused ? ["Paused", "warn"] : HEALTH[health.state];
   const latest = (t.recent || [])[t.recent.length - 1];
   const output = t.agents.length ? t.agents[t.agents.length - 1].updated : null;
   return h("button", { class: "current", onclick: () => go(t.key) },
-    h("div", { class: "top" }, h("span", { class: "key" }, t.key), tile(step.paused ? ["Paused", "warn"] : HEALTH[health.state], true)),
+    h("div", { class: "top" }, h("span", { class: "key" }, t.key), tile(state, true)),
     h("div", { class: "title" }, t.summary || ""),
     stepper(step),
     h("dl", { class: "facts" },
-      h("dt", {}, "Stage"), h("dd", {}, `${stepName(step.name)}${step.since ? ` · ${since(step.since)}` : ""}`),
+      h("dt", {}, t.column === "stopped" ? "Stopped in" : "Stage"), h("dd", {}, step.name ? `${stepName(step.name)}${step.since ? ` · ${since(step.since)}` : ""}` : "Between steps"),
       h("dt", {}, "Latest activity"), h("dd", { title: latest ? latest.summary || latest.text : "" },
         latest ? [latest.kind === "tool" ? h("span", { class: "toolname" }, latest.tool) : "", latest.summary || latest.text] : h("span", { class: "muted" }, "No agent output yet")),
       h("dt", {}, "Last agent output"), h("dd", {}, output ? ago(output) : "-")),
@@ -806,7 +806,7 @@ function ticketState(v, t) {
 function ticketList(v) {
   const rows = v.tickets.map((t) => {
     const open = (t.blockers || []).filter((b) => !b.done).map((b) => b.key);
-    const where = t.column === "running" && t.step ? `${stepName(t.step.name)} · ${since(t.step.since)}` : t.last ? lastStep(t.last) : "";
+    const where = t.step ? `${t.column === "stopped" ? "Stopped in " : ""}${stepName(t.step.name)} · ${since(t.step.since)}` : t.last ? lastStep(t.last) : "";
     return h("tr", { onclick: () => go(t.key) },
       h("td", { class: "t" }, h("span", { class: "key" }, t.key), t.summary || ""),
       h("td", {}, ticketState(v, t)),
@@ -830,7 +830,7 @@ function renderTicket(v) {
   const facts = [
     ["Tracker status", t.status || "-"],
     ["Depends on", blockers.length ? blockers : "None"],
-    t.step ? ["Stage", `${stepName(t.step.name)} · ${since(t.step.since)}${t.step.paused ? " · paused" : ""}`] : null,
+    t.step ? [t.column === "stopped" ? "Stopped in" : "Stage", `${stepName(t.step.name)} · ${since(t.step.since)}${t.step.paused ? " · paused" : ""}`] : null,
     t.last ? ["Last step", `${lastStep(t.last)} · ${ago(t.last.time)}`] : null,
     ["Ticket gate", t.gate_failures ? `Failed ${t.gate_failures === 1 ? "once" : `${t.gate_failures} times`} since its last pass` : t.column === "landed" ? "Passed" : "No failure in this run"],
     t.verdict ? ["UI review", (VERDICT[t.verdict] || VERDICT.unreviewed)[0]] : null,

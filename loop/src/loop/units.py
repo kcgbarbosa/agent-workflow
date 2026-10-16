@@ -31,6 +31,14 @@ def runs(name: str) -> list[str]:
     return [found[1] for line in listed.splitlines() if (found := unit.fullmatch(line.split(" ", 1)[0]))]
 
 
+def active(names: list[str]) -> set[str]:
+    """The units of these names that are active."""
+    if not names:
+        return set()
+    states = systemctl("is-active", *names, check=False).split()
+    return {name for name, state in zip(names, states, strict=False) if state == "active"}
+
+
 def start_run(repo: Path, name: str, epic_key: str, base: str | None) -> str:
     """Starts `loop run` in its unit, and returns the unit once it is active."""
     on = ["--on", base] if base else []

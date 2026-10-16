@@ -24,8 +24,8 @@ from fake_jira import FakeJira
 from fake_units import alive
 
 from loop import cli, config, watch
+from loop.report import read_lines
 from loop.update import Update
-from loop.watch import read_lines
 
 BIN = Path(__file__).parent / "bin"
 # The kill points of git: before the test repo pushes, and after origin takes a push.
