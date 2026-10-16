@@ -6,7 +6,7 @@ FAKE_CLAUDE_DIR, for a failure outside the code. A file `merge-gate-fails-after`
 `make check` fails once it has run that many times, as the finish gate does after one landed ticket. GATE_HANG starts a child process and
 hangs. The child touches FAKE_CLAUDE_DIR/gate-child-survived if it still runs two seconds later. A file
 `demo-fails` in FAKE_CLAUDE_DIR fails `make demo`. `make acceptance-list` prints the file `acceptance-titles.txt`
-of the tree, one acceptance test title per line.
+of the tree, one acceptance test title per line. Each call reaches the kill point `make:<targets>`.
 """
 
 import json
@@ -15,6 +15,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from killpoint import reached  # noqa: E402
 
 targets = sys.argv[1:]
 record = {
@@ -26,6 +29,7 @@ record = {
 for name in ("make.jsonl", "commands.jsonl"):
     with Path(os.environ["FAKE_CLAUDE_DIR"], name).open("a") as calls:
         calls.write(json.dumps({**record, "tool": "make"}) + "\n")
+reached("make:" + " ".join(targets))
 
 if "acceptance-list" in targets:
     titles = Path("acceptance-titles.txt")

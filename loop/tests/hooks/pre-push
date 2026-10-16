@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""The test repo's pre-push hook. A kill point here stops the run before the push, and the push does not run."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from killpoint import reached  # noqa: E402
+
+fired = [reached("pre-push:" + line.split()[0].removeprefix("refs/heads/")) for line in sys.stdin]
+sys.exit(1 if any(fired) else 0)
