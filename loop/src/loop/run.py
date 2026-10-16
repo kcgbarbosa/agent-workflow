@@ -69,12 +69,19 @@ LOG_TAIL_LINES = 80
 # Slot 0 is the main checkout, and the Epic branch has its own slot.
 EPIC_SLOT = 1
 
+# A minute past the reset of a usage limit, so the limit is surely clear.
+PAST_RESET_SECONDS = 60
+
 Outcome = Literal["landed", "stuck", "usage-limit"]
+Handoff = Literal["built", "land"] | Outcome
 
 
 class UsageLimit(Exception):
-    def __init__(self, message: str, reset: float | None = None, session: str | None = None) -> None:
+    def __init__(
+        self, message: str, name: str, reset: float | None = None, session: str | None = None
+    ) -> None:
         super().__init__(message)
+        self.name = name
         self.reset = reset
         self.session = session
 
@@ -111,6 +118,16 @@ class TicketRun:
     worktree: Path
     run_dir: Path
     agent_log: Path | None = None
+    # The head agent's session, and the failure that its next build fixes.
+    session: str | None = None
+    fix: str | None = None
+    fix_attempt: bool = False
+    # The agent run that a usage limit stopped, which resumes after the reset.
+    limited: UsageLimit | None = None
+
+    def resumes(self, name: str) -> bool:
+        """Whether the agent run of this name goes on after a usage limit."""
+        return self.limited is not None and self.limited.name == name
 
 
 def next_log(run_dir: Path, stem: str, suffix: str) -> Path:
@@ -140,14 +157,11 @@ class EpicRun:
         self.home = config.state_dir / epic_key
         self.log_path = self.home / "decisions.jsonl"
         self._log_lock = threading.Lock()
-        self._repo_lock = threading.Lock()
-        self._land_lock = threading.Lock()
         self.stuck_in_row = 0
         self.epic_branch = ""
         self.epic_worktree = self.home / "worktrees" / epic_key
         self.epic_summary = ""
         self.settings = agent_settings(config)
-        self._pause_lock = threading.Lock()
         self.paused_until = 0.0
 
     # --- Run ---
@@ -175,8 +189,7 @@ class EpicRun:
         )
         if not self.base_exists():
             return 1
-        with self._repo_lock:
-            repo.add_worktree(self.repo, self.epic_worktree, self.epic_branch, f"origin/{self.base}")
+        repo.add_worktree(self.repo, self.epic_worktree, self.epic_branch, f"origin/{self.base}")
         # A kill in a landing can leave the Epic worktree on a merge that its gate never passed.
         git(self.epic_worktree, "reset", "--hard", "--quiet")
         git(self.epic_worktree, "switch", "--quiet", self.epic_branch)
@@ -248,40 +261,89 @@ class EpicRun:
         return True
 
     def build_frontier(self) -> str | None:
-        """Runs every ticket on the frontier. Returns the reason the loop stopped early."""
-        running: dict[Future[Outcome], str] = {}
+        """Runs every ticket on the frontier, with this thread as the integrator of rule 8. Returns the reason
+        the loop stopped early."""
+        running: dict[Future[Handoff], TicketRun] = {}
         finished: set[str] = set()
         free_slots = list(range(EPIC_SLOT + 1, EPIC_SLOT + 1 + self.config.parallel))
-        slot_of: dict[str, int] = {}
         stopped: str | None = None
+
+        def end(key: str, slot: int, outcome: Outcome) -> None:
+            nonlocal stopped
+            finished.add(key)
+            free_slots.append(slot)
+            if outcome == "landed":
+                self.stuck_in_row = 0
+            elif outcome == "stuck":
+                self.stuck_in_row += 1
+                if self.stuck_in_row >= self.config.circuit_breaker:
+                    stopped = "circuit-breaker"
+            else:
+                stopped = "usage-limit"
+
         with ThreadPoolExecutor(max_workers=self.config.parallel) as pool:
+
+            def work(run: TicketRun) -> None:
+                running[
+                    pool.submit(self.guard, run.ticket, run.slot, functools.partial(self.advance, run), run)
+                ] = run
+
             while True:
                 if not stopped:
-                    busy = set(running.values()) | finished
+                    busy = {run.ticket.key for run in running.values()} | finished
                     for ticket in self.frontier():
                         if not free_slots:
                             break
                         if ticket.key in busy:
                             continue
-                        slot_of[ticket.key] = free_slots.pop(0)
-                        future = pool.submit(self.build_ticket, ticket, slot_of[ticket.key])
-                        running[future] = ticket.key
+                        slot = free_slots.pop(0)
+                        prepared = self.guard(ticket, slot, functools.partial(self.prepare, ticket, slot))
+                        if isinstance(prepared, TicketRun):
+                            work(prepared)
+                        else:
+                            end(ticket.key, slot, prepared)
                 if not running:
                     return stopped
                 done, _ = wait(running, return_when=FIRST_COMPLETED)
                 for future in done:
-                    key = running.pop(future)
-                    finished.add(key)
-                    free_slots.append(slot_of.pop(key))
-                    outcome = future.result()
-                    if outcome == "landed":
-                        self.stuck_in_row = 0
-                    elif outcome == "stuck":
-                        self.stuck_in_row += 1
-                        if self.stuck_in_row >= self.config.circuit_breaker:
-                            stopped = "circuit-breaker"
-                    elif outcome == "usage-limit":
-                        stopped = "usage-limit"
+                    run = running.pop(future)
+                    integrate = functools.partial(self.integrate, run, future.result())
+                    outcome = self.guard(run.ticket, run.slot, integrate, run)
+                    if outcome is None:
+                        work(run)
+                    else:
+                        end(run.ticket.key, run.slot, outcome)
+
+    def integrate(self, run: TicketRun, handoff: Handoff) -> Outcome | None:
+        """Does the integrator's part for a ticket that a worker hands over. None when the worker goes on."""
+        self.remove_trials(run)
+        if handoff == "built":
+            return None
+        if handoff == "land":
+            return self.land(run)
+        if handoff == "usage-limit" and run.limited and self.wait_out(run.limited):
+            return None
+        return handoff
+
+    def guard[T](
+        self, ticket: Ticket, slot: int, call: Callable[[], T], run: TicketRun | None = None
+    ) -> T | Outcome:
+        """Runs a part of the ticket's work. A failure makes the ticket stuck, not the run."""
+        run_dir = self.home / "runs" / ticket.key
+        try:
+            return call()
+        except AgentFailed as error:
+            # The agent writes its error to the .err file next to its output.
+            log = run.agent_log.with_suffix(".err") if run and run.agent_log else run_dir
+            return self.stuck(ticket, str(error), log, slot)
+        except UsageLimit as limit:
+            if run:
+                run.limited = limit
+            return "usage-limit"
+        except Exception as error:  # noqa: BLE001 - a loop error makes the ticket stuck, not the run.
+            log = run_dir / "loop-error.log"
+            log.write_text(traceback.format_exc())
+            return self.stuck(ticket, f"The loop failed: {error}", log, slot)
 
     def frontier(self) -> list[Ticket]:
         """Open tickets that are not stuck, whose blockers are done in the tracker or landed."""
@@ -302,32 +364,15 @@ class EpicRun:
 
     # --- One ticket ---
 
-    def build_ticket(self, ticket: Ticket, slot: int) -> Outcome:
+    def prepare(self, ticket: Ticket, slot: int) -> TicketRun:
+        """Gives the ticket a worktree, a branch off the Epic branch, and its ticket file."""
         run_dir = self.home / "runs" / ticket.key
         run_dir.mkdir(parents=True, exist_ok=True)
-        run: TicketRun | None = None
-        try:
-            run = self.prepare(ticket, slot, run_dir)
-            return self.drive(run)
-        except AgentFailed as error:
-            # The agent writes its error to the .err file next to its output.
-            log = run.agent_log.with_suffix(".err") if run and run.agent_log else run_dir
-            return self.stuck(ticket, str(error), log, slot)
-        except UsageLimit:
-            return "usage-limit"
-        except Exception as error:  # noqa: BLE001 - a loop error makes the ticket stuck, not the run.
-            log = run_dir / "loop-error.log"
-            log.write_text(traceback.format_exc())
-            return self.stuck(ticket, f"The loop failed: {error}", log, slot)
-
-    def prepare(self, ticket: Ticket, slot: int, run_dir: Path) -> TicketRun:
-        """Gives the ticket a worktree, a branch off the Epic branch, and its ticket file."""
         existing = repo.find_branch(self.repo, ticket.key)
         kind = "fix" if ticket.issue_type == "Bug" else "feat"
         branch = existing or f"{kind}/{ticket.key}-{repo.slug(ticket.summary)}"
         worktree = self.home / "worktrees" / ticket.key
-        with self._repo_lock:
-            repo.add_worktree(self.repo, worktree, branch, self.epic_branch)
+        repo.add_worktree(self.repo, worktree, branch, self.epic_branch)
         run = TicketRun(ticket, slot, branch, worktree, run_dir)
         self.write_ticket_file(run, self.config.ticket_gate, reviews=True)
         if ticket.status != self.config.in_progress:
@@ -337,43 +382,30 @@ class EpicRun:
         self.log(ticket.key, "start", "new" if existing is None else "restart", detail=branch)
         return run
 
-    def drive(self, run: TicketRun) -> Outcome:
-        """Runs the ticket from its first step with no pass at the branch's HEAD, with the fix attempts.
-
-        A failed step goes back to the head agent, whose run is the build step again.
-        """
-        key = run.ticket.key
-        steps = {
-            "ticket-gate": self.ticket_gate,
-            "code-review": self.code_review,
-            "ui-gate": self.ui_gate,
-            "land": self.land,
-        }
-        first = f"/implement {run.run_dir / 'ticket.md'}"
-        prompt = first
-        session: str | None = None
-        while True:
+    def advance(self, run: TicketRun) -> Handoff:
+        """Takes the ticket, in a worker, from its first step with no pass at the branch's HEAD up to a build
+        or the landing. A failed step goes back to the head agent, whose run is the build step again."""
+        steps = {"ticket-gate": self.ticket_gate, "code-review": self.code_review, "ui-gate": self.ui_gate}
+        while run.fix is None:
             step = self.next_step(run)
-            attempt = False
-            if step != "build":
-                self.log(key, step, "started", commit=self.head(run))
-                failure = steps[step](run)
-                if failure is None:
-                    if step == "land":
-                        return "landed"
-                    continue
-                attempt = failure.attempt
-                if attempt and self.attempts(key) >= self.config.fix_attempts:
-                    return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
-                if failure.on_epic:
-                    failure = self.merge_epic(run, failure)
-                # A new session, as on a restart, gets the prompt of a first build with the fix.
-                prompt = failure.prompt if session else f"{first}\n\n{failure.prompt}"
-            result = self.build(run, prompt, session, attempt)
-            if result.status == "blocked":
-                reason = f"The agent is blocked: {result.reason}"
-                return self.stuck(run.ticket, reason, run.agent_log or run.run_dir, run.slot)
-            session = result.session
+            if step == "land":
+                return "land"
+            if step == "build":
+                break
+            self.log(run.ticket.key, step, "started", commit=self.head(run))
+            failure = steps[step](run)
+            if failure and (stuck := self.send_back(run, failure)):
+                return stuck
+        return self.build(run)
+
+    def send_back(self, run: TicketRun, failure: GateFailure) -> Outcome | None:
+        """Makes the failure the fix of the next build, or the ticket stuck with no fix attempt left."""
+        if failure.attempt and self.attempts(run.ticket.key) >= self.config.fix_attempts:
+            return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
+        if failure.on_epic:
+            failure = self.merge_epic(run, failure)
+        run.fix, run.fix_attempt = failure.prompt, failure.attempt
+        return None
 
     def attempts(self, key: str) -> int:
         """The fix attempts the ticket used since it was last stuck. A kill does not give them back."""
@@ -401,30 +433,39 @@ class EpicRun:
             ui = functools.cache(lambda commit: self.ui_diff(run, commit) == own)
         return next_step(self.ticket_lines(run.ticket.key), head, ui)
 
-    def build(self, run: TicketRun, prompt: str, session: str | None, attempt: bool) -> AgentResult:
+    def build(self, run: TicketRun) -> Handoff:
         """A head agent run, then a push of the ticket branch, also when the run fails. A fix attempt is
-        counted when the run starts."""
+        counted when the run starts, and a build that goes on after a usage limit is the same build."""
         key = run.ticket.key
-        self.log(key, "build", "started", commit=self.head(run), attempt=attempt)
+        first = f"/implement {run.run_dir / 'ticket.md'}"
+        if run.fix is None:
+            prompt = first
+        else:
+            # A new session, as on a restart, gets the prompt of a first build with the fix.
+            prompt = run.fix if run.session else f"{first}\n\n{run.fix}"
+        if not run.resumes(key):
+            self.log(key, "build", "started", commit=self.head(run), attempt=run.fix_attempt)
         try:
             result = self.agent(
-                run, prompt, session, model=self.config.agent_model, effort=self.config.agent_effort
+                run, prompt, run.session, model=self.config.agent_model, effort=self.config.agent_effort
             )
         finally:
             self.push(run.worktree, run.branch, key)
-            self.remove_trials(run)
         result_name = "pass" if result.status == "done" else "blocked"
         self.log(key, "build", result_name, commit=self.head(run), session=result.session)
-        return result
+        run.session, run.fix, run.fix_attempt = result.session, None, False
+        if result.status == "blocked":
+            reason = f"The agent is blocked: {result.reason}"
+            return self.stuck(run.ticket, reason, run.agent_log or run.run_dir, run.slot)
+        return "built"
 
     def remove_trials(self, run: TicketRun) -> None:
-        """Removes the trial worktrees that the ticket's agent run left, such as one of a trial that failed.
+        """Removes the trial worktrees that the ticket's agent runs left, such as one of a trial that failed.
 
         A trial removes its own change when it reports, and Claude Code then removes its worktree.
         """
         base = f"origin/{self.base}"
-        with self._repo_lock:
-            removed = repo.remove_trials(self.repo, TRIALS, run.branch, base)
+        removed = repo.remove_trials(self.repo, TRIALS, run.branch, base)
         if removed:
             self.log(run.ticket.key, "trials", "removed", detail=" ".join(map(str, removed)))
 
@@ -510,7 +551,8 @@ class EpicRun:
         key, head = run.ticket.key, self.head(run)
         faults = self.unanswered(key, "ui-gate", head, "fail")
         if faults is None:
-            for shot in screenshots(run.run_dir):
+            # A review that goes on after a usage limit keeps the screenshots it saved.
+            for shot in [] if run.resumes(f"{key}-ui") else screenshots(run.run_dir):
                 shot.unlink()
             prompt = UI_REVIEW_PROMPT.format(
                 skill=self.config.ui_skill, run_dir=run.run_dir, base=self.epic_branch
@@ -595,18 +637,18 @@ class EpicRun:
         ui_path = self.config.ui_path
         return ui_path is not None and path.startswith(ui_path) and not is_test
 
-    def land(self, run: TicketRun) -> GateFailure | None:
-        """Merges the ticket into the Epic branch, one ticket at a time, and records it as landed.
+    def land(self, run: TicketRun) -> Outcome | None:
+        """Merges the ticket into the Epic branch and records it as landed.
 
-        A conflict or a failed merge gate returns a failure, so that the agent fixes it on the ticket branch.
+        A conflict or a failed merge gate goes back to the head agent, to fix on the ticket branch.
         """
         key = run.ticket.key
-        with self._land_lock:
-            failure = self.merge_into_epic(run)
+        self.log(key, "land", "started", commit=self.head(run))
+        failure = self.merge_into_epic(run)
         if failure:
-            return failure
+            return self.send_back(run, failure)
         self.complete_landing(key, run.worktree, run.slot)
-        return None
+        return "landed"
 
     def complete_landing(self, key: str, worktree: Path, slot: int) -> None:
         """Pushes the Epic branch, gives the ticket its screenshots and status, and removes its worktree.
@@ -618,8 +660,7 @@ class EpicRun:
             self.track(key, "attach", lambda: self.attach_once(key, shots))
         self.track(key, "status", lambda: self.transition_once(key, self.config.landed_status))
         self.stack_down(worktree, slot, key, volumes=True)
-        with self._repo_lock:
-            git(self.repo, "worktree", "remove", "--force", str(worktree), check=False)
+        git(self.repo, "worktree", "remove", "--force", str(worktree), check=False)
         self.log(key, "land", "landed", commit=repo.landed_commit(self.repo, self.epic_branch, key))
 
     def merge_into_epic(self, run: TicketRun) -> GateFailure | None:
@@ -756,7 +797,9 @@ class EpicRun:
             prompt = UI_REVIEW_PROMPT.format(skill=self.config.ui_skill, run_dir=run_dir, base=merge_base)
             prompt += UI_FINISH_PROMPT.format(key=key, ticket=run_dir / "ticket.md", items=items)
             try:
-                review = self.review_agent(run, prompt, f"{key}-ui-finish")
+                review = self.through_limits(
+                    run, functools.partial(self.review_agent, run, prompt, f"{key}-ui-finish")
+                )
             except (AgentFailed, UsageLimit) as error:
                 failed = f"At the finish, the review failed: {error}"
                 self.log(key, "ui-gate", "open", commit=head, detail=failed, items=left[key])
@@ -792,15 +835,17 @@ class EpicRun:
         prompt = PR_PROMPT.format(merge_base=merge_base, body_file=body_file, tickets=table)
         if self.config.name_landed_keys_only:
             prompt += LANDED_KEYS_PROMPT
+        write = functools.partial(
+            self.agent,
+            run,
+            prompt,
+            None,
+            f"{key}-pr",
+            model=self.config.agent_model,
+            effort=self.config.agent_effort,
+        )
         try:
-            self.agent(
-                run,
-                prompt,
-                session=None,
-                name=f"{key}-pr",
-                model=self.config.agent_model,
-                effort=self.config.agent_effort,
-            )
+            self.through_limits(run, write)
         except (AgentFailed, UsageLimit) as error:
             self.log(key, "pr-body", "fail", detail=str(error))
         written = body_file.read_text() if body_file.exists() else ""
@@ -915,31 +960,39 @@ class EpicRun:
         model: str | None = None,
         effort: str | None = None,
     ) -> AgentResult:
-        """Runs `claude -p` with an empty context, or resumes a session.
-
-        A usage limit that resets soon pauses the run, and the session then resumes where it stopped.
-        """
+        """Runs `claude -p` with an empty context, or resumes a session. A run that a usage limit stopped
+        resumes where it stopped."""
         name = name or run.ticket.key
+        if run.resumes(name):
+            limited, run.limited = run.limited, None
+            if limited and limited.session:
+                prompt, session = USAGE_RESUME_PROMPT, limited.session
+        return self.agent_run(run, prompt, session, name, schema, model, effort)
+
+    def through_limits[T](self, run: TicketRun, call: Callable[[], T]) -> T:
+        """An agent run of the integrator, which waits out a usage limit that resets soon itself."""
         while True:
             try:
-                return self.agent_run(run, prompt, session, name, schema, model, effort)
-            except UsageLimit as error:
-                if error.reset is None or error.reset - time.time() > MAX_USAGE_WAIT_SECONDS:
+                return call()
+            except UsageLimit as limit:
+                if not self.wait_out(limit):
                     raise
-                self.pause_until(error.reset, name)
-                if error.session:
-                    prompt, session = USAGE_RESUME_PROMPT, error.session
+                run.limited = limit
 
-    def pause_until(self, reset: float, name: str) -> None:
-        """Waits for the usage limit to reset. Parallel runs that hit the same limit notify once."""
-        until = datetime.fromtimestamp(reset, UTC).isoformat(timespec="seconds")
-        self.log(name, "agent", "usage-pause", detail=f"The usage limit resets at {until}.")
-        with self._pause_lock:
-            if reset > self.paused_until:
-                self.paused_until = reset
-                self.notify(f"{self.epic_key} paused")
-        # A minute past the reset, so the limit is surely clear.
-        pause(max(0.0, reset - time.time()) + 60)
+    def wait_out(self, limit: UsageLimit) -> bool:
+        """Waits for a usage limit to reset, and notifies once for the runs that meet the same limit. False
+        when the limit does not reset soon, which stops the loop."""
+        now = time.time()
+        if limit.reset is None or limit.reset - now > MAX_USAGE_WAIT_SECONDS:
+            return False
+        until = datetime.fromtimestamp(limit.reset, UTC).isoformat(timespec="seconds")
+        self.log(limit.name, "agent", "usage-pause", detail=f"The usage limit resets at {until}.")
+        end = limit.reset + PAST_RESET_SECONDS
+        if end > now and now >= self.paused_until:
+            self.notify(f"{self.epic_key} paused")
+        self.paused_until = max(self.paused_until, end)
+        pause(max(0.0, self.paused_until - now))
+        return True
 
     def agent_command(
         self,
@@ -1024,7 +1077,7 @@ class EpicRun:
                 detail = f"{name}: {message.strip()[:200]}"
                 # The run that meets the limit moved the meter most, so its line keeps the plan.
                 self.log(name, "agent", "usage-limit", session=limited, detail=detail, usage=cost, plan=plan)
-                raise UsageLimit(detail, usage_reset(events), limited)
+                raise UsageLimit(detail, name, usage_reset(events), limited)
             self.log(name, "agent", "error", session=data.get("session_id"), usage=cost, plan=plan)
             raise AgentFailed(f"The agent exited with code {returncode}: {message.strip()[:300]}")
         output = next(filter(None, map(agent_status, reversed(results))), None)

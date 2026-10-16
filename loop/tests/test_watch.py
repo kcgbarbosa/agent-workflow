@@ -14,6 +14,7 @@ from loop.cli import one_run
 from loop.watch import (
     Watch,
     active_run,
+    current_step,
     epic_view,
     plan_meter,
     queue,
@@ -387,6 +388,13 @@ def test_the_queue_takes_the_ready_tickets_first_and_each_waiting_one_after_its_
         ("DEMO-4", "waiting"),
         ("DEMO-3", "waiting"),
     ]
+
+
+def test_a_ticket_whose_agent_met_a_usage_limit_waits_for_the_reset() -> None:
+    # The integrator can be in the wait of another ticket's limit before it logs this one's pause.
+    lines = [step("DEMO-2", "start", "new", time=at(0)), step("DEMO-2", "agent", "usage-limit", time=at(2))]
+
+    assert current_step(lines, None) == {"name": "agent", "since": at(2), "paused": True}
 
 
 def test_the_run_status_names_a_pause_a_finish_and_a_failure() -> None:

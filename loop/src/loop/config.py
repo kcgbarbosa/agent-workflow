@@ -178,7 +178,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         ticket_gate=gates.texts("ticket"),
         merge_gate=gates.texts("merge"),
         gate_timeout_minutes=gates.number("timeout_minutes", 60),
-        parallel=limits.number("parallel", 2),
+        parallel=limits.number("parallel", 1),
         agent_timeout_minutes=limits.number("agent_timeout_minutes", 90),
         fix_attempts=limits.number("fix_attempts", 2),
         circuit_breaker=limits.number("circuit_breaker", 2),

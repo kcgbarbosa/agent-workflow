@@ -587,7 +587,9 @@ def current_step(lines: list[dict[str, Any]], newest_log: str | None) -> dict[st
         current = "land"
     else:
         current = "agent"
-    return {"name": current, "since": last.get("time"), "paused": result == "usage-pause"}
+    # A run that meets a limit that resets soon waits for the integrator to wait it out.
+    paused = result in ("usage-limit", "usage-pause")
+    return {"name": current, "since": last.get("time"), "paused": paused}
 
 
 def recent_activity(

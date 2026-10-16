@@ -126,6 +126,14 @@ def test_the_context_window_defaults_to_200k_and_the_agent_table_sets_it(tmp_pat
     assert config.load(tmp_path).agent_context_tokens == 150_000
 
 
+def test_parallel_defaults_to_one_ticket_at_a_time(tmp_path: Path) -> None:
+    write_config(tmp_path)
+    text = (tmp_path / config.FILE).read_text()
+    (tmp_path / config.FILE).write_text(text.replace("parallel = 2\n", ""))
+
+    assert config.load(tmp_path).parallel == 1
+
+
 def test_a_repo_without_a_stack_gets_no_stack_env(tmp_path: Path) -> None:
     write_config(tmp_path)
     text = (tmp_path / config.FILE).read_text()
