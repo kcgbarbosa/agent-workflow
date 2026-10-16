@@ -239,7 +239,6 @@ def watch(config: Config) -> int:
         host = str(server.server_address[0])
         print(f"loop watch serves the {config.name} runs at http://{host}:{config.watch_port}/")
     sys.stdout.flush()
-    forecast.start()
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
