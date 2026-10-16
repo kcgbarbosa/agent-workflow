@@ -46,8 +46,8 @@ def start_epic(repo: Path, epic_key: str, base: str | None, new_code: bool) -> s
     name = config.peek(repo)
     if not (config.state_dir_of(name) / config.SECRETS_FILE).exists():
         raise UnitError(f"This host has no secrets file. {NO_SECRETS}")
-    if active := runs(name):
-        raise UnitError(f"A run is active: {run_unit(name, active[0])}. `loop stop {active[0]}` stops it.")
+    if loaded := runs(name):
+        raise UnitError(f"A run is active: {run_unit(name, loaded[0])}. `loop stop {loaded[0]}` stops it.")
     unit = start_run(repo, name, epic_key, base)
     start_watch(repo, restart=new_code)
     return unit
