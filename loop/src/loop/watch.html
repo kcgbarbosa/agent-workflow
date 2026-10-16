@@ -276,6 +276,21 @@ details.forecast[open] > summary h2::before { content: "▾ "; }
 .forecast .scroll td:first-child { min-width: 150px; }
 @media (max-width: 1023px) { details.forecast > summary { padding-bottom: 16px; } }
 
+/* --- Start and Stop --- */
+/* The bar holds the button from 1024 px. A phone has no room beside the menus, so the large title holds it. */
+.run .btn { min-height: 32px; padding: 0 14px; }
+.pagehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.pagehead h1 { min-width: 0; }
+.pagehead .btn { flex: none; margin-bottom: 2px; }
+@media (min-width: 1024px) { .pagehead .btn { display: none; } }
+@media (max-width: 1023px) { .run .btn { display: none; } }
+dialog.start { width: min(440px, calc(100vw - 32px)); max-height: min(560px, calc(100dvh - 64px)); padding: 0; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); color: var(--text); box-shadow: var(--shadow-md); }
+dialog.start::backdrop { background: rgba(27, 27, 25, 0.3); }
+dialog.start:focus-visible { outline: none; }
+dialog.start .pbody { display: grid; gap: 12px; }
+dialog.start .actions { display: flex; justify-content: flex-end; }
+.note .btn { margin-top: 12px; }
+
 /* --- Screenshot viewer --- */
 .viewer { position: fixed; inset: 0; z-index: 20; background: var(--ground); display: flex; flex-direction: column; }
 .viewer[hidden] { display: none; }
@@ -313,6 +328,7 @@ details.forecast[open] > summary h2::before { content: "▾ "; }
 </header>
 <main class="wrap" id="main"></main>
 <div class="viewer" id="viewer" hidden></div>
+<dialog class="start" id="start" aria-label="Start a run"></dialog>
 <script>
 "use strict";
 const POLL_MS = 3000;
@@ -359,8 +375,10 @@ const RUNS_SHOWN = 5;
 const ui = {
   project: null, epic: null, page: "", ticket: null, tab: null, agent: null, follow: true, version: null, drawn: null,
   projects: [], epics: [], view: null, usage: {}, feed: null, report: null, reportWrap: null, viewer: null,
-  forecast: null, forecastWrap: null, forecastOpen: false, home: [], homeOpen: new Set(),
+  forecast: null, forecastWrap: null, forecastOpen: false, home: [], homeOpen: new Set(), busy: null,
 };
+// How long a started run may take to write its first line, after its checks of the host.
+const START_WAIT_MS = 60000;
 
 // --- Helpers ---
 function h(tag, props, ...children) {
@@ -480,7 +498,8 @@ async function refresh() {
     ui.view = null;
     document.getElementById("run").replaceChildren();
     document.getElementById("views").replaceChildren();
-    document.getElementById("main").replaceChildren(h("div", { class: "panel empty" }, "No runs of this project on this host yet. ", h("code", {}, "loop start <Epic key>"), " starts one."));
+    document.getElementById("main").replaceChildren(h("div", { class: "panel empty" }, "No runs of this project on this host yet. ", h("code", {}, "loop start <Epic key>"), " starts one.",
+      project.control ? h("div", {}, h("button", { class: "btn primary", onclick: openStart, disabled: !!ui.busy }, ui.busy === "start" ? "Starting..." : "Start")) : ""));
     return;
   }
   if (!ui.epic || !ui.epics.some((e) => e.key === ui.epic)) {
@@ -491,7 +510,7 @@ async function refresh() {
   try { ui.view = await getJson(api(`/api/epic/${ui.epic}`)); } catch { return; }
   if (ui.page === "usage") loadReport();
   if (ui.page === "usage" && ui.forecastOpen) loadForecast();
-  const drawn = JSON.stringify([ui.view, ui.usage, ui.page, ui.ticket, Math.floor(Date.now() / AGE_MS)]);
+  const drawn = JSON.stringify([ui.view, ui.usage, ui.page, ui.ticket, ui.busy, Math.floor(Date.now() / AGE_MS)]);
   if (drawn !== ui.drawn) { ui.drawn = drawn; render(); }
   else if (ui.feed && ui.feed.live) pollFeed();
 }
@@ -587,7 +606,7 @@ function render() {
 }
 
 function pageHead(title) {
-  return h("div", { class: "pagehead" }, h("h1", { id: "title" }, title));
+  return h("div", { class: "pagehead" }, h("h1", { id: "title" }, title), ui.view ? controlButton(ui.view) : "");
 }
 
 // The large title shrinks into the bar once it scrolls away.
@@ -610,7 +629,68 @@ function renderRun(v) {
   document.getElementById("run").replaceChildren(
     last ? h("span", { class: "last", title: `${last.ticket} ${last.step} ${last.result}` }, `Last step ${ago(last.time)}`) : "",
     v.pr_url ? h("a", { class: "pr", href: v.pr_url, target: "_blank", rel: "noopener" }, v.state === "pr-draft" ? "Draft PR" : "Epic PR") : "",
-    h("span", { title: v.stop_reason || "" }, tile([until ? `${label} until ${until}` : label, tone], true)));
+    h("span", { title: v.stop_reason || "" }, tile([until ? `${label} until ${until}` : label, tone], true)),
+    controlButton(v));
+}
+
+// --- Start and Stop: only for the project whose loop.toml started this page, one run at a time ---
+function controlButton(v) {
+  const project = ui.projects.find((p) => p.name === ui.project);
+  if (!project || !project.control) return "";
+  if (v.status === "running" || v.status === "paused") {
+    return h("button", { class: "btn", onclick: () => stopRun(v.key), disabled: !!ui.busy }, ui.busy === "stop" ? "Stopping..." : "Stop");
+  }
+  if (ui.epics.some((e) => e.running)) return "";
+  return h("button", { class: "btn primary", onclick: openStart, disabled: !!ui.busy }, ui.busy === "start" ? "Starting..." : "Start");
+}
+
+async function openStart() {
+  const dialog = document.getElementById("start");
+  const body = h("div", { class: "pbody" }, h("div", { class: "muted" }, "Reading the open Epics from Jira..."));
+  dialog.replaceChildren(h("div", { class: "phead" }, h("h2", {}, `Start a run of ${ui.project}`)), body);
+  dialog.showModal();
+  let data;
+  try { data = await getJson("/api/start"); } catch (e) { data = { epics: [], error: e.message }; }
+  const rows = data.epics.map((e) => h("li", {}, h("button", { onclick: () => startRun(e.key) },
+    h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, e.key), " ", e.summary)),
+    ui.epics.some((r) => r.key === e.key) ? h("span", { class: "muted" }, "Ran before") : "")));
+  body.replaceChildren(
+    data.error ? h("div", { class: "why" }, data.error) : rows.length ? h("ul", { class: "list epics" }, rows) : h("div", { class: "muted" }, "Jira has no open Epic in the projects that ran on this host."),
+    h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => dialog.close() }, "Cancel")));
+}
+
+async function post(path) {
+  const res = await fetch(path, { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function busy(what, work) {
+  ui.busy = what;
+  if (ui.view) render(); else refresh();
+  try { await work(); } catch (e) { alert(e.message); } finally { ui.busy = null; ui.drawn = null; refresh(); }
+}
+
+function startRun(key) {
+  document.getElementById("start").close();
+  return busy("start", async () => {
+    await post(`/api/start/${key}`);
+    // The Epic has a view once the run writes its first line, after its checks of the host.
+    const until = Date.now() + START_WAIT_MS;
+    while (Date.now() < until) {
+      const home = await getJson("/api/home").catch(() => []);
+      const project = home.find((p) => p.name === ui.project);
+      if (project && project.runs.some((r) => r.key === key && r.running)) { go("", ui.project, key); return; }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new Error(`The run of ${key} started, but wrote nothing in a minute. Its journal says why: journalctl --user -u loop-${ui.project}-${key}`);
+  });
+}
+
+function stopRun(key) {
+  if (!confirm(`Stop the run of ${key}? Start goes on with the same tickets.`)) return;
+  return busy("stop", () => post(`/api/stop/${key}`));
 }
 
 // --- Overview: the figures ---

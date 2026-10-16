@@ -7,12 +7,13 @@ import re
 import sys
 from pathlib import Path
 
-from . import process
+from . import config, process
 
 EPIC_KEY = r"[A-Z][A-Z0-9]*-\d+"
 ENV = ("PATH", "HOME", "LANG", "SSH_AUTH_SOCK")
 RUN_PROPERTIES = ("KillMode=mixed", "TimeoutStopSec=10min")
 WATCH_PROPERTIES = ("Restart=always", "RestartSec=5")
+NO_SECRETS = "Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
 
 
 class UnitError(Exception):
@@ -37,6 +38,19 @@ def active(names: list[str]) -> set[str]:
         return set()
     states = systemctl("is-active", *names, check=False).split()
     return {name for name, state in zip(names, states, strict=False) if state == "active"}
+
+
+def start_epic(repo: Path, epic_key: str, base: str | None, new_code: bool) -> str:
+    """Starts the Epic's run and the dashboard, and returns the run's unit. `loop start` and the dashboard's
+    Start call it. The run checks the rest of the prerequisites itself."""
+    name, port = config.peek(repo)
+    if not (config.state_dir_of(name) / config.SECRETS_FILE).exists():
+        raise UnitError(f"This host has no secrets file. {NO_SECRETS}")
+    if active := runs(name):
+        raise UnitError(f"A run is active: {run_unit(name, active[0])}. `loop stop {active[0]}` stops it.")
+    unit = start_run(repo, name, epic_key, base)
+    start_watch(repo, port, restart=new_code)
+    return unit
 
 
 def start_run(repo: Path, name: str, epic_key: str, base: str | None) -> str:

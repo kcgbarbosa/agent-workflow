@@ -53,22 +53,37 @@ class Search(Protocol):
 # --- The Jira snapshot ---
 
 
+def jira_client(config: Config) -> Search:
+    """The Jira client of the project. The secrets are read for each call, so a new `loop secrets` takes
+    effect without a restart."""
+    secrets = stored_secrets(config.state_dir)
+    if not secrets.get("JIRA_EMAIL") or not secrets.get("JIRA_API_TOKEN"):
+        raise BacklogError("This host has no Jira secret in its secrets file. Run `loop secrets`.")
+    return Jira(config.tracker_url, secrets["JIRA_EMAIL"], secrets["JIRA_API_TOKEN"])
+
+
+def open_epics(jira: Search, projects: list[str]) -> list[dict[str, Any]]:
+    """The open Epics of the projects: key, title, and status."""
+    if not projects:
+        return []
+    jql = (
+        f"project in ({', '.join(projects)}) AND issuetype = Epic AND statusCategory != Done ORDER BY key ASC"
+    )
+    return [
+        {
+            "key": issue["key"],
+            "summary": issue["fields"].get("summary", ""),
+            "status": issue["fields"]["status"]["name"],
+        }
+        for issue in jira.search(jql, EPIC_FIELDS)
+    ]
+
+
 def fetch(jira: Search, projects: list[str]) -> list[dict[str, Any]]:
     """The open Epics of the projects, each with its tickets: key, title, status, and blockers. No ticket
     text, so the snapshot can never stand in for a ticket's spec.
     """
-    found: dict[str, dict[str, Any]] = {}
-    jql = (
-        f"project in ({', '.join(projects)}) AND issuetype = Epic AND statusCategory != Done ORDER BY key ASC"
-    )
-    for issue in jira.search(jql, EPIC_FIELDS):
-        fields = issue["fields"]
-        found[issue["key"]] = {
-            "key": issue["key"],
-            "summary": fields.get("summary", ""),
-            "status": fields["status"]["name"],
-            "tickets": [],
-        }
+    found = {epic["key"]: {**epic, "tickets": []} for epic in open_epics(jira, projects)}
     if not found:
         return []
     for issue in jira.search(f"parent in ({', '.join(found)}) ORDER BY key ASC", TICKET_FIELDS):
@@ -632,14 +647,7 @@ class Forecaster:
 
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.backlog = Backlog(config.state_dir, self._jira, config.backlog_minutes)
-
-    def _jira(self) -> Search:
-        # Read for each sync, so a new `loop secrets` takes effect without a restart.
-        secrets = stored_secrets(self.config.state_dir)
-        if not secrets.get("JIRA_EMAIL") or not secrets.get("JIRA_API_TOKEN"):
-            raise BacklogError("This host has no Jira secret in its secrets file. Run `loop secrets`.")
-        return Jira(self.config.tracker_url, secrets["JIRA_EMAIL"], secrets["JIRA_API_TOKEN"])
+        self.backlog = Backlog(config.state_dir, lambda: jira_client(config), config.backlog_minutes)
 
     def start(self) -> None:
         self.backlog.start()

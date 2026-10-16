@@ -23,7 +23,7 @@ import pytest
 from fake_jira import FakeJira
 from fake_units import alive
 
-from loop import cli, config, watch
+from loop import cli, config
 from loop.report import read_lines
 from loop.update import Update
 
@@ -40,6 +40,7 @@ TAKE_TERMINAL = (
 SECRETS = {"JIRA_EMAIL": "kc@example.com", "JIRA_API_TOKEN": "secret-token", "NTFY_TOPIC": "secret-topic"}
 UNIT = f"loop-demo-{EPIC}.service"
 TAILNET = "100.64.0.7"
+MAGIC_DNS = "t14.tail0000.ts.net"
 
 
 CONFIG = """
@@ -294,7 +295,6 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
     # `loop start` opens the page on the screen it has.
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
-    monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1", TAILNET])
 
     origin = tmp_path / "origin.git"
     sh(tmp_path, "git", "init", "-q", "--bare", str(origin))
