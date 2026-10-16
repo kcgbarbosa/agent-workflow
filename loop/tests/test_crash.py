@@ -34,10 +34,12 @@ def two_tickets(world: World) -> None:
     )
 
 
-def assert_built_once(world: World) -> None:
+def assert_built_once(world: World, head_runs: int = 1) -> None:
     """Each ticket landed once, with each status once, no comment or attachment twice, one review result of
     each kind, and one PR. Origin holds the Epic branch. A killed session can still finish as an orphan, so
-    the reviews count by the results the loop logged."""
+    the reviews count by the results the loop logged. DEMO-2's head agent runs `head_runs` times."""
+    assert len(world.calls("DEMO-2")) == head_runs
+    assert len(world.calls("DEMO-3")) == 1
     merges = collections.Counter(s for s in world.epic_log() if s.startswith("merge("))
     assert merges == {"merge(DEMO-2): Add the first part": 1, "merge(DEMO-3): Add the second part": 1}
     for key in ("DEMO-2", "DEMO-3"):
@@ -56,6 +58,8 @@ def assert_built_once(world: World) -> None:
     assert sh(world.origin, "git", "rev-parse", EPIC_BRANCH) == local
 
 
+# The points before DEMO-2's build logs its result, so its agent runs again.
+BUILD_AGAIN = {"claude:DEMO-2", "jira:POST DEMO-2 comment", "push:feat/DEMO-2"}
 # Each point as the fakes and the hooks name it, with the time it fires. They follow one run's order.
 IN_A_STEP = [
     pytest.param("claude:DEMO-2", 1, id="build-agent"),
@@ -86,7 +90,20 @@ def test_a_rerun_after_a_kill_builds_each_ticket_once(world: World, point: str, 
     assert world.run(parallel=1) == -signal.SIGKILL
     assert world.run(parallel=1) == 0
 
-    assert_built_once(world)
+    assert_built_once(world, head_runs=2 if point in BUILD_AGAIN else 1)
+
+
+def test_a_kill_in_a_fix_does_not_give_its_fix_attempt_back(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}]})
+    world.kill_at("claude:DEMO-2", nth=2)
+
+    assert world.run(parallel=1) == -signal.SIGKILL
+    world.run(parallel=1)
+
+    # The build, the fix that the kill stopped, and the one fix attempt left.
+    assert len(world.calls("DEMO-2")) == 3
+    assert world.jira.issues["DEMO-2"].flagged
 
 
 def test_a_rerun_after_a_kill_between_the_flag_and_its_comment_comments_the_stuck_ticket(
@@ -142,4 +159,4 @@ def test_sigterm_stops_the_run_with_a_stopped_line_and_the_stacks_down(world: Wo
     assert {"demo-demo-1", "demo-demo-2"} <= downs
 
     assert world.run(parallel=1) == 0
-    assert_built_once(world)
+    assert_built_once(world, head_runs=2)

@@ -558,6 +558,7 @@ def current_step(lines: list[dict[str, Any]], newest_log: str | None) -> dict[st
         for line in lines
         if line.get("step") not in QUIET_STEPS | AFTER_STEPS
         and not str(line.get("step")).startswith("tracker-")
+        and line.get("result") != "started"
     ]
     if not steps:
         return None
@@ -566,10 +567,7 @@ def current_step(lines: list[dict[str, Any]], newest_log: str | None) -> dict[st
     reviewed = any(line.get("step") == "code-review" for line in steps)
     gate_passed = _is_gate(last, "ticket") and result == "pass"
     review_passed = step == "code-review" and result == "pass"
-    started = {"build": "agent", "ui-gate": "ui-review"}.get(str(step), str(step))
-    if result == "started" and started in STEPS:
-        current = started
-    elif newest_log is not None and newest_log > str(last.get("time")):
+    if newest_log is not None and newest_log > str(last.get("time")):
         # Which agent runs follows from the step before it.
         if gate_passed and not reviewed:
             current = "code-review"

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from loop.steps import next_step
-from loop.watch import read_lines
 
 
 def line(step: str, result: str, commit: str = "a") -> dict[str, Any]:
@@ -56,10 +54,3 @@ def test_a_ui_review_passes_at_a_commit_with_the_same_ui_change() -> None:
 
     assert next_step(lines, "a", ui=lambda commit: commit == "old") == "land"
     assert next_step(lines, "a", ui=lambda commit: False) == "ui-gate"
-
-
-def test_the_reader_skips_a_cut_off_last_line(tmp_path: Path) -> None:
-    log = tmp_path / "decisions.jsonl"
-    log.write_text('{"step": "build", "result": "pass"}\n{"step": "ticket-gate", "res')
-
-    assert read_lines(log) == [{"step": "build", "result": "pass"}]

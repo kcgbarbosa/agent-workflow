@@ -99,7 +99,7 @@ class GateFailure:
     log: Path
     # The failure is on the Epic branch, so the ticket branch takes the Epic branch before the fix.
     on_epic: bool = False
-    # The fix of a code review finding is part of the build, not a fix attempt.
+    # The first round of review findings is part of the build, not a fix attempt.
     attempt: bool = True
 
 
@@ -111,8 +111,6 @@ class TicketRun:
     worktree: Path
     run_dir: Path
     agent_log: Path | None = None
-    ui_fix_rounds: int = 0
-    review_rounds: int = 0
 
 
 def next_log(run_dir: Path, stem: str, suffix: str) -> Path:
@@ -351,11 +349,12 @@ class EpicRun:
             "ui-gate": self.ui_gate,
             "land": self.land,
         }
-        prompt = f"/implement {run.run_dir / 'ticket.md'}"
+        first = f"/implement {run.run_dir / 'ticket.md'}"
+        prompt = first
         session: str | None = None
-        attempts = 0
         while True:
             step = self.next_step(run)
+            attempt = False
             if step != "build":
                 self.log(key, step, "started", commit=self.head(run))
                 failure = steps[step](run)
@@ -363,18 +362,36 @@ class EpicRun:
                     if step == "land":
                         return "landed"
                     continue
-                if failure.attempt:
-                    if attempts >= self.config.fix_attempts:
-                        return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
-                    attempts += 1
+                attempt = failure.attempt
+                if attempt and self.attempts(key) >= self.config.fix_attempts:
+                    return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
                 if failure.on_epic:
                     failure = self.merge_epic(run, failure)
-                prompt = failure.prompt
-            result = self.build(run, prompt, session)
+                # A new session, as on a restart, gets the prompt of a first build with the fix.
+                prompt = failure.prompt if session else f"{first}\n\n{failure.prompt}"
+            result = self.build(run, prompt, session, attempt)
             if result.status == "blocked":
                 reason = f"The agent is blocked: {result.reason}"
                 return self.stuck(run.ticket, reason, run.agent_log or run.run_dir, run.slot)
             session = result.session
+
+    def attempts(self, key: str) -> int:
+        """The fix attempts the ticket used since it was last stuck. A kill does not give them back."""
+        return sum(1 for line in self.since_stuck(key) if line.get("step") == "build" and line.get("attempt"))
+
+    def since_stuck(self, key: str) -> list[dict[str, Any]]:
+        """The ticket's lines since it was last stuck, because KC unflags a stuck ticket to give it a new
+        start."""
+        lines = self.ticket_lines(key)
+        ends = [
+            n for n, line in enumerate(lines) if line.get("step") == "stuck" and line.get("result") == "stuck"
+        ]
+        return lines[ends[-1] + 1 :] if ends else lines
+
+    def rounds(self, key: str, step: str, result: str) -> int:
+        return sum(
+            1 for line in self.since_stuck(key) if (line.get("step"), line.get("result")) == (step, result)
+        )
 
     def next_step(self, run: TicketRun) -> str:
         head = self.head(run)
@@ -384,10 +401,11 @@ class EpicRun:
             ui = functools.cache(lambda commit: self.ui_diff(run, commit) == own)
         return next_step(self.ticket_lines(run.ticket.key), head, ui)
 
-    def build(self, run: TicketRun, prompt: str, session: str | None) -> AgentResult:
-        """A head agent run, then a push of the ticket branch, also when the run fails."""
+    def build(self, run: TicketRun, prompt: str, session: str | None, attempt: bool) -> AgentResult:
+        """A head agent run, then a push of the ticket branch, also when the run fails. A fix attempt is
+        counted when the run starts."""
         key = run.ticket.key
-        self.log(key, "build", "started", commit=self.head(run))
+        self.log(key, "build", "started", commit=self.head(run), attempt=attempt)
         try:
             result = self.agent(
                 run, prompt, session, model=self.config.agent_model, effort=self.config.agent_effort
@@ -481,9 +499,8 @@ class EpicRun:
                 return None
             detail = f"{len(findings)} findings"
             self.log(key, "code-review", "findings", commit=head, detail=detail, findings=findings)
-        run.review_rounds += 1
         fix = self.fix_prompt("code review", findings, key)
-        attempt = run.review_rounds > FREE_REVIEW_ROUNDS
+        attempt = self.rounds(key, "code-review", "findings") > FREE_REVIEW_ROUNDS
         return GateFailure(
             "The code review found problems.", fix, run.agent_log or run.run_dir, attempt=attempt
         )
@@ -499,14 +516,13 @@ class EpicRun:
                 skill=self.config.ui_skill, run_dir=run.run_dir, base=self.epic_branch
             )
             review = self.review_agent(run, prompt, f"{key}-ui")
-            if not review.findings or run.ui_fix_rounds >= UI_FIX_ROUNDS:
+            if not review.findings or self.rounds(key, "ui-gate", "fail") >= UI_FIX_ROUNDS:
                 if not screenshots(run.run_dir):
                     raise AgentFailed(f"The UI review saved no screenshots in {run.run_dir}.")
                 self.record_ui_review(run, review, head)
                 return None
             faults = review.findings
             self.log(key, "ui-gate", "fail", commit=head, detail=f"{len(faults)} faults", findings=faults)
-        run.ui_fix_rounds += 1
         fix = self.fix_prompt("UI review", faults, key)
         return GateFailure("The UI review found faults.", fix, run.agent_log or run.run_dir, attempt=False)
 
@@ -530,9 +546,10 @@ class EpicRun:
         left += [f"Not checked: {part}" for part in review.unchecked if part not in accepted]
         self.record_notes(run.ticket, [f"Not checked, and accepted in loop.toml: {p}" for p in accepted])
         if left:
-            self.log(key, "ui-gate", "open", commit=head, detail=f"{detail}{len(left)} items", items=left)
+            # The comment goes first, because the logged result ends the step.
             text = self.bullets(UI_OPEN_COMMENT, left)
             self.track(key, "comment", lambda: self.comment_once(key, text))
+            self.log(key, "ui-gate", "open", commit=head, detail=f"{detail}{len(left)} items", items=left)
         else:
             self.log(key, "ui-gate", "pass", commit=head, detail=detail.strip())
 
@@ -621,7 +638,13 @@ class EpicRun:
                 log_file = run.run_dir / "merge.log"
                 log_file.write_text(merge.stdout + merge.stderr)
                 git(epic, "merge", "--abort", check=False)
-                self.log(key, "land", "conflict", detail=str(log_file))
+                self.log(
+                    key,
+                    "land",
+                    "conflict",
+                    commit=out(run.worktree, "rev-parse", "HEAD"),
+                    detail=str(log_file),
+                )
                 prompt = (
                     f"Another ticket landed on the Epic branch `{self.epic_branch}`, "
                     "and this branch no longer merges into it."
@@ -716,7 +739,7 @@ class EpicRun:
     def review_ui_open(self, merge_base: str) -> None:
         """Gives each ticket that landed with open UI items a new UI review on the Epic branch, because a
         later ticket can cover an item, such as with a test or a seeded file. A failed review keeps the
-        mark."""
+        items open."""
         head = out(self.epic_worktree, "rev-parse", "HEAD")
         left = self.ui_open()
         for ticket in self.tracker.children(self.epic_key):
@@ -796,10 +819,11 @@ class EpicRun:
             for ticket in self.tracker.children(key)
             if self.ticket_result(ticket) in UNFINISHED
         ]
+        left = self.ui_open()
         ui_open = {
-            self.ticket_label(ticket): len(items)
+            self.ticket_label(ticket): len(left[ticket.key])
             for ticket in self.tracker.children(key)
-            if (items := self.ui_open().get(ticket.key))
+            if ticket.key in left
         }
         draft = bool(failing or demo_failing or unfinished or ui_open)
         body_file = self.home / "runs" / key / "pr-body.md"
@@ -1213,7 +1237,10 @@ class EpicRun:
         if not self.log_path.exists():
             return
         with self.log_path.open("rb+") as file:
-            if file.seek(0, os.SEEK_END) and (file.seek(-1, os.SEEK_END), file.read(1))[1] != b"\n":
+            if file.seek(0, os.SEEK_END) == 0:
+                return
+            file.seek(-1, os.SEEK_END)
+            if file.read(1) != b"\n":
                 file.write(b"\n")
 
     def notify(self, message: str) -> None:

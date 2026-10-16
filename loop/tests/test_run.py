@@ -502,6 +502,7 @@ def test_a_restart_skips_the_code_review_and_passes_on_the_findings_not_yet_fixe
 
     restart = world.calls("DEMO-2")[2]
     assert restart["resume"] is None and finding in restart["prompt"]
+    assert restart["prompt"].startswith(f"/implement {world.run_dir('DEMO-2') / 'ticket.md'}")
     assert len(world.calls("DEMO-2-review")) == 1
 
 
