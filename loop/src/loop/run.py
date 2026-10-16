@@ -14,7 +14,7 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
 from . import process, repo, tiers
 from .claude import REVIEW_EFFORT, REVIEW_MODEL, TRIALS, agent_settings, run_setup
@@ -73,8 +73,6 @@ EPIC_SLOT = 1
 PAST_RESET_SECONDS = 60
 
 Outcome = Literal["landed", "stuck", "usage-limit"]
-T = TypeVar("T")
-# What a worker hands the integrator: a build for it to clean up after, a ticket to land, or an outcome.
 Handoff = Literal["built", "land"] | Outcome
 
 
@@ -123,9 +121,13 @@ class TicketRun:
     # The head agent's session, and the failure that its next build fixes.
     session: str | None = None
     fix: str | None = None
-    attempt: bool = False
+    fix_attempt: bool = False
     # The agent run that a usage limit stopped, which resumes after the reset.
     limited: UsageLimit | None = None
+
+    def resumes(self, name: str) -> bool:
+        """Whether the agent run of this name goes on after a usage limit."""
+        return self.limited is not None and self.limited.name == name
 
 
 def next_log(run_dir: Path, stem: str, suffix: str) -> Path:
@@ -154,7 +156,6 @@ class EpicRun:
         self.tracker = config.tracker(secrets)
         self.home = config.state_dir / epic_key
         self.log_path = self.home / "decisions.jsonl"
-        # Workers and the integrator both log. The integrator alone does the rest that tickets share.
         self._log_lock = threading.Lock()
         self.stuck_in_row = 0
         self.epic_branch = ""
@@ -260,9 +261,8 @@ class EpicRun:
         return True
 
     def build_frontier(self) -> str | None:
-        """Runs every ticket on the frontier. This thread is the integrator: it adds and removes worktrees,
-        lands, and pauses. Workers take each ticket through its other steps in its own worktree. Returns the
-        reason the loop stopped early."""
+        """Runs every ticket on the frontier, with this thread as the integrator of rule 8. Returns the reason
+        the loop stopped early."""
         running: dict[Future[Handoff], TicketRun] = {}
         finished: set[str] = set()
         free_slots = list(range(EPIC_SLOT + 1, EPIC_SLOT + 1 + self.config.parallel))
@@ -307,7 +307,8 @@ class EpicRun:
                 done, _ = wait(running, return_when=FIRST_COMPLETED)
                 for future in done:
                     run = running.pop(future)
-                    outcome = self.integrate(run, future.result())
+                    integrate = functools.partial(self.integrate, run, future.result())
+                    outcome = self.guard(run.ticket, run.slot, integrate, run)
                     if outcome is None:
                         work(run)
                     else:
@@ -319,12 +320,12 @@ class EpicRun:
         if handoff == "built":
             return None
         if handoff == "land":
-            return self.guard(run.ticket, run.slot, functools.partial(self.land, run), run)
-        if handoff == "usage-limit" and run.limited and self.pause(run.limited):
+            return self.land(run)
+        if handoff == "usage-limit" and run.limited and self.wait_out(run.limited):
             return None
         return handoff
 
-    def guard(
+    def guard[T](
         self, ticket: Ticket, slot: int, call: Callable[[], T], run: TicketRun | None = None
     ) -> T | Outcome:
         """Runs a part of the ticket's work. A failure makes the ticket stuck, not the run."""
@@ -393,8 +394,8 @@ class EpicRun:
                 break
             self.log(run.ticket.key, step, "started", commit=self.head(run))
             failure = steps[step](run)
-            if failure and self.send_back(run, failure):
-                return "stuck"
+            if failure and (stuck := self.send_back(run, failure)):
+                return stuck
         return self.build(run)
 
     def send_back(self, run: TicketRun, failure: GateFailure) -> Outcome | None:
@@ -403,7 +404,7 @@ class EpicRun:
             return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
         if failure.on_epic:
             failure = self.merge_epic(run, failure)
-        run.fix, run.attempt = failure.prompt, failure.attempt
+        run.fix, run.fix_attempt = failure.prompt, failure.attempt
         return None
 
     def attempts(self, key: str) -> int:
@@ -442,8 +443,8 @@ class EpicRun:
         else:
             # A new session, as on a restart, gets the prompt of a first build with the fix.
             prompt = run.fix if run.session else f"{first}\n\n{run.fix}"
-        if not self.resumes(run, key):
-            self.log(key, "build", "started", commit=self.head(run), attempt=run.attempt)
+        if not run.resumes(key):
+            self.log(key, "build", "started", commit=self.head(run), attempt=run.fix_attempt)
         try:
             result = self.agent(
                 run, prompt, run.session, model=self.config.agent_model, effort=self.config.agent_effort
@@ -452,7 +453,7 @@ class EpicRun:
             self.push(run.worktree, run.branch, key)
         result_name = "pass" if result.status == "done" else "blocked"
         self.log(key, "build", result_name, commit=self.head(run), session=result.session)
-        run.session, run.fix, run.attempt = result.session, None, False
+        run.session, run.fix, run.fix_attempt = result.session, None, False
         if result.status == "blocked":
             reason = f"The agent is blocked: {result.reason}"
             return self.stuck(run.ticket, reason, run.agent_log or run.run_dir, run.slot)
@@ -551,7 +552,7 @@ class EpicRun:
         faults = self.unanswered(key, "ui-gate", head, "fail")
         if faults is None:
             # A review that goes on after a usage limit keeps the screenshots it saved.
-            for shot in [] if self.resumes(run, f"{key}-ui") else screenshots(run.run_dir):
+            for shot in [] if run.resumes(f"{key}-ui") else screenshots(run.run_dir):
                 shot.unlink()
             prompt = UI_REVIEW_PROMPT.format(
                 skill=self.config.ui_skill, run_dir=run.run_dir, base=self.epic_branch
@@ -637,8 +638,7 @@ class EpicRun:
         return ui_path is not None and path.startswith(ui_path) and not is_test
 
     def land(self, run: TicketRun) -> Outcome | None:
-        """Merges the ticket into the Epic branch and records it as landed. Only the integrator lands, so the
-        merges run one at a time.
+        """Merges the ticket into the Epic branch and records it as landed.
 
         A conflict or a failed merge gate goes back to the head agent, to fix on the ticket branch.
         """
@@ -963,42 +963,35 @@ class EpicRun:
         """Runs `claude -p` with an empty context, or resumes a session. A run that a usage limit stopped
         resumes where it stopped."""
         name = name or run.ticket.key
-        if self.resumes(run, name):
+        if run.resumes(name):
             limited, run.limited = run.limited, None
             if limited and limited.session:
                 prompt, session = USAGE_RESUME_PROMPT, limited.session
         return self.agent_run(run, prompt, session, name, schema, model, effort)
 
-    @staticmethod
-    def resumes(run: TicketRun, name: str) -> bool:
-        """Whether the agent run of this name goes on after a usage limit."""
-        return run.limited is not None and run.limited.name == name
-
-    def through_limits(self, run: TicketRun, call: Callable[[], T]) -> T:
+    def through_limits[T](self, run: TicketRun, call: Callable[[], T]) -> T:
         """An agent run of the integrator, which waits out a usage limit that resets soon itself."""
         while True:
             try:
                 return call()
             except UsageLimit as limit:
-                if not self.pause(limit):
+                if not self.wait_out(limit):
                     raise
                 run.limited = limit
 
-    def pause(self, limit: UsageLimit) -> bool:
-        """Waits for a usage limit to reset. Only the integrator pauses, so parallel tickets that meet the
-        same limit notify once. False when the limit does not reset soon, which stops the loop."""
+    def wait_out(self, limit: UsageLimit) -> bool:
+        """Waits for a usage limit to reset, and notifies once for the runs that meet the same limit. False
+        when the limit does not reset soon, which stops the loop."""
         now = time.time()
         if limit.reset is None or limit.reset - now > MAX_USAGE_WAIT_SECONDS:
             return False
-        end = limit.reset + PAST_RESET_SECONDS
-        if end <= now:
-            return True
         until = datetime.fromtimestamp(limit.reset, UTC).isoformat(timespec="seconds")
         self.log(limit.name, "agent", "usage-pause", detail=f"The usage limit resets at {until}.")
-        if now >= self.paused_until:
+        end = limit.reset + PAST_RESET_SECONDS
+        if end > now and now >= self.paused_until:
             self.notify(f"{self.epic_key} paused")
         self.paused_until = max(self.paused_until, end)
-        pause(self.paused_until - now)
+        pause(max(0.0, self.paused_until - now))
         return True
 
     def agent_command(
