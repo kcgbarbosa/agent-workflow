@@ -7,11 +7,11 @@ from pathlib import Path
 
 from conftest import EPIC, SECRETS, write_config
 
-from loop import config, tiers
+from loop import config
 from loop.claude import REVIEW_EFFORT, REVIEW_MODEL, agent_settings
+from loop.jira import Ticket
 from loop.prompts import AGENT_SCHEMA, DISPATCH, REVIEW_SCHEMA
 from loop.run import EpicRun, TicketRun
-from loop.tracker import Ticket
 
 
 def test_the_agent_command_line(tmp_path: Path) -> None:
@@ -25,13 +25,13 @@ def test_the_agent_command_line(tmp_path: Path) -> None:
         done=False, flagged=False, blockers=(), text="",
     )  # fmt: skip
     run = TicketRun(ticket, 2, "feat/DEMO-2-add-the-first-part", worktree, tmp_path / "run")
-    agents, dispatch, settings = json.dumps(tiers.load()), DISPATCH.read_text(), agent_settings(loaded)
+    dispatch, settings = DISPATCH.read_text(), agent_settings(loaded)
 
     def tail(schema: str, name: str) -> list[str]:
         return [
             "--permission-mode", "auto", "--permission-prompts", "none",
             "--output-format", "stream-json", "--verbose", "--json-schema", schema, "-n", name,
-            "--agents", agents, "--append-system-prompt", dispatch, "--settings", settings,
+            "--append-system-prompt", dispatch, "--settings", settings,
         ]  # fmt: skip
 
     head = epic.agent_command(run, "/implement", None, "DEMO-2", AGENT_SCHEMA, "claude-sonnet-5-5", "low")

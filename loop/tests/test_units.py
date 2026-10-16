@@ -9,9 +9,7 @@ import json
 from conftest import EPIC, SECRETS, TAILNET, UNIT, World
 from test_crash import assert_built_once, two_tickets
 
-from loop.units import watch_unit
-
-WATCH = watch_unit(8790)
+from loop.units import WATCH_UNIT
 
 
 def stall_the_first_build(world: World) -> None:
@@ -104,7 +102,7 @@ def test_the_dashboard_keeps_running_across_a_loop_update_and_after_a_crash(worl
     world.start(new_code=True)
     world.wait_for_run()
 
-    (started,) = unit_calls(world, "systemd-run", f"--unit={WATCH}")
+    (started,) = unit_calls(world, "systemd-run", f"--unit={WATCH_UNIT}")
     assert "--property=Restart=always" in started
-    assert world.unit_active(WATCH)
-    assert unit_calls(world, "systemctl", "restart", WATCH) == [["restart", WATCH]]
+    assert world.unit_active(WATCH_UNIT)
+    assert unit_calls(world, "systemctl", "restart", WATCH_UNIT) == [["restart", WATCH_UNIT]]

@@ -10,7 +10,8 @@ import pytest
 from conftest import write_config
 
 from loop import cli, config, watch
-from loop.cli import SECRETS_FILE, Refused, main, read_secrets
+from loop.cli import Refused, main, read_secrets
+from loop.config import SECRETS_FILE
 
 
 def test_the_loop_refuses_to_run_when_a_prerequisite_is_missing(
@@ -122,14 +123,6 @@ def test_the_head_agent_runs_on_the_agent_table_or_the_defaults(tmp_path: Path) 
     assert (settings.agent_model, settings.agent_effort) == ("claude-sonnet-5-5", "medium")
 
 
-def test_the_context_window_defaults_to_200k_and_the_agent_table_sets_it(tmp_path: Path) -> None:
-    write_config(tmp_path)
-    assert config.load(tmp_path).agent_context_tokens == 200_000
-
-    write_config(tmp_path, extra="\n[agent]\ncontext_tokens = 150000\n")
-    assert config.load(tmp_path).agent_context_tokens == 150_000
-
-
 def test_parallel_defaults_to_one_ticket_at_a_time(tmp_path: Path) -> None:
     write_config(tmp_path)
     text = (tmp_path / config.FILE).read_text()
@@ -207,7 +200,7 @@ def test_loop_start_names_the_tailnet_address_of_the_watch_page(monkeypatch: pyt
     monkeypatch.setenv("WAYLAND_DISPLAY", "")
 
     monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1", "100.64.0.7"])
-    assert cli.open_watch(8790, "demo", "DEMO-33") == "http://100.64.0.7:8790/#/demo/DEMO-33"
+    assert cli.open_watch("demo", "DEMO-33") == "http://100.64.0.7:8790/#/demo/DEMO-33"
 
     monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1"])
-    assert cli.open_watch(8790, "demo", "DEMO-33") == "http://127.0.0.1:8790/#/demo/DEMO-33"
+    assert cli.open_watch("demo", "DEMO-33") == "http://127.0.0.1:8790/#/demo/DEMO-33"

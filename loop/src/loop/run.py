@@ -17,9 +17,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from . import process, repo, tiers
+from . import process, repo
 from .claude import REVIEW_EFFORT, REVIEW_MODEL, TRIALS, agent_settings, run_setup
-from .config import Config
+from .config import ACCEPTANCE_HEADING, CONTEXT_TOKENS, Config
+from .jira import JiraError, Ticket
 from .prompts import (
     ACCEPTANCE_PROMPT,
     AGENT_SCHEMA,
@@ -50,7 +51,6 @@ from .stream import (
     meter_reader,
     usage_reset,
 )
-from .tracker import Ticket, TrackerError
 from .watch import BOARD
 
 # A limit that resets later than this, such as the weekly one, stops the loop.
@@ -158,7 +158,7 @@ class EpicRun:
         self.config = config
         self.secrets = dict(secrets)
         self.repo = config.repo
-        self.tracker = config.tracker(secrets)
+        self.jira = config.jira(secrets)
         self.home = config.state_dir / epic_key
         self.log_path = self.home / "decisions.jsonl"
         self._log_lock = threading.Lock()
@@ -193,7 +193,7 @@ class EpicRun:
             self.stack_down(self.epic_worktree, EPIC_SLOT, self.epic_key, volumes=False)
 
     def _run(self) -> int:
-        epic = self.tracker.issue(self.epic_key)
+        epic = self.jira.issue(self.epic_key)
         self.epic_summary = epic.summary
         git(self.repo, "fetch", "--prune", "origin")
         self.epic_branch = repo.find_branch(self.repo, self.epic_key) or (
@@ -209,7 +209,7 @@ class EpicRun:
         if not self.sync_base():
             return 1
         self.recover()
-        for ticket in self.tracker.children(self.epic_key):
+        for ticket in self.jira.children(self.epic_key):
             if self.ticket_result(ticket) == NOT_LANDED:
                 self.log(ticket.key, "start", "done-not-landed")
                 self.notify(f"{ticket.key} done-not-landed")
@@ -232,7 +232,7 @@ class EpicRun:
             elif line.get("step") == "stuck":
                 stuck[key] = line
         slot = EPIC_SLOT + 1
-        for ticket in self.tracker.children(self.epic_key):
+        for ticket in self.jira.children(self.epic_key):
             key = ticket.key
             if key not in landed and repo.landed(self.repo, self.epic_branch, key):
                 self.complete_landing(key, self.home / "worktrees" / key, slot)
@@ -359,8 +359,8 @@ class EpicRun:
             return self.stuck(ticket, f"The loop failed: {error}", log, slot)
 
     def frontier(self) -> list[Ticket]:
-        """Open tickets that are not stuck, whose blockers are done in the tracker or landed."""
-        tickets = self.tracker.children(self.epic_key)
+        """Open tickets that are not stuck, whose blockers are done in Jira or landed."""
+        tickets = self.jira.children(self.epic_key)
 
         def landed(key: str) -> bool:
             return repo.landed(self.repo, self.epic_branch, key)
@@ -390,7 +390,7 @@ class EpicRun:
         self.write_ticket_file(run, self.config.ticket_gate, reviews=True)
         if ticket.status != self.config.in_progress:
             self.track(
-                ticket.key, "status", lambda: self.tracker.transition(ticket.key, self.config.in_progress)
+                ticket.key, "status", lambda: self.jira.transition(ticket.key, self.config.in_progress)
             )
         self.log(ticket.key, "start", "new" if existing is None else "restart", detail=branch)
         return run
@@ -517,7 +517,7 @@ class EpicRun:
         runs the tests, and the UI review looks at their screenshots.
         """
         command = self.config.acceptance_list
-        lines = user_sees(run.ticket.text, self.config.acceptance_heading)
+        lines = user_sees(run.ticket.text, ACCEPTANCE_HEADING)
         if command is None or not lines:
             return None
         key = run.ticket.key
@@ -774,7 +774,7 @@ class EpicRun:
             return 1
         run_dir = self.home / "runs" / key
         run_dir.mkdir(parents=True, exist_ok=True)
-        run = TicketRun(self.tracker.issue(key), EPIC_SLOT, self.epic_branch, self.epic_worktree, run_dir)
+        run = TicketRun(self.jira.issue(key), EPIC_SLOT, self.epic_branch, self.epic_worktree, run_dir)
         merge_base = out(self.epic_worktree, "merge-base", base, "HEAD")
         # The ticket reviews already ran at landing, so the finish runs the merge gate, which is the only test
         # gate here, reviews again only the UI items left open, and leaves the review of the whole Epic to KC.
@@ -796,7 +796,7 @@ class EpicRun:
         items open."""
         head = out(self.epic_worktree, "rev-parse", "HEAD")
         left = self.ui_open()
-        for ticket in self.tracker.children(self.epic_key):
+        for ticket in self.jira.children(self.epic_key):
             key = ticket.key
             if key not in left:
                 continue
@@ -840,7 +840,7 @@ class EpicRun:
         """The body an agent writes with the `pr` skill, or a table of the tickets when it writes none."""
         key = self.epic_key
         tickets = ["| Ticket | Result |", "| ------ | ------ |"]
-        for ticket in self.tracker.children(key):
+        for ticket in self.jira.children(key):
             tickets.append(f"| {self.ticket_label(ticket)} | {self.ticket_result(ticket)} |")
         table = "\n".join(tickets)
         body_file = run.run_dir / "pr-body.md"
@@ -874,13 +874,13 @@ class EpicRun:
         key = self.epic_key
         unfinished = [
             self.ticket_label(ticket)
-            for ticket in self.tracker.children(key)
+            for ticket in self.jira.children(key)
             if self.ticket_result(ticket) in UNFINISHED
         ]
         left = self.ui_open()
         ui_open = {
             self.ticket_label(ticket): len(left[ticket.key])
-            for ticket in self.tracker.children(key)
+            for ticket in self.jira.children(key)
             if ticket.key in left
         }
         draft = bool(failing or demo_failing or unfinished or ui_open)
@@ -1035,8 +1035,7 @@ class EpicRun:
             command += ["--model", model]
         if effort:
             command += ["--effort", effort]
-        # The window the session compacts at, so a long ticket never sends more than this on each turn.
-        command += ["--autocompact", str(self.config.agent_context_tokens)]
+        command += ["--autocompact", str(CONTEXT_TOKENS)]
         # Each worktree is a new folder, where nobody approved the project `.mcp.json`, so the flag keeps the
         # run from waiting on that approval. The strict flag leaves out the host's plugin servers and
         # claude.ai connectors, whose tools and instructions every turn would send again.
@@ -1046,7 +1045,7 @@ class EpicRun:
         command += [
             "--permission-mode", "auto", "--permission-prompts", "none",
             "--output-format", "stream-json", "--verbose", "--json-schema", schema, "-n", name,
-            "--agents", json.dumps(tiers.load()), "--append-system-prompt", DISPATCH.read_text(),
+            "--append-system-prompt", DISPATCH.read_text(),
             "--settings", self.settings,
         ]  # fmt: skip
         return command
@@ -1265,7 +1264,7 @@ class EpicRun:
         (run.run_dir / "ticket.md").write_text(text)
 
     def write_board(self, tickets: list[Ticket], landed: set[str]) -> None:
-        """The tickets as the frontier last read them, for `loop watch`, which reads no tracker."""
+        """The tickets as the frontier last read them, for `loop watch`, which does not read Jira."""
         board = {
             "time": datetime.now(UTC).isoformat(timespec="seconds"),
             "epic": self.epic_key,
@@ -1295,7 +1294,7 @@ class EpicRun:
     def comments(self, key: str) -> list[str]:
         """The comments on the ticket other than the loop's own. A failed read is logged and gives none."""
         try:
-            comments = self.tracker.comments(key)
+            comments = self.jira.comments(key)
         except Exception as error:  # noqa: BLE001 - a failed read never makes the ticket stuck.
             self.log(key, "tracker-comments", "fail", detail=str(error))
             return []
@@ -1305,30 +1304,30 @@ class EpicRun:
     def comment_once(self, key: str, text: str) -> None:
         """Comments the text unless the ticket has it. A failed read of the comments comments it anyway."""
         try:
-            seen = {normal(comment) for comment in self.tracker.comments(key)}
-        except TrackerError:
+            seen = {normal(comment) for comment in self.jira.comments(key)}
+        except JiraError:
             seen = set()
         if normal(text) not in seen:
-            self.tracker.comment(key, text)
+            self.jira.comment(key, text)
 
     def attach_once(self, key: str, files: list[Path]) -> None:
         """Attaches each file that the ticket does not have, by its name and size."""
-        have = set(self.tracker.attachments(key))
-        self.tracker.attach(key, [path for path in files if (path.name, path.stat().st_size) not in have])
+        have = set(self.jira.attachments(key))
+        self.jira.attach(key, [path for path in files if (path.name, path.stat().st_size) not in have])
 
     def transition_once(self, key: str, status: str) -> bool:
-        return self.tracker.issue(key).status == status or self.tracker.transition(key, status)
+        return self.jira.issue(key).status == status or self.jira.transition(key, status)
 
     def flag_once(self, key: str) -> None:
-        if not self.tracker.issue(key).flagged:
-            self.tracker.flag(key)
+        if not self.jira.issue(key).flagged:
+            self.jira.flag(key)
 
     def track(self, key: str, step: str, call: Callable[[], object]) -> None:
-        """A tracker call that fails is logged. It does not stop the ticket."""
+        """A Jira call that fails is logged. It does not stop the ticket."""
         try:
             result = call()
             self.log(key, f"tracker-{step}", "fail" if result is False else "ok")
-        except TrackerError as error:
+        except JiraError as error:
             self.log(key, f"tracker-{step}", "fail", detail=str(error))
 
     def ticket_lines(self, key: str) -> list[dict[str, Any]]:

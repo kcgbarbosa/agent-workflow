@@ -13,10 +13,10 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from . import report
-from .config import Config, PlanSpan, stored_secrets
+from .config import BACKLOG_MINUTES, Config, PlanSpan, stored_secrets
 from .jira import Jira
 from .report import KEY, all_runs, is_gate, iso, landings, line_time, ticket_key
 
@@ -37,23 +37,19 @@ class BacklogError(Exception):
     pass
 
 
-class Search(Protocol):
-    def search(self, jql: str, fields: list[str]) -> list[dict[str, Any]]: ...
-
-
 # --- The open work in Jira ---
 
 
-def jira_client(config: Config) -> Search:
+def jira_client(config: Config) -> Jira:
     """The Jira client of the project. The secrets are read for each call, so a new `loop secrets` takes
     effect without a restart."""
     secrets = stored_secrets(config.state_dir)
     if not secrets.get("JIRA_EMAIL") or not secrets.get("JIRA_API_TOKEN"):
         raise BacklogError("This host has no Jira secret in its secrets file. Run `loop secrets`.")
-    return Jira(config.tracker_url, secrets["JIRA_EMAIL"], secrets["JIRA_API_TOKEN"])
+    return config.jira(secrets)
 
 
-def open_epics(jira: Search, projects: list[str]) -> list[dict[str, Any]]:
+def open_epics(jira: Jira, projects: list[str]) -> list[dict[str, Any]]:
     """The open Epics of the projects: key, title, and status."""
     if not projects:
         return []
@@ -70,7 +66,7 @@ def open_epics(jira: Search, projects: list[str]) -> list[dict[str, Any]]:
     ]
 
 
-def fetch(jira: Search, projects: list[str]) -> list[dict[str, Any]]:
+def fetch(jira: Jira, projects: list[str]) -> list[dict[str, Any]]:
     """The open Epics of the projects, each with its tickets' keys and statuses. No ticket text, so the read
     can never stand in for a ticket's spec.
     """
@@ -100,26 +96,19 @@ def project_keys(state_dir: Path) -> list[str]:
 
 class Backlog:
     """The open Epics with their tickets, read from Jira when the forecast is asked for, and kept for
-    `minutes`, so a page that stays open reads Jira at most that often. A failed read is kept too."""
+    `BACKLOG_MINUTES`, so a page that stays open reads Jira at most that often. A failed read is kept too."""
 
-    def __init__(
-        self,
-        state_dir: Path,
-        client: Callable[[], Search],
-        minutes: int,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
+    def __init__(self, state_dir: Path, client: Callable[[], Jira]) -> None:
         self.state_dir = state_dir
-        self.seconds = minutes * 60
         self._client = client
-        self.clock = clock
+        self.clock = time.monotonic
         self._lock = threading.Lock()
         self._kept: tuple[float, dict[str, Any]] | None = None
 
     def read(self) -> dict[str, Any]:
         """`epics`, or None with the `error` that stopped the read, and the time of the read."""
         with self._lock:
-            if self._kept and self.clock() - self._kept[0] < self.seconds:
+            if self._kept and self.clock() - self._kept[0] < BACKLOG_MINUTES * 60:
                 return self._kept[1]
             try:
                 projects = project_keys(self.state_dir)
@@ -372,7 +361,7 @@ class Forecaster:
 
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.backlog = Backlog(config.state_dir, lambda: jira_client(config), config.backlog_minutes)
+        self.backlog = Backlog(config.state_dir, lambda: jira_client(config))
 
     def view(self) -> dict[str, Any]:
         config = self.config

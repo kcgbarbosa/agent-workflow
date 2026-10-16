@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import process, tiers
-from .config import Config
+from .config import CONTEXT_TOKENS, Config
 
 # The reviews run in their own sessions, so the head agent's context stays small. At the same cost per task,
 # Opus scores as well as Sonnet or better, so the reviews run on Opus at a set effort.
@@ -39,7 +39,7 @@ def run_setup(config: Config) -> dict[str, Any]:
     return {
         "claude": claude_version(),
         "agent": f"{config.agent_model} {config.agent_effort}",
-        "context": config.agent_context_tokens,
+        "context": CONTEXT_TOKENS,
         "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }

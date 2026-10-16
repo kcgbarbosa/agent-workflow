@@ -24,11 +24,11 @@ from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
 from . import process, report, units
-from .config import Config, ConfigError, stored_secrets
+from .config import WATCH_PORT, Config, ConfigError, stored_secrets
 from .forecast import BacklogError, jira_client, open_epics, project_keys
+from .jira import JiraError
 from .report import DECISIONS, KEY, LOOP_SUFFIX, epic_homes, is_gate, iso, plan_meter, projects, read_lines
 from .steps import STEPS, current_step
-from .tracker import TrackerError
 
 BOARD = "board.json"
 PAGE = Path(__file__).with_name("watch.html")
@@ -356,7 +356,7 @@ def verdict(ui_review: dict[str, Any] | None, shots: list[dict[str, Any]]) -> st
     newest = max(shot["time"] for shot in shots)
     if ui_review is None or str(ui_review.get("time")) < newest:
         return "unreviewed"
-    return {"pass": "passed", "fail": "faults", "unfixed": "unfixed"}.get(
+    return {"pass": "passed", "fail": "faults", "open": "unfixed", "unfixed": "unfixed"}.get(
         str(ui_review["result"]), "unreviewed"
     )
 
@@ -734,7 +734,7 @@ class Watch:
         """The open Epics that Start lists: those of the Jira projects whose Epics ran on this host."""
         try:
             epics = open_epics(jira_client(config), project_keys(config.state_dir))
-        except (BacklogError, TrackerError) as error:
+        except (BacklogError, JiraError) as error:
             return {"epics": [], "error": str(error)}
         return {"epics": [{"key": epic["key"], "summary": epic["summary"]} for epic in epics]}
 
@@ -868,6 +868,6 @@ def serve(
     return servers
 
 
-def url(port: int, epic_key: str | None = None, host: str = "127.0.0.1", project: str | None = None) -> str:
+def url(epic_key: str | None = None, host: str = "127.0.0.1", project: str | None = None) -> str:
     path = "/".join(part for part in (project, epic_key) if part)
-    return f"http://{host}:{port}/" + (f"#/{path}" if path else "")
+    return f"http://{host}:{WATCH_PORT}/" + (f"#/{path}" if path else "")

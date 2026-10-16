@@ -23,7 +23,7 @@ Done when you can say what each step, gate, and limit of this run should be.
 The run's files are in `~/.local/state/<name>-loop/`. The unit `loop-<name>-<Epic key>` names the running Epic. With no unit, the Epic is the newest folder there.
 
 - `systemctl --user is-active loop-<name>-<Epic key>`: is the run alive?
-- `curl -s localhost:<port>/api/epic/<Epic key>`, where the port is `[watch]` `port`, 8790 by default: the state, `stats`, `plan`, and each ticket's column, `step` with its `since`, and `recent` tool calls.
+- `curl -s localhost:8790/api/epic/<Epic key>`: the state, `stats`, `plan`, and each ticket's column, `step` with its `since`, and `recent` tool calls.
 - The last 30 lines of `decisions.jsonl`, and `journalctl --user -u loop-<name>-<Epic key> -n 30`.
 - `loop report <Epic key>`, run from the repo, when the cost looks off.
 

@@ -1,4 +1,4 @@
-"""Git commands of the loop. Git and the tracker hold every state of a run."""
+"""Git commands of the loop. Git and Jira hold every state of a run."""
 
 from __future__ import annotations
 
