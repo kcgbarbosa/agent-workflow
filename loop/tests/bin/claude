@@ -54,6 +54,7 @@ with (home / "calls.jsonl").open("a") as calls:
         "db_port": os.environ.get("DB_PORT"),
         "run_dir": os.environ.get("LOOP_RUN_DIR"),
         "no_background": os.environ.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"),
+        "bash_max_ms": os.environ.get("BASH_MAX_TIMEOUT_MS"),
         "schema": json.loads(args[args.index("--json-schema") + 1]),
         "model": args[args.index("--model") + 1] if "--model" in args else None,
         "effort": args[args.index("--effort") + 1] if "--effort" in args else None,

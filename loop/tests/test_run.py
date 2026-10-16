@@ -673,6 +673,7 @@ def test_a_ui_change_lands_only_after_a_ui_review_and_its_screenshots_reach_the_
     assert review["run_dir"] in review["prompt"]
     assert review["resume"] is None
     assert review["no_background"] == "1" and world.calls("DEMO-2")[0]["no_background"] == "1"
+    assert review["bash_max_ms"] == world.calls("DEMO-2")[0]["bash_max_ms"] == str(60 * 60_000)
     assert len(world.calls("DEMO-2")) == 1
     assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
 
