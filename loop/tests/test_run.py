@@ -739,12 +739,13 @@ def test_a_finish_review_that_saves_no_screenshots_keeps_the_mark(world: World) 
 def test_the_open_ui_items_in_the_epic_pr_come_from_the_log(world: World) -> None:
     world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
     part = "/admin/materials: the seed has one row, not three."
-    plan = {
-        "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
-        "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
-        "DEMO-3": [{"write": {"b.txt": "b"}}],
-    }
-    world.plan(plan)
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
+            "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
+            "DEMO-3": [{"write": {"b.txt": "b"}}],
+        }
+    )
     assert world.run() == 0
     shutil.rmtree(world.run_dir("DEMO-2"))
     world.jira.add("DEMO-3", "Add the second part", parent=EPIC)
