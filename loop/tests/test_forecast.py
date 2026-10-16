@@ -112,7 +112,6 @@ url = "{url}"
 ticket = ["make", "test"]
 merge = ["make", "check"]
 [watch]
-backlog_minutes = 5
 plans = [
   {{ plan = "pro", since = 2026-10-01 }},
   {{ plan = "max-5x", since = 2026-10-14T16:30:00Z }},
@@ -344,7 +343,7 @@ def test_a_page_with_no_forecast_answers_null(tmp_path: Path) -> None:
 
 def test_no_part_of_the_run_reads_the_forecast() -> None:
     source = LOOP / "src" / "loop"
-    for name in ("run.py", "prompts.py", "dispatch.md", "stream.py", "tiers.py", "repo.py", "tracker.py"):
+    for name in ("run.py", "prompts.py", "dispatch.md", "stream.py", "tiers.py", "repo.py", "jira.py"):
         assert "forecast" not in (source / name).read_text(), name
 
 
@@ -364,12 +363,11 @@ NTFY_TOPIC = { item = "b", field = "password" }
 """
     (tmp_path / "loop.toml").write_text(base)
     plain = config_file.load(tmp_path)
-    assert plain.plans == () and plain.backlog_minutes == 5
+    assert plain.plans == ()
 
     (tmp_path / "loop.toml").write_text(
         base
         + """[watch]
-backlog_minutes = 10
 plans = [
   { plan = "max-5x", since = 2026-10-14T16:30:00Z },
   { plan = "pro", since = 2026-10-01 },
@@ -377,7 +375,6 @@ plans = [
 """
     )
     loaded = config_file.load(tmp_path)
-    assert loaded.backlog_minutes == 10
     assert loaded.plans == SPANS
 
     (tmp_path / "loop.toml").write_text(base + '[watch]\nplans = [{ plan = "team", since = 2026-10-01 }]\n')

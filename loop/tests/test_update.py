@@ -106,12 +106,12 @@ def test_start_takes_the_new_loop_and_hands_a_loop_toml_with_a_new_key_to_it(
         started.append((name, key))
         return "unit"
 
-    def start_watch(repo: Path, port: int, restart: bool) -> None:
+    def start_watch(repo: Path, restart: bool) -> None:
         started.append(("watch", str(restart)))
 
     monkeypatch.setattr(units, "start_run", start_run)
     monkeypatch.setattr(units, "start_watch", start_watch)
-    monkeypatch.setattr(cli, "open_watch", lambda port, name, key: "http://page")
+    monkeypatch.setattr(cli, "open_watch", lambda name, key: "http://page")
 
     assert cli.main(["start", "DEMO-1", "--repo", str(repo)]) == 0
 

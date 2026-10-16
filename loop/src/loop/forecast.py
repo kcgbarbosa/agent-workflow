@@ -16,8 +16,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from . import report
-from .config import Config, PlanSpan, stored_secrets
-from .jira import Jira
+from .config import BACKLOG_MINUTES, Config, PlanSpan, stored_secrets
 from .report import KEY, all_runs, is_gate, iso, landings, line_time, ticket_key
 
 # Anthropic's published plans: the usage of each against Pro's, and the monthly price in US dollars, from
@@ -50,7 +49,7 @@ def jira_client(config: Config) -> Search:
     secrets = stored_secrets(config.state_dir)
     if not secrets.get("JIRA_EMAIL") or not secrets.get("JIRA_API_TOKEN"):
         raise BacklogError("This host has no Jira secret in its secrets file. Run `loop secrets`.")
-    return Jira(config.tracker_url, secrets["JIRA_EMAIL"], secrets["JIRA_API_TOKEN"])
+    return config.jira(secrets)
 
 
 def open_epics(jira: Search, projects: list[str]) -> list[dict[str, Any]]:
@@ -372,7 +371,7 @@ class Forecaster:
 
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.backlog = Backlog(config.state_dir, lambda: jira_client(config), config.backlog_minutes)
+        self.backlog = Backlog(config.state_dir, lambda: jira_client(config), BACKLOG_MINUTES)
 
     def view(self) -> dict[str, Any]:
         config = self.config

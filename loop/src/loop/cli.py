@@ -26,10 +26,10 @@ from . import config as config_file
 from . import process, report, units
 from . import watch as watch_page
 from .claude import MIN_CLAUDE, claude_version
-from .config import Config, ConfigError
+from .config import WATCH_PORT, Config, ConfigError
 from .forecast import Forecaster
+from .jira import JiraError
 from .run import run
-from .tracker import TrackerError
 from .units import NO_SECRETS, UnitError
 from .update import Stale, source_checkout, update
 
@@ -178,8 +178,8 @@ def bitwarden_secrets(config: Config) -> dict[str, str]:
 
 def check_services(config: Config, secrets: dict[str, str]) -> None:
     try:
-        config.tracker(secrets).check_access()
-    except TrackerError as error:
+        config.jira(secrets).check_access()
+    except JiraError as error:
         changed = " If a secret changed, run `loop secrets` again." if secrets_file(config).exists() else ""
         raise Refused(f"The tracker refuses the credentials: {error}{changed}") from error
     if _quiet(["git", "ls-remote", "--exit-code", "origin", "HEAD"], cwd=config.repo) != 0:
@@ -213,14 +213,13 @@ def start(repo: Path, epic_key: str, base: str | None, new_code: bool) -> int:
     """Starts the run as a systemd user unit, so it outlives the agent or shell that starts it, and the
     dashboard as a user service."""
     unit = units.start_epic(repo, epic_key, base, new_code)
-    name, port = config_file.peek(repo)
-    page = open_watch(port, name, epic_key)
+    page = open_watch(config_file.peek(repo), epic_key)
     print(f"The loop is building {epic_key}. Watch it at {page}, or with `journalctl --user -fu {unit}`.")
     return 0
 
 
 def stop(repo: Path, epic_key: str) -> int:
-    name, _ = config_file.peek(repo)
+    name = config_file.peek(repo)
     if not units.stop_run(name, epic_key):
         print(f"No run of {epic_key} is active.", file=sys.stderr)
         return 1
@@ -232,12 +231,12 @@ def watch(config: Config) -> int:
     """Serves the page until the process stops. It changes nothing the loop reads."""
     forecast = Forecaster(config)
     try:
-        servers = watch_page.serve(config.state_dir, config.watch_port, forecast=forecast, config=config)
+        servers = watch_page.serve(config.state_dir, WATCH_PORT, forecast=forecast, config=config)
     except OSError as error:
-        raise Refused(f"loop watch cannot listen on port {config.watch_port}: {error}") from error
+        raise Refused(f"loop watch cannot listen on port {WATCH_PORT}: {error}") from error
     for server in servers:
         host = str(server.server_address[0])
-        print(f"loop watch serves the {config.name} runs at http://{host}:{config.watch_port}/")
+        print(f"loop watch serves the {config.name} runs at http://{host}:{WATCH_PORT}/")
     sys.stdout.flush()
     try:
         threading.Event().wait()
@@ -261,16 +260,16 @@ def print_report(config: Config, epic_key: str | None, against: str | None, as_j
     return 0
 
 
-def open_watch(port: int, name: str, epic_key: str) -> str:
+def open_watch(name: str, epic_key: str) -> str:
     """Opens the page on this host's screen, and returns its tailnet address, which opens on any device in the
     tailnet."""
     opener = "xdg-open"
     if (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")) and shutil.which(opener):
         subprocess.Popen(
-            [opener, watch_page.url(port, epic_key, project=name)],
+            [opener, watch_page.url(epic_key, project=name)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )  # fmt: skip
-    return watch_page.url(port, epic_key, watch_page.addresses()[-1], name)
+    return watch_page.url(epic_key, watch_page.addresses()[-1], name)
 
 
 def _quiet(command: list[str], cwd: Path | None = None) -> int:
