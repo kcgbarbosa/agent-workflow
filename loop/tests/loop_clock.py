@@ -16,7 +16,7 @@ real_sleep = time.sleep
 
 def sleep(seconds: SupportsFloat | SupportsIndex) -> None:
     if float(seconds) < 5:
-        real_sleep(seconds)
+        real_sleep(float(seconds))
         return
     with Path(os.environ["FAKE_CLAUDE_DIR"], "sleeps.jsonl").open("a") as sleeps:
         sleeps.write(json.dumps({"seconds": float(seconds)}) + "\n")
