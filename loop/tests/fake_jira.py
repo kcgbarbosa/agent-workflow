@@ -1,4 +1,8 @@
-"""A fake Jira REST API and ntfy server for the loop tests, on a local port. It keeps the issues in memory."""
+"""A fake Jira REST API and ntfy server for the loop tests, on a local port. It keeps the issues in memory.
+
+Each write reaches the kill point `jira:<method> <key> <kind>` after it changes the issue and before it
+answers.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,8 @@ import threading
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+from killpoint import reached
 
 FLAGGED = "customfield_10021"
 # A read of the comments gets them two at a time, so a ticket with more comments takes more than one page.
@@ -192,6 +198,7 @@ class FakeJira:
                         else:
                             found = re.search(rb'filename="([^"]+)"', body)
                             issue.attachments.append(found[1].decode() if found else "")
+                        reached(f"jira:POST {match[1]} {match[2]}")
                         return self._send({}, 201)
                 self._send({"errorMessages": ["not found"]}, 404)
 
@@ -203,6 +210,7 @@ class FakeJira:
                     match = re.fullmatch(r"/rest/api/3/issue/([A-Z]+-\d+)", self.path)
                     if match and FLAGGED in body["fields"]:
                         fake.issues[match[1]].flagged = bool(body["fields"][FLAGGED])
+                        reached(f"jira:PUT {match[1]} flag")
                         return self._send(None, 204)
                 self._send({"errorMessages": ["not found"]}, 404)
 

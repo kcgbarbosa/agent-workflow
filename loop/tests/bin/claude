@@ -14,8 +14,9 @@ head agent returns its status, as when Claude Code asks for the status while the
 lists the background shell tasks that still run at the status, such as the dev server of a UI review. A step
 with `stall` goes quiet for that many seconds in the middle of its turn. A step with `split` writes each event
 in two parts, so a reader can meet a cut-off line. A step with `error` "mid-turn" stops in the middle of its
-turn, after part of a line and with no result. With no step left, the call returns done and changes nothing. `--version` prints
-FAKE_CLAUDE_VERSION, or a version new enough for the loop.
+turn, after part of a line and with no result. After its files, a call reaches the kill point `claude:<name>`,
+and a call that returns its status goes to FAKE_CLAUDE_DIR/finished.jsonl. With no step left, the call returns
+done and changes nothing. `--version` prints FAKE_CLAUDE_VERSION, or a version new enough for the loop.
 
 The output is stream-json: one event per line, with one result event per turn. Each result event reports a
 cost, and the late turn reports a higher one, as the session's cost grows.
@@ -28,6 +29,9 @@ import sys
 import time
 import uuid
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from killpoint import reached  # noqa: E402
 
 args = sys.argv[1:]
 if "--version" in args:
@@ -86,6 +90,7 @@ if step.get("pr_body"):
     Path(os.environ["LOOP_RUN_DIR"], "pr-body.md").write_text(step["pr_body"])
 if step.get("screenshot"):
     Path(os.environ["LOOP_RUN_DIR"], "home-360-chromium-en.png").write_bytes(b"\x89PNG fake")
+reached(f"claude:{name}")
 
 
 def emit(event: dict[str, object]) -> None:
@@ -162,6 +167,8 @@ if "findings" in record["schema"]["properties"]:
 emit({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output, **cost(0.5, 3)})
 if step.get("late_turn"):
     emit({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied.", **cost(0.75, 4)})
+with (home / "finished.jsonl").open("a") as finished:
+    finished.write(json.dumps({"name": name}) + "\n")
 if step.get("linger"):
     sys.stdout.flush()
     time.sleep(step["linger"])

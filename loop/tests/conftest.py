@@ -22,6 +22,8 @@ from fake_jira import FakeJira
 from loop import config
 
 BIN = Path(__file__).parent / "bin"
+# The kill points of git: before the test repo pushes, and after origin takes a push.
+HOOKS = Path(__file__).parent / "hooks"
 LOOP_WITH_FAST_CLOCK = Path(__file__).parent / "loop_clock.py"
 EPIC = "DEMO-1"
 SECRETS = {"JIRA_EMAIL": "kc@example.com", "JIRA_API_TOKEN": "secret-token", "NTFY_TOPIC": "secret-topic"}
@@ -98,6 +100,14 @@ class World:
 
     def plan(self, steps: dict[str, list[dict[str, Any]]]) -> None:
         (self.fakes / "plan.json").write_text(json.dumps(steps))
+
+    def kill_at(self, point: str, nth: int = 1, signal: str = "SIGKILL") -> None:
+        """Sends the signal to the next run when it reaches the point for the nth time (`killpoint`)."""
+        (self.fakes / "kill.json").write_text(json.dumps({"at": point, "nth": nth, "signal": signal}))
+
+    def finished(self, name: str) -> int:
+        """How many agent runs of the session name returned their status."""
+        return sum(1 for record in self.records("finished") if record["name"] == name)
 
     def run(
         self,
@@ -198,8 +208,10 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
 
     origin = tmp_path / "origin.git"
     sh(tmp_path, "git", "init", "-q", "--bare", str(origin))
+    (origin / "hooks" / "post-receive").symlink_to(HOOKS / "post-receive")
     repo = tmp_path / "demo"
     sh(tmp_path, "git", "clone", "-q", str(origin), str(repo))
+    (repo / ".git" / "hooks" / "pre-push").symlink_to(HOOKS / "pre-push")
     (repo / "README.md").write_text("# Demo\n")
     sh(repo, "git", "add", "-A")
     sh(repo, "git", "commit", "-q", "-m", "chore: start")

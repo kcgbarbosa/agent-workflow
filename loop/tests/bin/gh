@@ -2,13 +2,16 @@
 """A fake GitHub CLI for the loop tests. It records each call, and keeps each PR it creates.
 
 The PRs live in FAKE_CLAUDE_DIR/prs.json, so `gh pr list --head <branch>` finds the open PR of a branch, and
-`gh pr edit` and `gh pr ready` change it.
+`gh pr edit` and `gh pr ready` change it. After its change, a call reaches the kill point `gh:<command>`.
 """
 
 import json
 import os
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from killpoint import reached  # noqa: E402
 
 args = sys.argv[1:]
 fakes = Path(os.environ["FAKE_CLAUDE_DIR"])
@@ -39,3 +42,4 @@ elif args[:2] == ["pr", "edit"]:
 elif args[:2] == ["pr", "ready"]:
     next(pr for pr in prs if pr["url"] == args[2])["draft"] = "--undo" in args
 store.write_text(json.dumps(prs))
+reached(f"gh:{' '.join(args[:2])}")
