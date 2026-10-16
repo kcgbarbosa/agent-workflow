@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
+
+from . import process
 
 
 class GitError(Exception):
     pass
 
 
-def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+def git(cwd: Path, *args: str, check: bool = True) -> process.Finished:
+    result = process.run(["git", *args], cwd)
     if check and result.returncode != 0:
         raise GitError(f"git {' '.join(args)}: {result.stderr.strip()}")
     return result

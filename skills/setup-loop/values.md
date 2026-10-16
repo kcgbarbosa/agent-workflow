@@ -216,7 +216,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 **Find.** Which machines can run a loop for hours: an always-on machine suits it best. For each one, read the machine README for how to reach it, what it has installed, and how secrets get there.
 
-**Choose.** List in `tools` each command the gates and the agent call that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `timeout`, `tmux`, a sleep inhibitor, `docker` when `[stack]` is set, and `bw` on a host with no secrets file. On macOS, GNU `timeout` comes from coreutils and must be on the PATH under that name. Each host also needs the `loop` command from agent-workflow's `install.sh`, `gh` signed in, `claude` at or past the minimum version, Docker running, and the browsers of the UI review.
+**Choose.** List in `tools` each command the gates and the agent call that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `tmux`, a sleep inhibitor, `docker` when `[stack]` is set, and `bw` on a host with no secrets file. Each host also needs the `loop` command from agent-workflow's `install.sh`, `gh` signed in, `claude` at or past the minimum version, Docker running, and the browsers of the UI review.
 
 | Host kind | Needs                                  |
 | --------- | -------------------------------------- |

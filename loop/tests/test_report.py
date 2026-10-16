@@ -280,8 +280,8 @@ def test_the_watch_page_serves_the_report(tmp_path: Path) -> None:
     assert Watch(tmp_path).handle("/api/report/DEMO-9")[0] == 404
 
 
-def test_the_loop_refuses_a_claude_that_does_not_know_the_tier_models() -> None:
-    assert claude_problem("2.1.295") is None and claude_problem("2.2.0") is None
-    problem = claude_problem("2.1.288")
-    assert problem and "2.1.295 or later" in problem
+def test_the_loop_refuses_a_claude_older_than_it_needs() -> None:
+    assert claude_problem("2.1.301") is None and claude_problem("2.2.0") is None
+    problem = claude_problem("2.1.295")
+    assert problem and "2.1.301 or later" in problem
     assert claude_problem("")

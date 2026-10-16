@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,11 @@ BIN = Path(__file__).parent / "bin"
 HOOKS = Path(__file__).parent / "hooks"
 LOOP_WITH_FAST_CLOCK = Path(__file__).parent / "loop_clock.py"
 EPIC = "DEMO-1"
+# Makes stdin, a terminal, the controlling terminal of this new session, then runs the command.
+TAKE_TERMINAL = (
+    "import fcntl, os, sys, termios; fcntl.ioctl(0, termios.TIOCSCTTY, 0); "
+    "os.execv(sys.argv[1], sys.argv[1:])"
+)
 SECRETS = {"JIRA_EMAIL": "kc@example.com", "JIRA_API_TOKEN": "secret-token", "NTFY_TOPIC": "secret-topic"}
 
 
@@ -42,9 +48,11 @@ name_landed_keys_only = {landed_keys_only}
 [gates]
 ticket = ["make", "lint", "test"]
 merge = ["make", "check"]
+{gates_extra}
 
 [limits]
 parallel = {parallel}
+{limits_extra}
 
 [notify]
 url = "{tracker_url}/ntfy"
@@ -71,13 +79,18 @@ def write_config(
     landed_keys_only: bool = False,
     extra: str = "",
     ui_extra: str = "",
+    gates_extra: str = "",
+    limits_extra: str = "",
 ) -> None:
-    """The test config. `extra` adds tables at the end, such as `[agent]`. `ui_extra` adds keys to `[ui]`."""
+    """The test config. `extra` adds tables at the end, such as `[agent]`. `ui_extra`, `gates_extra` and
+    `limits_extra` add keys to `[ui]`, `[gates]` and `[limits]`."""
     text = CONFIG.format(
         tracker_url=tracker_url,
         parallel=parallel,
         landed_keys_only=str(landed_keys_only).lower(),
         ui_extra=ui_extra,
+        gates_extra=gates_extra,
+        limits_extra=limits_extra,
     )
     (repo / config.FILE).write_text(text + extra)
 
@@ -116,16 +129,39 @@ class World:
         extra: str = "",
         base: str | None = None,
         ui_extra: str = "",
-        stdin: int = subprocess.DEVNULL,
+        gates_extra: str = "",
+        limits_extra: str = "",
+        terminal: bool = False,
     ) -> int:
-        """Runs `loop run` and returns its exit code. Its output shows when the test fails."""
-        write_config(self.repo, self.jira.url, parallel, landed_keys_only, extra, ui_extra)
+        """Runs `loop run` and returns its exit code. Its output shows when the test fails.
+
+        With `terminal`, the run has a pseudo-terminal as its controlling terminal and stdin, and it is the
+        terminal's foreground process group, as under tmux.
+        """
+        write_config(
+            self.repo, self.jira.url, parallel, landed_keys_only, extra, ui_extra, gates_extra, limits_extra
+        )
         self.state.mkdir(parents=True, exist_ok=True)
         (self.state / "secrets.json").write_text(json.dumps(SECRETS))
         on = ["--on", base] if base else []
         command = [sys.executable, str(LOOP_WITH_FAST_CLOCK), "run", EPIC, "--repo", str(self.repo), *on]
         env = {**os.environ, "HOME": str(self.home)}
-        finished = subprocess.run(command, env=env, stdin=stdin, capture_output=True, text=True, timeout=300)
+        with ExitStack() as stack:
+            stdin = subprocess.DEVNULL
+            if terminal:
+                controller, stdin = os.openpty()
+                stack.callback(os.close, controller)
+                stack.callback(os.close, stdin)
+                command = [sys.executable, "-c", TAKE_TERMINAL, *command]
+            finished = subprocess.run(
+                command,
+                env=env,
+                stdin=stdin,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                start_new_session=terminal,
+            )
         print(finished.stdout, finished.stderr, sep="\n")
         return finished.returncode
 
@@ -199,10 +235,8 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
     fakes = tmp_path / "fakes"
     fakes.mkdir()
     monkeypatch.setenv("FAKE_CLAUDE_DIR", str(fakes))
-    # Only the fakes and the folders of the real tools the loop needs. `timeout` is in gnubin on macOS.
-    tools = {
-        str(Path(found).parent) for tool in ("git", "timeout", "python3") if (found := shutil.which(tool))
-    }
+    # Only the fakes and the folders of the real tools the loop needs.
+    tools = {str(Path(found).parent) for tool in ("git", "python3") if (found := shutil.which(tool))}
     monkeypatch.setenv("PATH", ":".join([str(BIN), *sorted(tools)]))
     monkeypatch.setenv("BW_SESSION", "vault-session-key")
 

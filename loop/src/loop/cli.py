@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import config as config_file
-from . import report
+from . import process, report
 from . import watch as watch_page
 from .claude import MIN_CLAUDE, claude_version
 from .config import Config, ConfigError
@@ -34,10 +34,12 @@ from .run import run
 from .tracker import TrackerError
 from .update import Stale, source_checkout, update
 
-TOOLS = ("git", "claude", "gh", "timeout")
+TOOLS = ("git", "claude", "gh")
 SECRETS_FILE = watch_page.SECRETS_FILE
 RUN_LOCK = watch_page.RUN_LOCK
 START_POLLS = 60
+# A check such as `docker info` or `bw sync` that has not answered by then is taken as failed.
+QUIET_SECONDS = 120
 START_POLL_SECONDS = 2
 WATCH_POLLS = 20
 CODE_CHECK_SECONDS = 2
@@ -95,9 +97,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def main_checkout() -> Path:
     """The main checkout of the repo around this folder, also from inside one of its worktrees."""
-    result = subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], capture_output=True, text=True
-    )
+    result = process.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"])
     if result.returncode != 0:
         raise Refused("This folder is not in a git checkout. Run the loop from the repo, or pass --repo.")
     return Path(result.stdout.strip()).parent
@@ -133,12 +133,12 @@ def check_tools(config: Config) -> None:
 
 
 def claude_problem(version: str) -> str | None:
-    """Why this `claude` cannot run the subagent tiers, or None when it can."""
+    """Why the loop cannot run this `claude`, or None when it can."""
     if tuple(int(part) for part in version.split(".") if part) >= MIN_CLAUDE:
         return None
     needed = ".".join(map(str, MIN_CLAUDE))
     shown = version or "a version that does not print"
-    return f"`claude` is {shown}, and the subagent tiers need {needed} or later. Run `claude update`."
+    return f"`claude` is {shown}, and the loop needs {needed} or later. Run `claude update`."
 
 
 def secrets_file(config: Config) -> Path:
@@ -146,7 +146,7 @@ def secrets_file(config: Config) -> Path:
 
 
 def bitwarden_unlocked() -> bool:
-    status = subprocess.run(["bw", "status"], capture_output=True, text=True).stdout
+    status = process.run(["bw", "status"], seconds=QUIET_SECONDS).stdout
     return '"status":"unlocked"' in status.replace(" ", "")
 
 
@@ -186,7 +186,7 @@ def bitwarden_secrets(config: Config) -> dict[str, str]:
     secrets: dict[str, str] = {}
     missing: list[str] = []
     for env, secret in config.secrets.items():
-        result = subprocess.run(["bw", "get", secret.field, secret.item], capture_output=True, text=True)
+        result = process.run(["bw", "get", secret.field, secret.item], seconds=QUIET_SECONDS)
         if result.returncode == 0 and result.stdout.strip():
             secrets[env] = result.stdout.strip()
         else:
@@ -395,4 +395,4 @@ def _tmux(args: list[str]) -> str:
 
 
 def _quiet(command: list[str], cwd: Path | None = None) -> int:
-    return subprocess.run(command, cwd=cwd, capture_output=True).returncode
+    return process.run(command, cwd, seconds=QUIET_SECONDS).returncode
