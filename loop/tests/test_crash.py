@@ -93,6 +93,33 @@ def test_a_rerun_after_a_kill_builds_each_ticket_once(world: World, point: str, 
     assert_built_once(world, head_runs=2 if point in BUILD_AGAIN else 1)
 
 
+@pytest.mark.parametrize(
+    "point",
+    [
+        pytest.param("claude:DEMO-3", id="build-agent"),
+        pytest.param("make:check", id="land-merge-gate"),
+        pytest.param(f"push:{EPIC_BRANCH}", id="epic-push"),
+    ],
+)
+def test_a_kill_during_a_parallel_run_then_a_rerun_lands_each_ticket_once(world: World, point: str) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.jira.add("DEMO-3", "Add the second part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}], "DEMO-3": [{"write": {"b.txt": "b"}}]})
+    world.kill_at(point)
+
+    assert world.run(parallel=2) == -signal.SIGKILL
+    assert world.run(parallel=2) == 0
+
+    merges = collections.Counter(s for s in world.epic_log() if s.startswith("merge("))
+    assert merges == {"merge(DEMO-2): Add the first part": 1, "merge(DEMO-3): Add the second part": 1}
+    for key in ("DEMO-2", "DEMO-3"):
+        assert world.jira.issues[key].statuses == ["In Progress", "In Review"], key
+    assert len(world.gh("pr", "create")) == 1
+    assert sh(world.origin, "git", "rev-parse", EPIC_BRANCH) == sh(
+        world.repo, "git", "rev-parse", EPIC_BRANCH
+    )
+
+
 def test_a_kill_in_a_fix_does_not_give_its_fix_attempt_back(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}]})

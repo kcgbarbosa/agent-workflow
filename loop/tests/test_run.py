@@ -196,7 +196,34 @@ def test_a_gate_past_its_limit_fails_and_its_child_processes_and_containers_stop
     assert not (world.fakes / "gate-child-survived").exists()
 
 
-def test_a_conflict_goes_back_to_the_agent_and_the_ticket_lands(world: World) -> None:
+def test_with_parallel_2_two_tickets_with_no_blocker_build_at_the_same_time_and_land_one_at_a_time(
+    world: World,
+) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.jira.add("DEMO-3", "Add the second part", parent=EPIC)
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}, "stall": 2}],
+            "DEMO-3": [{"write": {"b.txt": "b"}, "stall": 2}],
+        }
+    )
+
+    assert world.run(parallel=2) == 0
+
+    steps = [(line["ticket"], line["step"], line["result"]) for line in world.decisions()]
+    keys = ("DEMO-2", "DEMO-3")
+    started = max(steps.index((key, "build", "started")) for key in keys)
+    assert started < min(steps.index((key, "build", "pass")) for key in keys)
+    lands = [(key, result) for key, step, result in steps if step == "land"]
+    first, second = lands[0][0], lands[2][0]
+    assert lands == [(first, "started"), (first, "landed"), (second, "started"), (second, "landed")]
+    assert {first, second} == set(keys)
+    assert all(world.jira.issues[key].statuses == ["In Progress", "In Review"] for key in keys)
+
+
+def test_a_conflict_between_two_parallel_tickets_goes_back_to_the_one_that_lands_second_and_both_land(
+    world: World,
+) -> None:
     world.jira.add("DEMO-2", "Write the file one way", parent=EPIC)
     world.jira.add("DEMO-3", "Write the file another way", parent=EPIC)
     resolve = {"write": {"same.txt": "both"}, "commit": "fix: resolve"}
@@ -207,9 +234,10 @@ def test_a_conflict_goes_back_to_the_agent_and_the_ticket_lands(world: World) ->
         }
     )
 
-    assert world.run() == 0
+    assert world.run(parallel=2) == 0
 
     assert not any(world.jira.issues[key].flagged for key in ("DEMO-2", "DEMO-3"))
+    assert all(f"merge({key})" in " ".join(world.epic_log()) for key in ("DEMO-2", "DEMO-3"))
     assert world.epic_file("same.txt").read_text() == "both"
     resumed = [call for call in world.calls() if call["resume"] and call["name"] in ("DEMO-2", "DEMO-3")]
     assert len(resumed) == 1
@@ -358,6 +386,46 @@ def test_a_usage_limit_that_resets_soon_pauses_and_resumes_the_session(world: Wo
     assert 170 <= pause["seconds"] <= 181
     assert world.results("DEMO-2", "agent") == ["usage-limit", "usage-pause", "done"]
     assert world.jira.notifications[0] == f"{EPIC} paused"
+    assert "merge(DEMO-2): Add the first part" in world.epic_log()
+    # The build goes on after the pause, so it is one build and no fix attempt.
+    builds = [line for line in world.decisions() if (line["ticket"], line["step"]) == ("DEMO-2", "build")]
+    assert [line["result"] for line in builds] == ["started", "pass"]
+
+
+def test_a_usage_limit_pauses_both_parallel_tickets_and_both_resume_after_the_reset(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.jira.add("DEMO-3", "Add the second part", parent=EPIC)
+    limit = {"error": "usage", "resets_in": 120, "stall": 1}
+    world.plan({"DEMO-2": [limit, {"write": {"a.txt": "a"}}], "DEMO-3": [limit, {"write": {"b.txt": "b"}}]})
+
+    assert world.run(parallel=2) == 0
+
+    for key in ("DEMO-2", "DEMO-3"):
+        limited, resumed = world.calls(key)[:2]
+        assert resumed["resume"] is not None
+        assert resumed["resume"] in (world.run_dir(key) / "agent-1.jsonl").read_text()
+        assert world.results(key, "agent") == ["usage-limit", "usage-pause", "done"]
+        assert f"merge({key})" in " ".join(world.epic_log())
+    assert world.jira.notifications.count(f"{EPIC} paused") == 1
+
+
+def test_a_code_review_that_meets_a_usage_limit_resumes_its_own_session_after_the_reset(
+    world: World,
+) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}}],
+            "DEMO-2-review": [{"error": "usage", "resets_in": 120}, {}],
+        }
+    )
+
+    assert world.run() == 0
+
+    limited, resumed = world.calls("DEMO-2-review")
+    assert resumed["resume"] is not None and limited["resume"] is None
+    assert len(world.calls("DEMO-2")) == 1
+    assert world.results("DEMO-2", "code-review") == ["pass"]
     assert "merge(DEMO-2): Add the first part" in world.epic_log()
 
 
