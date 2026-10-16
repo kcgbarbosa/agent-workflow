@@ -230,7 +230,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 **Choose.** Nothing, unless port 8790 is taken on the host. Then set `[watch]` `port`. The watch page opens at `http://127.0.0.1:<port>` on the host. From a phone or another machine, open the host's tailnet address on the same port.
 
-**Check.** After `loop start`, `systemctl --user is-active loop-watch` prints `active`, and the page answers on the port.
+**Check.** After `loop start`, `systemctl --user is-active loop-watch-<port>` prints `active`, and the page answers on the port.
 
 ## Host setup
 

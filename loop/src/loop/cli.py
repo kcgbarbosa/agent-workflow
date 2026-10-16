@@ -59,8 +59,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="report: print JSON")
     parser.add_argument("--repo", type=Path, help="the main checkout. Defaults to the one around this folder")
     args = parser.parse_args(argv)
-    if args.command in ("start", "stop", "run") and not re.fullmatch(r"[A-Z]+-\d+", args.epic or ""):
-        print(f"Usage: loop {args.command} <Epic key>, for example loop start TIDE-42", file=sys.stderr)
+    if args.command in ("start", "stop", "run") and not re.fullmatch(units.EPIC_KEY, args.epic or ""):
+        command = args.command
+        print(f"Usage: loop {command} <Epic key>, for example loop {command} TIDE-42", file=sys.stderr)
         return 2
     try:
         repo = args.repo.resolve() if args.repo else main_checkout()
@@ -188,8 +189,8 @@ def check_services(config: Config, secrets: dict[str, str]) -> None:
 
 @contextmanager
 def awake(name: str, epic_key: str) -> Iterator[None]:
-    """Holds off sleep until this process ends. The inhibitor is not the unit's main process, because systemd
-    sends its SIGTERM to the main process only, and the run must get it."""
+    """Holds off sleep until this process ends. It runs beside the run, which is the unit's main process
+    (loop.md rule 12)."""
     command = [
         "systemd-inhibit", "--what=sleep:idle", f"--who={name}-loop",
         f"--why=The loop builds {epic_key}", "--mode=block",
@@ -219,7 +220,7 @@ def start(repo: Path, epic_key: str, base: str | None, new_code: bool) -> int:
         unit = units.run_unit(name, active[0])
         raise Refused(f"A run is active: {unit}. `loop stop {active[0]}` stops it.")
     unit = units.start_run(repo, name, epic_key, base)
-    units.start_watch(repo, restart=new_code)
+    units.start_watch(repo, port, restart=new_code)
     page = open_watch(port, name, epic_key)
     print(f"The loop is building {epic_key}. Watch it at {page}, or with `journalctl --user -fu {unit}`.")
     return 0

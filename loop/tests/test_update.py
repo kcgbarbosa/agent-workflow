@@ -106,7 +106,7 @@ def test_start_takes_the_new_loop_and_hands_a_loop_toml_with_a_new_key_to_it(
         started.append((name, key))
         return "unit"
 
-    def start_watch(repo: Path, restart: bool) -> None:
+    def start_watch(repo: Path, port: int, restart: bool) -> None:
         started.append(("watch", str(restart)))
 
     monkeypatch.setattr(units, "start_run", start_run)

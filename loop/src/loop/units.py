@@ -9,12 +9,8 @@ from pathlib import Path
 
 from . import process
 
-WATCH = "loop-watch.service"
-# Passed on from the shell or the dashboard that starts a unit. The user manager's own environment differs
-# between a desktop login and a boot with linger.
+EPIC_KEY = r"[A-Z][A-Z0-9]*-\d+"
 ENV = ("PATH", "HOME", "LANG", "SSH_AUTH_SOCK")
-# The run ends each step through the process function, which gives a command a minute after its SIGTERM,
-# and then stops the stacks. Systemd sends SIGTERM to the run only, and SIGKILL to what is left after it.
 RUN_PROPERTIES = ("KillMode=mixed", "TimeoutStopSec=10min")
 WATCH_PROPERTIES = ("Restart=always", "RestartSec=5")
 
@@ -31,7 +27,7 @@ def runs(name: str) -> list[str]:
     """The Epic keys of the project's run units that systemd has loaded. `--collect` unloads a run when it
     ends, also when it fails."""
     listed = systemctl("list-units", "--plain", "--no-legend", f"loop-{name}-*")
-    unit = re.compile(rf"loop-{re.escape(name)}-([A-Z][A-Z0-9]*-\d+)\.service")
+    unit = re.compile(rf"loop-{re.escape(name)}-({EPIC_KEY})\.service")
     return [found[1] for line in listed.splitlines() if (found := unit.fullmatch(line.split(" ", 1)[0]))]
 
 
@@ -52,13 +48,19 @@ def stop_run(name: str, epic_key: str) -> bool:
     return True
 
 
-def start_watch(repo: Path, restart: bool) -> None:
+def watch_unit(port: int) -> str:
+    """One dashboard serves every project on the host, and each port has its own."""
+    return f"loop-watch-{port}.service"
+
+
+def start_watch(repo: Path, port: int, restart: bool) -> None:
     """Starts the dashboard when it is not active, or restarts it on the loop's new code."""
-    if systemctl("is-active", WATCH, check=False).strip() == "active":
+    unit = watch_unit(port)
+    if systemctl("is-active", unit, check=False).strip() == "active":
         if restart:
-            systemctl("restart", WATCH)
+            systemctl("restart", unit)
         return
-    run_in_unit(WATCH, repo, [sys.executable, "-m", "loop", "watch", "--repo", str(repo)], WATCH_PROPERTIES)
+    run_in_unit(unit, repo, [sys.executable, "-m", "loop", "watch", "--repo", str(repo)], WATCH_PROPERTIES)
 
 
 def run_in_unit(unit: str, cwd: Path, command: list[str], properties: tuple[str, ...]) -> None:

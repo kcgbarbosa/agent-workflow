@@ -9,7 +9,9 @@ import json
 from conftest import EPIC, SECRETS, TAILNET, UNIT, World
 from test_crash import assert_built_once, two_tickets
 
-from loop.units import WATCH
+from loop.units import watch_unit
+
+WATCH = watch_unit(8790)
 
 
 def stall_the_first_build(world: World) -> None:

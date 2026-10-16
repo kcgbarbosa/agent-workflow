@@ -179,6 +179,8 @@ class EpicRun:
         except Stopped:
             self.log(self.epic_key, "stop", "stopped")
             self.notify(f"{self.epic_key} stopped")
+            # A stop between two commands of a step leaves that ticket's stack up.
+            self.stop_stale_stacks()
             return 1
         except Exception as error:
             self.log(self.epic_key, "stop", "loop-error", detail=str(error))
@@ -1175,7 +1177,8 @@ class EpicRun:
         self.log(key, "push", "ok" if result.returncode == 0 else "fail", detail=result.stderr.strip()[-300:])
 
     def stop_stale_stacks(self) -> None:
-        """Stops the Compose projects of earlier runs, which hold the ports of the slots.
+        """Stops every Compose project of the repo's slots, which hold their ports: at the start, the ones an
+        earlier run left, and at a stop, the ones this run left.
 
         `loop start` lets one run of the repo go at a time, so no other run uses them. The volumes stay.
         """
@@ -1397,7 +1400,5 @@ def screenshots(run_dir: Path) -> list[Path]:
 def run(epic_key: str, config: Config, secrets: Mapping[str, str], base: str | None = None) -> int:
     """The run entry. It returns 0 when the Epic PR is open, and 1 when the loop stopped early."""
     epic_run = EpicRun(epic_key, config, secrets, base)
-    # `loop stop` stops the unit with SIGTERM. Each step looks for it, and ends its command through the
-    # process function.
     signal.signal(signal.SIGTERM, lambda number, frame: epic_run.stopping.set())
     return epic_run.run()
