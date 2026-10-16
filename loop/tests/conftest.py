@@ -21,6 +21,7 @@ import pytest
 from fake_jira import FakeJira
 
 from loop import config
+from loop.watch import read_lines
 
 BIN = Path(__file__).parent / "bin"
 # The kill points of git: before the test repo pushes, and after origin takes a push.
@@ -176,11 +177,13 @@ class World:
         sh(self.repo, "git", "switch", "-q", "main")
 
     def results(self, ticket: str | None = None, step: str | None = None) -> list[str]:
-        """The results in the log, of one ticket or step when named."""
+        """The results in the log, of one ticket or step when named, without the `started` lines."""
         return [
             line["result"]
             for line in self.decisions()
-            if (ticket is None or line["ticket"] == ticket) and (step is None or line["step"] == step)
+            if (ticket is None or line["ticket"] == ticket)
+            and (step is None or line["step"] == step)
+            and line["result"] != "started"
         ]
 
     def first_session(self, key: str) -> str:
@@ -220,8 +223,7 @@ class World:
         return self.state / EPIC / "worktrees" / EPIC / path
 
     def decisions(self) -> list[dict[str, Any]]:
-        path = self.state / EPIC / "decisions.jsonl"
-        return [json.loads(line) for line in path.read_text().splitlines()]
+        return read_lines(self.state / EPIC / "decisions.jsonl")
 
 
 @pytest.fixture

@@ -24,7 +24,7 @@ def test_the_agent_command_line(tmp_path: Path) -> None:
         key="DEMO-2", summary="Add the first part", issue_type="Task", status="To Do",
         done=False, flagged=False, blockers=(), text="",
     )  # fmt: skip
-    run = TicketRun(ticket, 2, "feat/DEMO-2-add-the-first-part", worktree, tmp_path / "run", restart=False)
+    run = TicketRun(ticket, 2, "feat/DEMO-2-add-the-first-part", worktree, tmp_path / "run")
     agents, dispatch, settings = json.dumps(tiers.load()), DISPATCH.read_text(), agent_settings(loaded)
 
     def tail(schema: str, name: str) -> list[str]:

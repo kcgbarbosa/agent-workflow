@@ -167,7 +167,7 @@ def breakdown(epic: str, run: list[dict[str, Any]]) -> dict[str, Any]:
         "ended": run[-1].get("time") if run else None,
         "setup": (run[0].get("setup") if run else None) or {},
         "landed": landed,
-        "stuck": sum(1 for line in run if line.get("step") == "stuck"),
+        "stuck": sum(1 for line in run if line.get("step") == "stuck" and line.get("result") == "stuck"),
         "cost": cost,
         "cost_per_landed": cost / landed if landed else None,
         "plan_used": plan["used"],

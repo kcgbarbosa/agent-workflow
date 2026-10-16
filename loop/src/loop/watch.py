@@ -281,7 +281,11 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
     every_run, this_run = _session_costs(lines), _session_costs(run)
     # A UI review of a ticket that landed in an earlier run is in an earlier run's lines.
     for line in lines:
-        if line.get("step") == "ui-gate" and line.get("ticket") in tickets:
+        if (
+            line.get("step") == "ui-gate"
+            and line.get("ticket") in tickets
+            and line.get("result") != "started"
+        ):
             tickets[line["ticket"]].ui_review = {"result": line.get("result"), "time": line.get("time")}
     events = []
     for line in run:
@@ -306,9 +310,9 @@ def epic_view(state_dir: Path, epic_key: str) -> dict[str, Any]:
                 ticket.stuck_reason = str(line.get("detail", "")).replace(f"{home}/", "")
             elif step == "land" and result == "landed":
                 ticket.landed = True
-            if _is_gate(line, "ticket"):
+            if _is_gate(line, "ticket") and result != "started":
                 ticket.gate_failures = ticket.gate_failures + 1 if result == "fail" else 0
-            if step == "ui-gate":
+            if step == "ui-gate" and result != "started":
                 ticket.ui_review = {"result": result, "time": line.get("time")}
             if step not in QUIET_STEPS and not step.startswith("tracker-"):
                 ticket.last = {"step": step, "result": result, "time": line.get("time")}
@@ -554,6 +558,7 @@ def current_step(lines: list[dict[str, Any]], newest_log: str | None) -> dict[st
         for line in lines
         if line.get("step") not in QUIET_STEPS | AFTER_STEPS
         and not str(line.get("step")).startswith("tracker-")
+        and line.get("result") != "started"
     ]
     if not steps:
         return None
@@ -574,8 +579,8 @@ def current_step(lines: list[dict[str, Any]], newest_log: str | None) -> dict[st
         current = "code-review"
     elif name.endswith("-ui"):
         current = "ui-review"
-    elif step == "agent":
-        current = "ticket-gate" if result == "done" else "agent"
+    elif step in ("agent", "build"):
+        current = "ticket-gate" if result in ("done", "pass") else "agent"
     elif gate_passed:
         current = "land" if reviewed else "code-review"
     elif review_passed or (step == "ui-gate" and result == "pass") or _is_gate(last, "merge"):

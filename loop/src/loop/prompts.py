@@ -86,7 +86,6 @@ REVIEW_FIX_PROMPT = (
     "The {review} found these problems:\n\n{findings}\n\nFix each one that is a real problem, and commit the "
     "fixes with {key} as the commit scope. Give each one you leave as it is in `notes`, with the reason."
 )
-RESTART_PROMPT = "A previous run was interrupted. Check the diff against the ticket and continue."
 USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work."
 PR_PROMPT = (
     "/pr Write the body of the Epic pull request for the diff `{merge_base}..HEAD` to the file "
