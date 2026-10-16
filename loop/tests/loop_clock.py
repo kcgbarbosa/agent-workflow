@@ -9,12 +9,12 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import SupportsIndex
+from typing import SupportsFloat, SupportsIndex
 
 real_sleep = time.sleep
 
 
-def sleep(seconds: float | SupportsIndex) -> None:
+def sleep(seconds: SupportsFloat | SupportsIndex) -> None:
     if float(seconds) < 5:
         real_sleep(seconds)
         return
