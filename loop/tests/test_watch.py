@@ -6,18 +6,21 @@ import json
 import os
 import time
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from loop.cli import one_run
+import pytest
+
+from loop.report import plan_meter
 from loop.watch import (
     Watch,
-    active_run,
     epic_view,
-    plan_meter,
     queue,
     run_status,
+    running_epics,
     serve,
     ticket_health,
     verdict,
@@ -25,6 +28,28 @@ from loop.watch import (
 
 EPIC = "DEMO-1"
 TOKEN = "secret-token-value"
+BIN = Path(__file__).parent / "bin"
+
+
+@pytest.fixture(autouse=True)
+def units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The fake `systemctl`, over the units in the test's folder. No unit is loaded until a test adds one."""
+    monkeypatch.setenv("FAKE_CLAUDE_DIR", str(tmp_path))
+    monkeypatch.setenv("PATH", f"{BIN}:{os.environ['PATH']}")
+    (tmp_path / "units").mkdir()
+    return tmp_path / "units"
+
+
+@contextmanager
+def active(home: Path, epic_key: str) -> Iterator[None]:
+    """The project's run unit of the Epic is loaded while the block runs."""
+    name = home.name.removesuffix("-loop")
+    unit = Path(os.environ["FAKE_CLAUDE_DIR"], "units", f"loop-{name}-{epic_key}.service.json")
+    unit.write_text(json.dumps({"pid": None}))
+    try:
+        yield
+    finally:
+        unit.unlink()
 
 
 def write_lines(path: Path, lines: list[dict[str, Any]]) -> None:
@@ -88,14 +113,16 @@ def state_dir(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_the_page_puts_each_ticket_in_its_column_with_the_cost_of_the_run(tmp_path: Path) -> None:
+def test_the_page_puts_each_ticket_in_its_column_with_its_cost(tmp_path: Path) -> None:
     view = epic_view(state_dir(tmp_path), EPIC)
 
     columns = {ticket["key"]: ticket["column"] for ticket in view["tickets"]}
     assert columns == {"DEMO-2": "landed", "DEMO-3": "stuck", "DEMO-4": "waiting", "DEMO-5": "done"}
-    assert view["state"] == "idle" and view["summary"] == "The Loop"
+    # The latest run has no end line, so it was killed.
+    assert view["state"] == "stopped" and view["stop_reason"] == "killed" and view["summary"] == "The Loop"
     # Each session counts once, at its last cost, because a resumed session reports its whole cost so far.
-    assert view["cost"] == 7.5 and view["epic_cost"] == 7.5
+    costs = {ticket["key"]: ticket["cost"] for ticket in view["tickets"]}
+    assert (costs["DEMO-2"], costs["DEMO-3"]) == (5.5, 2.0)
     stuck = next(ticket for ticket in view["tickets"] if ticket["key"] == "DEMO-3")
     assert stuck["stuck_reason"] == "The merge gate failed. runs/DEMO-3/merge-gate-1.log"
     assert stuck["files"] == ["runs/DEMO-3/merge-gate-1.log"]
@@ -206,10 +233,15 @@ def test_the_page_serves_no_file_outside_the_run_folders(tmp_path: Path) -> None
         assert watch.handle(path)[0] == 404, path
 
 
-def test_the_page_knows_the_active_run_from_the_lock(tmp_path: Path) -> None:
-    with one_run(tmp_path, EPIC):
-        assert active_run(tmp_path) == EPIC
-    assert active_run(tmp_path) is None
+def test_the_page_knows_the_active_run_from_its_unit(tmp_path: Path, units: Path) -> None:
+    home = tmp_path / "demo-loop"
+    state_dir(home)
+    assert running_epics(home) == set()
+
+    (units / f"loop-demo-{EPIC}.service.json").write_text(json.dumps({"pid": None}))
+
+    assert running_epics(home) == {EPIC}
+    assert running_epics(tmp_path / "other-loop") == set()
 
 
 def test_loop_watch_serves_the_page_and_the_api(tmp_path: Path) -> None:
@@ -217,14 +249,14 @@ def test_loop_watch_serves_the_page_and_the_api(tmp_path: Path) -> None:
     port = servers[0].server_address[1]
     try:
         page = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
-        epics = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/epics").read())
+        home = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/home").read())
     finally:
         for server in servers:
             server.shutdown()
 
     assert "<title>My Loop</title>" in page
-    assert epics == [
-        {"key": EPIC, "summary": "The Loop", "updated": epics[0]["updated"], "running": False},
+    assert [(run["key"], run["summary"], run["running"]) for run in home[0]["runs"]] == [
+        (EPIC, "The Loop", False)
     ]
 
 
@@ -280,19 +312,10 @@ def test_the_page_derives_the_ticket_stats_and_the_plan_meter(tmp_path: Path) ->
 
     # A review session belongs to its ticket, not to a ticket of its own.
     assert sorted(ticket["key"] for ticket in view["tickets"]) == ["DEMO-2", "DEMO-3", "DEMO-4"]
-    assert view["stats"] == {
-        "landed": 2,
-        "total": 3,
-        "running": 0,
-        "stuck": 0,
-        "waiting": 1,
-        "first_pass_rate": 0.5,
-        "median_land_minutes": 40.0,
-    }
+    assert view["stats"] == {"landed": 2, "stuck": 0, "first_pass_rate": 0.5, "median_land_minutes": 40.0}
     plan = view["plan"]
     assert plan["used"] == {"five_hour": 35.0, "seven_day": 2.0}
     assert plan["per_landed"] == {"five_hour": 17.5, "seven_day": 1.0}
-    assert plan["now"]["five_hour"] == {"utilization": 0.45, "resets_at": resets, "past": False}
     # (100 - 45) / 17.5 and (100 - 52) / 1, rounded down.
     assert plan["fits"] == {"five_hour": 3, "seven_day": 48}
 
@@ -301,25 +324,26 @@ def test_a_meter_past_its_reset_gives_no_estimate(tmp_path: Path) -> None:
     resets = int(time.time()) - 3600
     plan = epic_view(stats_state(tmp_path, resets), EPIC)["plan"]
 
-    assert plan["now"]["five_hour"]["past"] and not plan["now"]["seven_day"]["past"]
     assert plan["fits"] == {"seven_day": 48}
 
 
-def test_a_running_ticket_shows_its_current_step_and_its_last_activity(tmp_path: Path) -> None:
+def test_a_running_ticket_shows_the_step_it_started_and_its_last_activity(tmp_path: Path) -> None:
     home = tmp_path / EPIC
     write_lines(
         home / "decisions.jsonl",
         [
             step(EPIC, "start", "ok", time=at(0)),
             step("DEMO-2", "start", "new", time=at(0)),
+            step("DEMO-2", "build", "started", time=at(1)),
             step("DEMO-3", "start", "new", time=at(0)),
-            step("DEMO-4", "start", "new", time=at(0)),
+            step("DEMO-3", "build", "started", time=at(1)),
             step("DEMO-3", "agent", "done", time=at(5)),
+            step("DEMO-3", "build", "pass", time=at(5)),
             step("DEMO-3", "push", "ok", time=at(5)),
-            step("DEMO-4", "agent", "done", time=at(5)),
-            gate("DEMO-4", "ticket", 1, "pass", 7, home),
-            step("DEMO-4-review", "agent", "done", time=at(9)),
+            step("DEMO-4", "start", "new", time=at(0)),
             step("DEMO-4", "code-review", "pass", time=at(9)),
+            step("DEMO-4", "ui-gate", "started", time=at(9)),
+            step("DEMO-4-ui", "meter", "read", time=at(10)),
         ],
     )
     tool = {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "ls", "description": "List"}}
@@ -328,26 +352,25 @@ def test_a_running_ticket_shows_its_current_step_and_its_last_activity(tmp_path:
         {"type": "assistant", "message": {"content": [{"type": "text", "text": "Reading the ticket."}]}},
         {"type": "assistant", "message": {"content": [tool]}},
     ]
-    for key in ("DEMO-2", "DEMO-4"):
-        log = home / "runs" / key / "agent-1.jsonl"
-        log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text("".join(json.dumps(event) + "\n" for event in events))
-    # The DEMO-4 log is newer than its last line, so an agent runs after the code review: the UI review.
-    os.utime(home / "runs" / "DEMO-4" / "agent-1.jsonl", (time.time(), time.time()))
+    log = home / "runs" / "DEMO-2" / "agent-1.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(json.dumps(event) + "\n" for event in events))
 
-    with one_run(tmp_path, EPIC):
+    with active(tmp_path, EPIC):
         view = epic_view(tmp_path, EPIC)
 
     tickets = {ticket["key"]: ticket for ticket in view["tickets"]}
     assert all(ticket["column"] == "running" for ticket in tickets.values())
-    assert tickets["DEMO-2"]["step"] == {"name": "agent", "since": at(0), "paused": False}
-    assert tickets["DEMO-3"]["step"] == {"name": "ticket-gate", "since": at(5), "paused": False}
-    assert tickets["DEMO-4"]["step"] == {"name": "ui-review", "since": at(9), "paused": False}
+    assert tickets["DEMO-2"]["step"] == {"name": "build", "since": at(1), "paused": False}
+    # Between two steps, the ticket waits for the integrator.
+    assert tickets["DEMO-3"]["step"] is None
+    assert tickets["DEMO-4"]["step"] == {"name": "ui-gate", "since": at(9), "paused": False}
     assert [item.get("summary") or item.get("text") for item in tickets["DEMO-2"]["recent"]] == [
         "Reading the ticket.",
         "List",
     ]
     assert tickets["DEMO-3"]["recent"] == []
+    assert "meter" not in [event["step"] for event in view["events"]]
 
 
 def test_the_overview_counts_complete_tickets_and_puts_a_ticket_behind_a_stuck_one_last(
@@ -384,16 +407,40 @@ def test_the_queue_takes_the_ready_tickets_first_and_each_waiting_one_after_its_
     ]
 
 
-def test_the_run_status_names_a_pause_a_finish_and_a_failure() -> None:
-    paused = {**ticket("DEMO-2", "running"), "step": {"name": "agent", "paused": True}}
-    working = {**ticket("DEMO-3", "running"), "step": {"name": "agent", "paused": False}}
+def test_a_ticket_whose_agent_met_a_usage_limit_waits_for_the_reset(tmp_path: Path) -> None:
+    resumes = datetime.fromtimestamp(time.time() + 600, UTC).isoformat(timespec="seconds")
+    lines = [
+        step(EPIC, "start", "ok", time=at(0)),
+        step("DEMO-2", "start", "new", time=at(0)),
+        step("DEMO-2", "build", "started", time=at(1)),
+        step("DEMO-2", "agent", "usage-limit", time=at(2)),
+        step("DEMO-2", "push", "ok", time=at(2)),
+        step("DEMO-2", "agent", "usage-pause", time=at(2), resumes=resumes),
+        step("DEMO-3", "start", "new", time=at(0)),
+        step("DEMO-3", "build", "started", time=at(1)),
+    ]
+    write_lines(tmp_path / EPIC / "decisions.jsonl", lines)
 
-    assert run_status("running", "", [paused]) == "paused"
-    assert run_status("running", "", [paused, working]) == "running"
+    with active(tmp_path, EPIC):
+        view = epic_view(tmp_path, EPIC)
+    stopped = epic_view(tmp_path, EPIC)
+
+    tickets = {ticket["key"]: ticket for ticket in view["tickets"]}
+    assert (view["status"], view["resumes"]) == ("paused", resumes)
+    assert tickets["DEMO-2"]["step"]["paused"] and tickets["DEMO-2"]["health"]["state"] == "blocked"
+    # The integrator waits, and a ticket that met no limit goes on with its step.
+    assert not tickets["DEMO-3"]["step"]["paused"]
+    # A run that is not active waits for nothing.
+    assert (stopped["status"], stopped["resumes"]) == ("stopped", None)
+
+
+def test_the_run_status_names_a_finish_and_a_failure() -> None:
+    assert run_status("running", "", [ticket("DEMO-2", "running")]) == "running"
     assert run_status("pr-open", "", [ticket("DEMO-2", "landed")]) == "completed"
     assert run_status("idle", "", [ticket("DEMO-2", "landed"), ticket("DEMO-3", "done")]) == "completed"
     assert run_status("stopped", "loop-error", [ticket("DEMO-2", "waiting")]) == "failed"
     assert run_status("stopped", "usage-limit", [ticket("DEMO-2", "waiting")]) == "stopped"
+    assert run_status("stopped", "killed", [ticket("DEMO-2", "stopped")]) == "stopped"
     assert run_status("idle", "", [ticket("DEMO-2", "waiting")]) == "idle"
 
 
@@ -403,7 +450,7 @@ def test_a_running_ticket_needs_attention_only_for_a_reason_it_names() -> None:
     def ago(minutes: int) -> str:
         return datetime.fromtimestamp(now - minutes * 60, UTC).isoformat(timespec="seconds")
 
-    agent = {"name": "agent", "since": ago(40), "paused": False}
+    agent = {"name": "build", "since": ago(40), "paused": False}
     assert ticket_health(agent, ago(2), 0) == {"state": "on-track", "reason": ""}
     assert ticket_health(agent, ago(20), 0)["state"] == "attention"
     # A gate runs no agent, so a quiet log says nothing then.
@@ -422,26 +469,26 @@ def test_a_screenshot_counts_as_reviewed_only_when_a_ui_review_line_follows_it()
     assert verdict({"result": "pass", "time": at(5)}, shots) == "unreviewed"
     assert verdict({"result": "pass", "time": at(12)}, shots) == "passed"
     assert verdict({"result": "fail", "time": at(12)}, shots) == "faults"
+    assert verdict({"result": "open", "time": at(12)}, shots) == "unfixed"
+    # An older log names the result `unfixed`.
     assert verdict({"result": "unfixed", "time": at(12)}, shots) == "unfixed"
 
 
 def test_the_plan_meter_is_the_newest_reading_on_the_host_and_never_the_cost(tmp_path: Path) -> None:
     resets = int(time.time()) + 3600
     home = stats_state(tmp_path, resets) / EPIC
-    # The finished agent lines end at 45% of the five-hour window. The running agent has read 61% since.
-    event = {
-        "type": "rate_limit_event",
-        "rate_limit_info": {"unifiedWindows": {"five_hour": {"utilization": 0.61, "resetsAt": resets}}},
-    }
-    log = home / "runs" / "DEMO-4" / "agent-1.jsonl"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text(json.dumps(event) + "\n" + json.dumps({"type": "result", "total_cost_usd": 9.0}) + "\n")
-
     assert plan_meter(tmp_path)["five_hour"]["utilization"] == 0.45
-    with one_run(tmp_path, EPIC):
-        meter = plan_meter(tmp_path)
+    # The running agent logged a newer reading of the five-hour window. Its cost does not count.
+    reading = {"five_hour": {"utilization": 0.61, "resets_at": resets}}
+    with (home / "decisions.jsonl").open("a") as log:
+        log.write(json.dumps(step("DEMO-4", "meter", "read", time=at(51), meter=reading)) + "\n")
+        log.write(
+            json.dumps(step("DEMO-4", "agent", "done", time=at(52), usage={"total_cost_usd": 9.0})) + "\n"
+        )
 
-    assert meter["five_hour"]["utilization"] == 0.61 and not meter["five_hour"]["past"]
+    meter = plan_meter(tmp_path)
+
+    assert meter["five_hour"] == {"utilization": 0.61, "resets_at": resets, "read": at(51), "past": False}
     assert meter["seven_day"] == {
         "utilization": 0.52,
         "resets_at": resets + 86400,
@@ -460,14 +507,15 @@ def test_one_page_serves_each_project_on_the_host(tmp_path: Path) -> None:
     (tmp_path / "other-loop" / "secrets.json").write_text(json.dumps({"OTHER_TOKEN": "other-secret-value"}))
     watch = Watch(ours)
 
-    projects = json.loads(watch.handle("/api/projects")[2])
-    epics = json.loads(watch.handle("/api/epics?project=other")[2])
+    home = json.loads(watch.handle("/api/home")[2])
 
-    assert projects == [{"name": "demo", "running": None}, {"name": "other", "running": None}]
-    assert [epic["key"] for epic in epics] == ["OTHER-1"]
-    assert [epic["key"] for epic in json.loads(watch.handle("/api/epics")[2])] == [EPIC]
+    assert [(project["name"], [run["key"] for run in project["runs"]]) for project in home] == [
+        ("demo", [EPIC]),
+        ("other", ["OTHER-1"]),
+    ]
+    assert json.loads(watch.handle("/api/epic/OTHER-1?project=other")[2])["key"] == "OTHER-1"
     assert watch.handle("/files/OTHER-1/runs/OTHER-2/gate.log?project=other")[2] == b"[OTHER_TOKEN]\n"
-    assert watch.handle("/api/epics?project=none")[0] == 404
+    assert watch.handle(f"/api/epic/{EPIC}?project=none")[0] == 404
 
 
 def test_the_home_page_lists_the_runs_of_each_project_with_the_running_one_first(tmp_path: Path) -> None:
@@ -477,7 +525,11 @@ def test_the_home_page_lists_the_runs_of_each_project_with_the_running_one_first
     write_lines(theirs / "OTHER-1" / "decisions.jsonl", [step("OTHER-1", "start", "ok")])
     write_lines(
         theirs / "OTHER-2" / "decisions.jsonl",
-        [step("OTHER-2", "start", "ok"), step("OTHER-3", "start", "new"), step("OTHER-3", "agent", "done")],
+        [
+            step("OTHER-2", "start", "ok"),
+            step("OTHER-3", "start", "new"),
+            step("OTHER-3", "ticket-gate", "started"),
+        ],
     )
     later = time.time() + 60
     os.utime(theirs / "OTHER-1" / "decisions.jsonl", (later, later))
@@ -485,11 +537,10 @@ def test_the_home_page_lists_the_runs_of_each_project_with_the_running_one_first
         json.dumps({"summary": "Other", "tickets": [{"key": "OTHER-3"}, {"key": "OTHER-4"}]})
     )
 
-    with one_run(theirs, "OTHER-2"):
+    with active(theirs, "OTHER-2"):
         home = json.loads(Watch(ours).handle("/api/home")[2])
 
-    names = [(project["name"], project["running"]) for project in home]
-    assert names == [("demo", None), ("other", "OTHER-2")]
+    assert [project["name"] for project in home] == ["demo", "other"]
     assert home[0]["runs"][0] | {"updated": None} == {
         "key": EPIC,
         "summary": "The Loop",
@@ -499,7 +550,6 @@ def test_the_home_page_lists_the_runs_of_each_project_with_the_running_one_first
         "progress": {"complete": 2, "total": 4},
         "stuck": 1,
         "working": [],
-        "pr_url": "",
     }
     # OTHER-1 changed last, and the running run still comes first.
     assert [run["key"] for run in home[1]["runs"]] == ["OTHER-2", "OTHER-1"]

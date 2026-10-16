@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""A fake `tailscale` for the loop tests. `status --json` names this host on the tailnet: its addresses and its
+MagicDNS name, as conftest.py's TAILNET and MAGIC_DNS.
+"""
+
+import json
+import sys
+
+if sys.argv[1:] == ["status", "--json"]:
+    self = {"DNSName": "t14.tail0000.ts.net.", "TailscaleIPs": ["100.64.0.7", "fd7a:115c:a1e0::7"]}
+    print(json.dumps({"Self": self}))
+else:
+    sys.exit(f"the fake tailscale does not know: {sys.argv[1:]}")

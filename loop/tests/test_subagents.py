@@ -22,10 +22,12 @@ def test_each_tier_has_a_description_a_prompt_a_model_an_effort_and_its_tools() 
         # A full model ID, because what an alias names moves with the CLI version.
         assert tier["model"].startswith("claude-"), name
         assert tier["effort"] in EFFORTS, name
-        assert tier["tools"] and all(isinstance(tool, str) for tool in tier["tools"]), name
+        assert all(tool.strip() for tool in tier["tools"].split(",")), name
         # Context grows each turn, and a cheap model's prompt past its short-prompt rate costs more.
-        assert isinstance(tier["maxTurns"], int) and tier["maxTurns"] > 0, name
-    read_only = {*found["runner"]["tools"], *found["scout"]["tools"], *found["reader"]["tools"]}
+        assert int(tier["maxTurns"]) > 0, name
+    read_only = {
+        tool.strip() for name in ("runner", "scout", "reader") for tool in found[name]["tools"].split(",")
+    }
     assert not {"Edit", "Write"} & read_only
 
 

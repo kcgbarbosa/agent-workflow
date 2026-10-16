@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -11,7 +10,8 @@ import pytest
 from conftest import write_config
 
 from loop import cli, config, watch
-from loop.cli import SECRETS_FILE, Refused, main, read_secrets
+from loop.cli import Refused, main, read_secrets
+from loop.config import SECRETS_FILE
 
 
 def test_the_loop_refuses_to_run_when_a_prerequisite_is_missing(
@@ -25,7 +25,7 @@ def test_the_loop_refuses_to_run_when_a_prerequisite_is_missing(
     error = capsys.readouterr().err
     assert "The loop refuses to run" in error
     # The engine's tools, the repo's tools, and Docker for the stack.
-    assert all(tool in error for tool in ("claude", "bw", "make", "docker"))
+    assert all(tool in error for tool in ("claude", "systemd-inhibit", "make", "docker"))
 
 
 def test_the_loop_needs_an_epic_key(capsys: pytest.CaptureFixture[str]) -> None:
@@ -33,23 +33,28 @@ def test_the_loop_needs_an_epic_key(capsys: pytest.CaptureFixture[str]) -> None:
     assert "Usage" in capsys.readouterr().err
 
 
-def test_the_secrets_come_from_bitwarden_and_a_missing_one_refuses_the_run(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_a_run_reads_the_secrets_from_the_secrets_file_only(tmp_path: Path) -> None:
+    write_config(tmp_path)
+    settings = config.load(tmp_path, state_dir=tmp_path)
+
+    with pytest.raises(Refused, match="no secrets file.*loop secrets"):
+        read_secrets(settings)
+
+
+def test_loop_secrets_refuses_a_vault_without_a_secret_of_the_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     write_config(tmp_path)
-    settings = config.load(tmp_path)
     fake_bw = tmp_path / "bw"
-    fake_bw.write_text('#!/bin/sh\nif [ "$3" = demo-ntfy-topic ]; then exit 1; fi\necho "value-of-$2-$3"\n')
+    fake_bw.write_text(
+        '#!/bin/sh\nif [ "$1" = status ]; then echo \'{"status": "unlocked"}\'; exit 0; fi\n'
+        'if [ "$3" = demo-ntfy-topic ]; then exit 1; fi\necho "value-of-$2-$3"\n'
+    )
     fake_bw.chmod(0o755)
     monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
 
-    with pytest.raises(Refused, match="demo-ntfy-topic"):
-        read_secrets(settings)
-
-    fake_bw.write_text('#!/bin/sh\necho "value-of-$2-$3"\n')
-    secrets = read_secrets(settings)
-    assert secrets["JIRA_EMAIL"] == "value-of-username-demo-jira"
-    assert secrets["JIRA_API_TOKEN"] == "value-of-password-demo-jira"
+    assert main(["secrets", "--repo", str(tmp_path)]) == 2
+    assert "demo-ntfy-topic" in capsys.readouterr().err
 
 
 def test_loop_secrets_copies_the_secrets_so_a_run_needs_no_unlock(
@@ -118,12 +123,12 @@ def test_the_head_agent_runs_on_the_agent_table_or_the_defaults(tmp_path: Path) 
     assert (settings.agent_model, settings.agent_effort) == ("claude-sonnet-5-5", "medium")
 
 
-def test_the_context_window_defaults_to_200k_and_the_agent_table_sets_it(tmp_path: Path) -> None:
+def test_parallel_defaults_to_one_ticket_at_a_time(tmp_path: Path) -> None:
     write_config(tmp_path)
-    assert config.load(tmp_path).agent_context_tokens == 200_000
+    text = (tmp_path / config.FILE).read_text()
+    (tmp_path / config.FILE).write_text(text.replace("parallel = 2\n", ""))
 
-    write_config(tmp_path, extra="\n[agent]\ncontext_tokens = 150000\n")
-    assert config.load(tmp_path).agent_context_tokens == 150_000
+    assert config.load(tmp_path).parallel == 1
 
 
 def test_a_repo_without_a_stack_gets_no_stack_env(tmp_path: Path) -> None:
@@ -190,41 +195,12 @@ def test_a_missing_config_names_the_skill_that_writes_it(tmp_path: Path) -> None
         config.load(tmp_path)
 
 
-def test_loop_start_names_the_tailnet_address_of_the_watch_page(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    write_config(tmp_path)
-    settings = config.load(tmp_path)
-    monkeypatch.setattr(cli, "watch_answers", lambda port: True)
+def test_loop_start_names_the_tailnet_address_of_the_watch_page(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DISPLAY", "")
     monkeypatch.setenv("WAYLAND_DISPLAY", "")
 
     monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1", "100.64.0.7"])
-    assert cli.open_watch(settings, "DEMO-33") == "http://100.64.0.7:8790/#/demo/DEMO-33"
+    assert cli.open_watch("demo", "DEMO-33") == "http://100.64.0.7:8790/#/demo/DEMO-33"
 
     monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1"])
-    assert cli.open_watch(settings, "DEMO-33") == "http://127.0.0.1:8790/#/demo/DEMO-33"
-
-
-def test_loop_watch_restarts_once_its_new_code_holds_still() -> None:
-    stamps = iter(["old", "old", "pulling", "new", "new", "newer"])
-    checks: list[float] = []
-
-    cli.wait_for_new_code(lambda: next(stamps), checks.append)
-
-    # It waits out the pull that is still writing, and restarts on the code the pull left.
-    assert len(checks) == 4
-
-
-def test_the_code_stamp_changes_when_a_file_of_the_loop_changes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (tmp_path / "cli.py").write_text("")
-    (tmp_path / "watch.py").write_text("")
-    monkeypatch.setattr(cli, "__file__", str(tmp_path / "cli.py"))
-    before = cli.code_stamp()
-
-    os.utime(tmp_path / "watch.py", ns=(1, 1))
-
-    assert [name for name, _ in before] == ["cli.py", "watch.py"]
-    assert cli.code_stamp() != before
+    assert cli.open_watch("demo", "DEMO-33") == "http://127.0.0.1:8790/#/demo/DEMO-33"

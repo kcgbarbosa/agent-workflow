@@ -269,12 +269,24 @@ details.forecast > summary h2::before { content: "▸ "; color: var(--text-muted
 details.forecast[open] > summary { padding-bottom: 0; }
 details.forecast[open] > summary h2::before { content: "▾ "; }
 .forecast h3 { margin: 24px 0 8px; font-size: 14px; font-weight: 500; color: var(--text-muted); }
-.forecast .sync { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; color: var(--text-muted); font-size: 13px; }
-.forecast .sync.warn { color: var(--warn); }
-.forecast ul.plain { margin: 6px 0 0; padding-left: 18px; }
 .forecast .scroll { overflow-x: auto; }
 .forecast .scroll td:first-child { min-width: 150px; }
 @media (max-width: 1023px) { details.forecast > summary { padding-bottom: 16px; } }
+
+/* --- Start and Stop --- */
+/* The bar holds the button from 1024 px. A phone has no room beside the menus, so the large title holds it. */
+.run .btn { min-height: 32px; padding: 0 14px; }
+.pagehead { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.pagehead h1 { min-width: 0; }
+.pagehead .btn { flex: none; margin-bottom: 2px; }
+@media (min-width: 1024px) { .pagehead .btn { display: none; } }
+@media (max-width: 1023px) { .run .btn { display: none; } }
+dialog.start { width: min(440px, calc(100vw - 32px)); max-height: min(560px, calc(100dvh - 64px)); padding: 0; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); color: var(--text); box-shadow: var(--shadow-md); }
+dialog.start::backdrop { background: rgba(27, 27, 25, 0.3); }
+dialog.start:focus-visible { outline: none; }
+dialog.start .pbody { display: grid; gap: 12px; }
+dialog.start .actions { display: flex; justify-content: flex-end; }
+.note .btn { margin-top: 12px; }
 
 /* --- Screenshot viewer --- */
 .viewer { position: fixed; inset: 0; z-index: 20; background: var(--ground); display: flex; flex-direction: column; }
@@ -313,6 +325,7 @@ details.forecast[open] > summary h2::before { content: "▾ "; }
 </header>
 <main class="wrap" id="main"></main>
 <div class="viewer" id="viewer" hidden></div>
+<dialog class="start" id="start" aria-label="Start a run"></dialog>
 <script>
 "use strict";
 const POLL_MS = 3000;
@@ -333,21 +346,24 @@ const ICONS = {
     "M240,152v24a16,16,0,0,1-16,16H115.93a4,4,0,0,1-3.24-6.35L174.27,101a8.21,8.21,0,0,0-1.37-11.3,8,8,0,0,0-11.37,1.61l-72,99.06A4,4,0,0,1,86.25,192H32a16,16,0,0,1-16-16V153.13c0-1.79,0-3.57.13-5.33a4,4,0,0,1,4-3.8H48a8,8,0,0,0,8-8.53A8.17,8.17,0,0,0,47.73,128H23.92a4,4,0,0,1-3.87-5c12-43.84,49.66-77.13,95.52-82.28a4,4,0,0,1,4.43,4V72a8,8,0,0,0,8.53,8A8.17,8.17,0,0,0,136,71.73V44.67a4,4,0,0,1,4.43-4A112.18,112.18,0,0,1,236.23,123a4,4,0,0,1-3.88,5H208.27a8.17,8.17,0,0,0-8.25,7.47,8,8,0,0,0,8,8.53h27.92a4,4,0,0,1,4,3.86C240,149.23,240,150.61,240,152Z"],
 };
 const VIEWS = [["", "Overview"], ["tickets", "Tickets"], ["diagnostics", "Diagnostics"], ["usage", "Usage"]];
-const STEPS = [["agent", "Implementation"], ["ticket-gate", "Ticket gate"], ["code-review", "Code review"], ["ui-review", "UI review"], ["land", "Landing"]];
+const STEPS = [["build", "Implementation"], ["ticket-gate", "Ticket gate"], ["code-review", "Code review"], ["ui-gate", "UI review"], ["land", "Landing"]];
 const STATUS = { running: ["Running", "run"], paused: ["Paused", "warn"], completed: ["Completed", "ok"], failed: ["Failed", "bad"], blocked: ["Blocked", "bad"], stopped: ["Stopped", "warn"], idle: ["Idle", ""] };
 const HEALTH = { "on-track": ["On track", "ok"], attention: ["Needs attention", "warn"], blocked: ["Blocked", "bad"] };
-const COLUMN = { landed: ["Landed", "ok"], running: ["Running", "run"], stuck: ["Stuck", "bad"], waiting: ["Up next", ""], done: ["Done before this run", "ok"] };
+const COLUMN = { landed: ["Landed", "ok"], running: ["Running", "run"], stopped: ["Stopped", "warn"], stuck: ["Stuck", "bad"], waiting: ["Up next", ""], done: ["Done before this run", "ok"] };
 const QUEUE = { ready: ["Ready", "plain"], waiting: ["Waiting", ""], blocked: ["Blocked", "bad"] };
 const VERDICT = {
   passed: ["UI review passed", "ok"], unfixed: ["Passed with faults left unfixed", "warn"],
   faults: ["UI review found faults", "bad"], unreviewed: ["Not reviewed yet", ""],
 };
-const RESULT = { pass: "ok", landed: "ok", ok: "ok", done: "ok", "pr-open": "ok", fail: "bad", stuck: "bad", error: "bad", "loop-error": "bad", conflict: "bad", timeout: "bad", findings: "warn", "usage-pause": "warn", unfixed: "warn", restart: "warn" };
+const RESULT = { pass: "ok", landed: "ok", ok: "ok", done: "ok", "pr-open": "ok", fail: "bad", stuck: "bad", error: "bad", "loop-error": "bad", conflict: "bad", timeout: "bad", findings: "warn", "usage-pause": "warn", open: "warn", unfixed: "warn", restart: "warn" };
 const STOPPED = {
   "circuit-breaker": "The run stopped after stuck tickets in a row (the circuit breaker).",
   "usage-limit": "The run stopped at a usage limit that resets too late to wait for.",
   "nothing-landed": "The run ended with nothing landed.",
   "loop-error": "The loop itself failed.",
+  stopped: "loop stop stopped the run. loop start goes on with the same tickets.",
+  killed: "The run was killed. loop start goes on with the same tickets, at the step each one stopped in.",
+  "base-missing": "The base branch of the Epic is not on origin.",
 };
 const WINDOWS = [["five_hour", "5-hour usage", "5-hour window"], ["seven_day", "Weekly usage", "weekly window"]];
 const QUEUE_SHOWN = 3;
@@ -356,8 +372,10 @@ const RUNS_SHOWN = 5;
 const ui = {
   project: null, epic: null, page: "", ticket: null, tab: null, agent: null, follow: true, version: null, drawn: null,
   projects: [], epics: [], view: null, usage: {}, feed: null, report: null, reportWrap: null, viewer: null,
-  forecast: null, forecastWrap: null, forecastOpen: false, home: [], homeOpen: new Set(),
+  forecast: null, forecastWrap: null, forecastOpen: false, home: [], homeOpen: new Set(), busy: null,
 };
+// How long a started run may take to write its first line, after its checks of the host.
+const START_WAIT_MS = 60000;
 
 // --- Helpers ---
 function h(tag, props, ...children) {
@@ -466,17 +484,19 @@ async function route() {
 async function refresh() {
   if (ui.page === "home") return refreshHome();
   let projects;
-  try { [projects, ui.usage] = await Promise.all([getJson("/api/projects"), getJson("/api/usage")]); } catch { return; }
+  try { [projects, ui.usage] = await Promise.all([getJson("/api/home"), getJson("/api/usage")]); } catch { return; }
   ui.projects = projects;
   if (!ui.project) { go("", projects[0].name, ui.epic); return; }
-  if (!projects.some((p) => p.name === ui.project)) { go("", null, null); return; }
-  try { ui.epics = await getJson(api("/api/epics")); } catch { return; }
+  const project = projects.find((p) => p.name === ui.project);
+  if (!project) { go("", null, null); return; }
+  ui.epics = project.runs;
   renderContext();
   if (!ui.epics.length) {
     ui.view = null;
     document.getElementById("run").replaceChildren();
     document.getElementById("views").replaceChildren();
-    document.getElementById("main").replaceChildren(h("div", { class: "panel empty" }, "No runs of this project on this host yet. ", h("code", {}, "loop start <Epic key>"), " starts one."));
+    document.getElementById("main").replaceChildren(h("div", { class: "panel empty" }, "No runs of this project on this host yet. ", h("code", {}, "loop start <Epic key>"), " starts one.",
+      project.control ? h("div", {}, h("button", { class: "btn primary", onclick: openStart, disabled: !!ui.busy }, ui.busy === "start" ? "Starting..." : "Start")) : ""));
     return;
   }
   if (!ui.epic || !ui.epics.some((e) => e.key === ui.epic)) {
@@ -487,7 +507,7 @@ async function refresh() {
   try { ui.view = await getJson(api(`/api/epic/${ui.epic}`)); } catch { return; }
   if (ui.page === "usage") loadReport();
   if (ui.page === "usage" && ui.forecastOpen) loadForecast();
-  const drawn = JSON.stringify([ui.view, ui.usage, ui.page, ui.ticket, Math.floor(Date.now() / AGE_MS)]);
+  const drawn = JSON.stringify([ui.view, ui.usage, ui.page, ui.ticket, ui.busy, Math.floor(Date.now() / AGE_MS)]);
   if (drawn !== ui.drawn) { ui.drawn = drawn; render(); }
   else if (ui.feed && ui.feed.live) pollFeed();
 }
@@ -583,7 +603,7 @@ function render() {
 }
 
 function pageHead(title) {
-  return h("div", { class: "pagehead" }, h("h1", { id: "title" }, title));
+  return h("div", { class: "pagehead" }, h("h1", { id: "title" }, title), ui.view ? controlButton(ui.view) : "");
 }
 
 // The large title shrinks into the bar once it scrolls away.
@@ -599,20 +619,75 @@ function watchTitle() {
   titleWatch.observe(title);
 }
 
-function pauseUntil(v) {
-  const pause = v.events.slice().reverse().find((e) => e.result === "usage-pause");
-  const match = pause && /resets at (\S+?)\.?$/.exec(pause.detail || "");
-  return match ? new Date(match[1]).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
-}
-
 function renderRun(v) {
   const last = v.events[v.events.length - 1];
-  const until = v.status === "paused" ? pauseUntil(v) : null;
+  const until = v.resumes ? new Date(v.resumes).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : null;
   const [label, tone] = STATUS[v.status] || [v.status, ""];
   document.getElementById("run").replaceChildren(
     last ? h("span", { class: "last", title: `${last.ticket} ${last.step} ${last.result}` }, `Last step ${ago(last.time)}`) : "",
     v.pr_url ? h("a", { class: "pr", href: v.pr_url, target: "_blank", rel: "noopener" }, v.state === "pr-draft" ? "Draft PR" : "Epic PR") : "",
-    h("span", { title: v.stop_reason || "" }, tile([until ? `${label} until ${until}` : label, tone], true)));
+    h("span", { title: v.stop_reason || "" }, tile([until ? `${label} until ${until}` : label, tone], true)),
+    controlButton(v));
+}
+
+// --- Start and Stop: only for the project whose loop.toml started this page, one run at a time ---
+function controlButton(v) {
+  const project = ui.projects.find((p) => p.name === ui.project);
+  if (!project || !project.control) return "";
+  if (v.status === "running" || v.status === "paused") {
+    return h("button", { class: "btn", onclick: () => stopRun(v.key), disabled: !!ui.busy }, ui.busy === "stop" ? "Stopping..." : "Stop");
+  }
+  if (ui.epics.some((e) => e.running)) return "";
+  return h("button", { class: "btn primary", onclick: openStart, disabled: !!ui.busy }, ui.busy === "start" ? "Starting..." : "Start");
+}
+
+async function openStart() {
+  const dialog = document.getElementById("start");
+  const body = h("div", { class: "pbody" }, h("div", { class: "muted" }, "Reading the open Epics from Jira..."));
+  dialog.replaceChildren(h("div", { class: "phead" }, h("h2", {}, `Start a run of ${ui.project}`)), body);
+  dialog.showModal();
+  let data;
+  try { data = await getJson("/api/start"); } catch (e) { data = { epics: [], error: e.message }; }
+  const rows = data.epics.map((e) => h("li", {}, h("button", { onclick: () => startRun(e.key) },
+    h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, e.key), " ", e.summary)),
+    ui.epics.some((r) => r.key === e.key) ? h("span", { class: "muted" }, "Ran before") : "")));
+  body.replaceChildren(
+    data.error ? h("div", { class: "why" }, data.error) : rows.length ? h("ul", { class: "list epics" }, rows) : h("div", { class: "muted" }, "Jira has no open Epic in the projects that ran on this host."),
+    h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => dialog.close() }, "Cancel")));
+}
+
+async function post(path) {
+  const res = await fetch(path, { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+async function busy(what, work) {
+  ui.busy = what;
+  if (ui.view) render(); else refresh();
+  try { await work(); } catch (e) { alert(e.message); } finally { ui.busy = null; ui.drawn = null; refresh(); }
+}
+
+function startRun(key) {
+  document.getElementById("start").close();
+  return busy("start", async () => {
+    await post(`/api/start/${key}`);
+    // The Epic has a view once the run writes its first line, after its checks of the host.
+    const until = Date.now() + START_WAIT_MS;
+    while (Date.now() < until) {
+      const home = await getJson("/api/home").catch(() => []);
+      const project = home.find((p) => p.name === ui.project);
+      if (project && project.runs.some((r) => r.key === key && r.running)) { go("", ui.project, key); return; }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new Error(`The run of ${key} started, but wrote nothing in a minute. Its journal says why: journalctl --user -u loop-${ui.project}-${key}`);
+  });
+}
+
+function stopRun(key) {
+  if (!confirm(`Stop the run of ${key}? Start goes on with the same tickets.`)) return;
+  return busy("stop", () => post(`/api/stop/${key}`));
 }
 
 // --- Overview: the figures ---
@@ -651,9 +726,11 @@ function usageCard(label, reading) {
 // --- Overview: the work queue ---
 function workQueue(v) {
   const working = v.tickets.filter((t) => t.column === "running");
+  const stopped = v.tickets.filter((t) => t.column === "stopped");
   const stuck = v.tickets.filter((t) => t.column === "stuck");
   const byKey = Object.fromEntries(v.tickets.map((t) => [t.key, t]));
   const groups = [h("div", { class: "group" }, h("h3", {}, "Currently working"), working.length ? working.map(currentCard) : stateNote(v))];
+  if (stopped.length) groups.push(h("div", { class: "group" }, h("h3", {}, "Stopped mid-step"), stopped.map(currentCard)));
   if (stuck.length) {
     groups.push(h("div", { class: "group" }, h("h3", {}, "Needs you"), h("ul", { class: "list" }, stuck.map((t) =>
       h("li", {}, h("button", { onclick: () => go(t.key) }, h("span", { class: "n" }, ""),
@@ -682,16 +759,17 @@ function stepper(step) {
 }
 
 function currentCard(t) {
-  const step = t.step || { name: "agent", since: null, paused: false };
+  const step = t.step || { name: null, since: null, paused: false };
   const health = t.health || { state: "on-track", reason: "" };
+  const state = t.column === "stopped" ? COLUMN.stopped : step.paused ? ["Paused", "warn"] : HEALTH[health.state];
   const latest = (t.recent || [])[t.recent.length - 1];
   const output = t.agents.length ? t.agents[t.agents.length - 1].updated : null;
   return h("button", { class: "current", onclick: () => go(t.key) },
-    h("div", { class: "top" }, h("span", { class: "key" }, t.key), tile(step.paused ? ["Paused", "warn"] : HEALTH[health.state], true)),
+    h("div", { class: "top" }, h("span", { class: "key" }, t.key), tile(state, true)),
     h("div", { class: "title" }, t.summary || ""),
     stepper(step),
     h("dl", { class: "facts" },
-      h("dt", {}, "Stage"), h("dd", {}, `${stepName(step.name)}${step.since ? ` · ${since(step.since)}` : ""}`),
+      h("dt", {}, t.column === "stopped" ? "Stopped in" : "Stage"), h("dd", {}, step.name ? `${stepName(step.name)}${step.since ? ` · ${since(step.since)}` : ""}` : "Between steps"),
       h("dt", {}, "Latest activity"), h("dd", { title: latest ? latest.summary || latest.text : "" },
         latest ? [latest.kind === "tool" ? h("span", { class: "toolname" }, latest.tool) : "", latest.summary || latest.text] : h("span", { class: "muted" }, "No agent output yet")),
       h("dt", {}, "Last agent output"), h("dd", {}, output ? ago(output) : "-")),
@@ -805,7 +883,7 @@ function ticketState(v, t) {
 function ticketList(v) {
   const rows = v.tickets.map((t) => {
     const open = (t.blockers || []).filter((b) => !b.done).map((b) => b.key);
-    const where = t.column === "running" && t.step ? `${stepName(t.step.name)} · ${since(t.step.since)}` : t.last ? lastStep(t.last) : "";
+    const where = t.step ? `${t.column === "stopped" ? "Stopped in " : ""}${stepName(t.step.name)} · ${since(t.step.since)}` : t.last ? lastStep(t.last) : "";
     return h("tr", { onclick: () => go(t.key) },
       h("td", { class: "t" }, h("span", { class: "key" }, t.key), t.summary || ""),
       h("td", {}, ticketState(v, t)),
@@ -829,7 +907,7 @@ function renderTicket(v) {
   const facts = [
     ["Tracker status", t.status || "-"],
     ["Depends on", blockers.length ? blockers : "None"],
-    t.step ? ["Stage", `${stepName(t.step.name)} · ${since(t.step.since)}${t.step.paused ? " · paused" : ""}`] : null,
+    t.step ? [t.column === "stopped" ? "Stopped in" : "Stage", `${stepName(t.step.name)} · ${since(t.step.since)}${t.step.paused ? " · paused" : ""}`] : null,
     t.last ? ["Last step", `${lastStep(t.last)} · ${ago(t.last.time)}`] : null,
     ["Ticket gate", t.gate_failures ? `Failed ${t.gate_failures === 1 ? "once" : `${t.gate_failures} times`} since its last pass` : t.column === "landed" ? "Passed" : "No failure in this run"],
     t.verdict ? ["UI review", (VERDICT[t.verdict] || VERDICT.unreviewed)[0]] : null,
@@ -959,30 +1037,10 @@ function loadForecast(now) {
   });
 }
 
-async function refreshBacklog(button) {
-  button.disabled = true;
-  button.textContent = "Reading Jira...";
-  try { await fetch("/api/forecast/refresh", { method: "POST" }); } catch { /* The status line says what happened. */ }
-  setTimeout(() => loadForecast(true), 3000);
-}
-
 const num = (n, digits = 1) => (typeof n === "number" ? n.toFixed(digits).replace(/\.0+$/, "") : "-");
-const range = (s, unit = "%") => (s && typeof s.per_ticket === "number"
-  ? `${num(s.per_ticket)}${unit}${typeof s.low === "number" && s.low !== s.high ? ` (${num(s.low)} to ${num(s.high)})` : ""}` : "-");
+const share = (n) => (typeof n === "number" ? `${num(n)}%` : "-");
 const day = (iso) => (iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" }) : "");
-
-function syncLine(f) {
-  const s = f.sync;
-  const button = h("button", { class: "btn", onclick: (e) => refreshBacklog(e.currentTarget), disabled: s && s.syncing }, s && s.syncing ? "Reading Jira..." : "Refresh from Jira");
-  if (!s) return h("div", { class: "sync" }, "No Jira snapshot.");
-  let text;
-  if (s.error && s.synced) text = `Jira did not answer ${ago(s.error_at)}: ${s.error} The open Epics are from ${when(s.synced)}.`;
-  else if (s.error) text = `Jira did not answer: ${s.error}`;
-  else if (s.synced) text = `Jira read ${ago(s.synced)}. It is read again every ${plural(s.interval_minutes, "minute", "minutes")}.`;
-  else text = "Reading Jira for the first time.";
-  const warn = s.error || (s.synced && s.stale);
-  return h("div", { class: `sync${warn ? " warn" : ""}` }, h("span", {}, text, s.stale && s.synced && !s.error ? " The snapshot is stale." : ""), button);
-}
+const about = (n, digits = 1) => (typeof n === "number" ? `About ${num(n, digits)}` : "-");
 
 function fillForecast() {
   const wrap = ui.forecastWrap;
@@ -991,66 +1049,39 @@ function fillForecast() {
   if (f === undefined) { wrap.replaceChildren(h("div", { class: "empty" }, "Loading...")); return; }
   if (!f) { wrap.replaceChildren(h("div", { class: "empty" }, "This page has no forecast. Start it with loop watch from the repo.")); return; }
   const plan = f.plan ? f.plan.name : "the plan";
-  const e = f.estimate;
   const c = f.capacity;
-  const b = f.backlog;
-  const parts = [h("div", { class: "note" }, h("b", {}, f.verdict.says),
-    f.verdict.collect.length ? h("ul", { class: "plain" }, f.verdict.collect.map((x) => h("li", {}, x))) : "")];
-  parts.push(syncLine(f));
+  const o = f.open;
+  const parts = [];
+  const table = (head, rows) => h("div", { class: "scroll" }, h("table", { class: "steps cost" }, h("tbody", {},
+    h("tr", { class: "sec" }, head.map((x, i) => h("td", { class: i ? "n" : "" }, x))), rows)));
 
   // The open work, by Epic.
   parts.push(h("h3", {}, `Open work${f.project ? ` in ${f.project}` : ""}`));
-  if (!b) parts.push(h("div", { class: "muted" }, "No Jira snapshot yet."));
-  else if (!b.epics.length) parts.push(h("div", { class: "muted" }, "No open Epic has tickets in Jira."));
+  if (f.jira && f.jira.error) parts.push(h("div", { class: "why" }, `Jira did not answer: ${f.jira.error}`));
+  else if (!o || !o.epics.length) parts.push(h("div", { class: "muted" }, "Jira has no open Epic."));
   else {
-    const need = (n) => [range(n.five_hour), range(n.seven_day)];
-    const rows = b.epics.map((x) => h("tr", {},
-      h("td", {}, h("span", { class: "key" }, x.key), " ", x.summary),
-      h("td", { class: "n" }, `${x.left} of ${x.total}`),
-      h("td", { class: "n" }, `${x.ready}`),
-      ...need(x.need).map((v) => h("td", { class: "n" }, v))));
-    rows.push(h("tr", {}, h("td", {}, h("b", {}, "All open Epics")), h("td", { class: "n" }, h("b", {}, `${b.left}`)), h("td", { class: "n" }, ""),
-      ...need(b.need).map((v) => h("td", { class: "n" }, h("b", {}, v)))));
-    parts.push(h("div", { class: "scroll" }, h("table", { class: "steps cost" }, h("tbody", {},
-      h("tr", { class: "sec" }, h("td", {}, "Epic"), h("td", { class: "n" }, "Left"), h("td", { class: "n" }, "Can start"),
-        h("td", { class: "n" }, "5-hour"), h("td", { class: "n" }, "Weekly")), rows))));
-    parts.push(h("div", { class: "fine" }, `5-hour and Weekly are the share of one ${plan} window the tickets left need, with the range from the lowest to the highest run.`));
-    if (b.unsplit.length) parts.push(h("div", { class: "fine" }, `Not split into tickets yet, so not counted: ${b.unsplit.map((x) => `${x.key} ${x.summary}`).join(", ")}.`));
+    const row = (label, left, need) => h("tr", {}, h("td", {}, label), h("td", { class: "n" }, left),
+      h("td", { class: "n" }, share(need.five_hour)), h("td", { class: "n" }, share(need.seven_day)));
+    parts.push(table(["Epic", "Left", "5-hour", "Weekly"], [
+      ...o.epics.map((x) => row([h("span", { class: "key" }, x.key), " ", x.summary], x.left === null ? "Not split yet" : `${x.left}`, x.need)),
+      row(h("b", {}, "All open Epics"), h("b", {}, `${o.left}`), o.need)]));
+    parts.push(h("div", { class: "fine" }, `5-hour and Weekly are the share of one ${plan} window the tickets left need. Jira read ${ago(f.jira.read)}.`));
   }
 
-  // What the plan allows against what the loop can do.
+  // What the plan fits.
   parts.push(h("h3", {}, `Capacity on ${plan}`));
-  if (!e || !c) parts.push(h("div", { class: "muted" }, "No run has landed a ticket under a meter reading yet."));
+  if (!c) parts.push(h("div", { class: "muted" }, `No run on ${plan} has landed a ticket under a meter reading yet.`));
   else {
-    const figs = [
-      h("div", { title: "The share of the window per landed ticket. The range is the lowest and the highest run." }, h("b", {}, range(e.five_hour)), "of a 5-hour window per ticket"),
-      h("div", {}, h("b", {}, range(e.seven_day)), "of a weekly window per ticket"),
-      h("div", { title: "At the share per ticket above. The range is the dearest and the cheapest run." }, h("b", {}, `About ${num(c.five_hour_by_usage)}`),
-        `tickets fit in a 5-hour window by usage${c.five_hour_most !== null ? ` (${num(c.five_hour_fewest)} to ${num(c.five_hour_most)})` : ""}`),
-      h("div", { title: "The tickets the runs landed over their hours of running, less the waits for a usage limit. The range is the slowest and the fastest run." },
-        h("b", {}, c.five_hour_by_time !== null ? `About ${num(c.five_hour_by_time)}` : "-"),
-        `tickets the loop lands in 5 hours of running${e.landed_per_window.low !== null ? ` (${num(e.landed_per_window.low)} to ${num(e.landed_per_window.high)})` : ""}`),
-      h("div", {}, h("b", {}, c.week_tickets ? `About ${num(c.week_tickets, 0)}` : "-"), "tickets fit in a weekly window"),
-      h("div", {}, h("b", {}, c.weeks_for_backlog !== null ? num(c.weeks_for_backlog, 2) : "-"), "weekly windows the open tickets need"),
+    const fits = (x) => [
+      h("div", {}, h("b", {}, about(x.five_hour)), "tickets per 5-hour window"),
+      h("div", {}, h("b", {}, about(x.week, 0)), "tickets per week"),
+      h("div", {}, h("b", {}, num(x.weeks, 2)), "weeks for the open work"),
     ];
-    if (c.week_left_tickets !== null) figs.push(h("div", {}, h("b", {}, `About ${num(c.week_left_tickets, 0)}`), "more tickets fit in this week's window"));
-    parts.push(h("div", { class: "figs" }, figs));
-    const basis = `From ${plural(e.tickets, "landed ticket", "landed tickets")} in ${plural(e.runs, "run", "runs")}, ${day(e.from)} to ${day(e.to)}. Confidence ${e.confidence}: ${plan} has ${plural(e.own_tickets, "landed ticket", "landed tickets")} of its own.`;
-    parts.push(h("div", { class: "fine" }, basis, e.scaled ? ` That is fewer than ${f.min_tickets}, so the other plans' runs count too, scaled by Anthropic's stated multiples.` : "",
-      " The weekly meter reads in whole percents, so one run's weekly share is only good to a point either way."));
-    for (const u of c.upgrades) {
-      parts.push(h("h3", {}, `${u.name}, $${u.price_more} a month more`));
-      parts.push(h("div", { class: "figs" },
-        h("div", {}, h("b", {}, `About ${num(u.five_hour_tickets)}`), "tickets would fit in a 5-hour window by usage"),
-        h("div", {}, h("b", {}, u.gain === null ? "-" : Math.abs(u.gain_high - u.gain_low) < 0.05 ? `${num(u.gain)}x` : `${num(u.gain_low)}x to ${num(u.gain_high)}x`), "the tickets the loop would land per 5-hour window, against now"),
-        h("div", {}, h("b", {}, u.week_tickets ? `About ${num(u.week_tickets, 0)}` : "-"), "tickets would fit in a weekly window")));
-      parts.push(h("div", { class: "fine" }, {
-        plan: `The loop's pace caps the gain. More allowance helps only up to the tickets it lands in 5 hours of running.`,
-        loop: `${plan} already fits more than the loop lands in 5 hours, so more allowance would add room you do not use. It would help only if the weekly window or your own use runs out.`,
-        unclear: `The gain depends on whether ${plan} or the loop's pace is the limit, which the data cannot tell yet.`,
-        unknown: "No run time to compare with yet.",
-      }[c.limit]));
+    parts.push(h("div", { class: "figs" }, fits(c)));
+    for (const b of c.bigger) {
+      parts.push(h("div", { class: "fine" }, `${b.name}, $${b.price_more} a month more: ${about(b.five_hour)} tickets per 5-hour window, ${about(b.week, 0).toLowerCase()} per week, ${num(b.weeks, 2)} weeks for the open work.`));
     }
+    parts.push(h("div", { class: "fine" }, `From ${plural(c.tickets, "landed ticket", "landed tickets")} in ${plural(c.runs, "run", "runs")} on ${plan}. A bigger plan is scaled by Anthropic's stated multiple.`));
   }
 
   // Each plan's runs, side by side.
@@ -1058,25 +1089,17 @@ function fillForecast() {
     parts.push(h("h3", {}, "Plans compared"));
     const cols = f.periods;
     const row = (label, get) => h("tr", {}, h("td", {}, label), ...cols.map((p) => h("td", { class: "n" }, get(p))));
-    parts.push(h("div", { class: "scroll" }, h("table", { class: "steps cost" }, h("tbody", {},
-      h("tr", { class: "sec" }, h("td", {}, ""), ...cols.map((p) => h("td", { class: "n" }, `${p.name}${p.preliminary && p.plan !== "ambiguous" && p.plan !== null ? " (preliminary)" : ""}`))),
+    parts.push(table(["", ...cols.map((p) => p.name)], [
       row("Runs", (p) => `${p.runs}, ${day(p.from)} to ${day(p.to)}`),
       row("Tickets landed", (p) => `${p.landed}`),
       row("Landed on their first ticket gate", (p) => (p.first_pass_rate === null ? "-" : `${Math.round(p.first_pass_rate * 100)}%`)),
-      row("Ticket gate failures per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.ticket_gate, 2) : "-")),
-      row("Merge gate failures per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.merge_gate, 2) : "-")),
-      row("Code reviews with findings per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.code_review, 2) : "-")),
-      row("UI reviews with faults per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.ui_review, 2) : "-")),
+      row("Fix rounds per landed ticket", (p) => num(p.fixes_per_landed, 2)),
       row("Tickets stuck", (p) => `${p.stuck}`),
       row("Median time to land, less waits", (p) => (p.median_minutes === null ? "-" : length(p.median_minutes))),
-      row("Usage limits hit, and hours a run waited", (p) => `${p.waits}${p.waits ? `, ${num(p.waited_hours)} h` : ""}`),
-      row("Landed tickets with a meter reading", (p) => `${p.metered_tickets}`),
-      row("5-hour window per ticket, own plan", (p) => range(p.five_hour)),
-      row("Weekly window per ticket, own plan", (p) => range(p.seven_day)),
-      row("Pro 5-hour windows per ticket", (p) => num(p.pro_windows_per_ticket, 2))))));
-    parts.push(h("div", { class: "fine" }, "Percentages are of each plan's own window, so they do not compare across plans. Pro 5-hour windows scale them by Anthropic's stated multiples (Pro 1, Max 5x 5, Max 20x 20). A run that may straddle a plan change counts as Unclear. Tickets differ in size, and the Epics differ too, so a change between plans is not caused by the plan alone."));
+      row("Usage limits hit, and hours a run waited", (p) => `${p.waits}${p.waits ? `, ${num(p.waited_hours)} h` : ""}`)]));
+    parts.push(h("div", { class: "fine" }, "A fix round is a failed ticket gate, a failed merge gate, a code review with findings, or a UI review with faults. A run that may straddle a plan change counts as Unclear. Tickets differ in size, so a change between plans is not caused by the plan alone."));
   }
-  parts.push(h("div", { class: "fine" }, `The meter is the account's, so your own sessions during a run count toward it. It is read per run, so a ticket's share is its run's share over the tickets it landed, and work that never landed counts too. A ticket is left when Jira has it open, not in ${f.landed_status}, and no run on this host landed it. Prices are the subscription's, not the API list price.`));
+  parts.push(h("div", { class: "fine" }, `The meter is the account's, so your own sessions during a run count toward it. A ticket is left when Jira has it open, not in ${f.landed_status}, and no run on this host landed it. Prices are the subscription's, not the API list price.`));
   wrap.replaceChildren(...parts);
 }
 

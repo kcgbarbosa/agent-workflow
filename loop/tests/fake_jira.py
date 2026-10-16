@@ -1,4 +1,8 @@
-"""A fake Jira REST API and ntfy server for the loop tests, on a local port. It keeps the issues in memory."""
+"""A fake Jira REST API and ntfy server for the loop tests, on a local port. It keeps the issues in memory.
+
+Each write reaches the kill point `jira:<method> <key> <kind>` after it changes the issue and before it
+answers.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +13,13 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from killpoint import reached
+
 FLAGGED = "customfield_10021"
 # A read of the comments gets them two at a time, so a ticket with more comments takes more than one page.
 COMMENT_PAGE = 2
+# A search gets two issues a page, so an Epic with more children takes more than one page.
+SEARCH_PAGE = 2
 CATEGORY = {"To Do": "new", "In Progress": "indeterminate", "In Review": "indeterminate", "Done": "done"}
 
 
@@ -26,6 +34,7 @@ class Issue:
     issue_type: str = "Task"
     comments: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)
+    attachment_sizes: list[int] = field(default_factory=list)
     statuses: list[str] = field(default_factory=list)
     # The description: a paragraph for each text, and a bullet list for each run of "- " texts.
     body: list[str] = field(default_factory=list)
@@ -76,6 +85,10 @@ class FakeJira:
                 "issuelinks": links,
                 "parent": {"key": issue.parent} if issue.parent else None,
                 FLAGGED: [{"value": "Impediment"}] if issue.flagged else None,
+                "attachment": [
+                    {"filename": name, "size": size}
+                    for name, size in zip(issue.attachments, issue.attachment_sizes, strict=True)
+                ],
             },
         }
 
@@ -174,10 +187,17 @@ class FakeJira:
                 with fake.lock:
                     if path.startswith("/ntfy/"):
                         fake.notifications.append(body.decode())
+                        reached(f"ntfy:{body.decode()}")
                         return self._send({})
                     if path == "/rest/api/3/search/jql":
-                        jql = json.loads(body)["jql"]
-                        return self._send({"issues": fake._search(jql), "isLast": True})
+                        request = json.loads(body)
+                        start = int(request.get("nextPageToken", 0))
+                        hits = fake._search(request["jql"])
+                        issues = {"issues": hits[start : start + SEARCH_PAGE]}
+                        if start + SEARCH_PAGE < len(hits):
+                            token = str(start + SEARCH_PAGE)
+                            return self._send({**issues, "nextPageToken": token, "isLast": False})
+                        return self._send({**issues, "isLast": True})
                     match = re.fullmatch(
                         r"/rest/api/3/issue/([A-Z]+-\d+)/(transitions|comment|attachments)", path
                     )
@@ -192,6 +212,9 @@ class FakeJira:
                         else:
                             found = re.search(rb'filename="([^"]+)"', body)
                             issue.attachments.append(found[1].decode() if found else "")
+                            content = body.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n--", 1)[0]
+                            issue.attachment_sizes.append(len(content))
+                        reached(f"jira:POST {match[1]} {match[2]}")
                         return self._send({}, 201)
                 self._send({"errorMessages": ["not found"]}, 404)
 
@@ -203,6 +226,7 @@ class FakeJira:
                     match = re.fullmatch(r"/rest/api/3/issue/([A-Z]+-\d+)", self.path)
                     if match and FLAGGED in body["fields"]:
                         fake.issues[match[1]].flagged = bool(body["fields"][FLAGGED])
+                        reached(f"jira:PUT {match[1]} flag")
                         return self._send(None, 204)
                 self._send({"errorMessages": ["not found"]}, 404)
 

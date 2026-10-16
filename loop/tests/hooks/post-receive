@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""The test origin's post-receive hook. A kill point here stops the run after origin took the push."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from killpoint import reached  # noqa: E402
+
+for line in sys.stdin:
+    reached("push:" + line.split()[2].removeprefix("refs/heads/"))

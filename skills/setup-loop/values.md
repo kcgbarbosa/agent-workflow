@@ -15,7 +15,7 @@ loop:
 	loop start $(epic)
 ```
 
-A person can also ask a remote session on the host to run it. The run lives in a tmux session, so it outlives that session. An agent starts a run only with `loop start` (rule 12 of loop.md).
+A person can also ask a remote session on the host to run it. The run is a systemd user unit, so it outlives that session, and `loop stop <Epic key>` ends it. An agent starts a run only with `loop start` (rule 12 of loop.md).
 
 **Check.** `make -n loop epic=TIDE-12` prints `loop start TIDE-12`.
 
@@ -100,7 +100,7 @@ Write the rule in the issue tracker doc, so `to-tickets` follows it:
 **Choose.**
 
 - `list` is the list command of `docs/agents/testing.md`, with `{key}` for the ticket, such as `["make", "acceptance-list", "ticket={key}"]`. It prints one title per line and needs no stack.
-- Keep `heading` at its default unless the ticket template names the list another way.
+- The `to-tickets` skill heads the list "What the user sees", which is the heading the loop reads.
 - A repo whose `docs/agents/testing.md` says "No acceptance suite" leaves the table out.
 
 **Check.**
@@ -181,7 +181,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 ## Agent
 
-**Choose.** Keep the defaults of loop.md until a run's cost says otherwise. To cut the plan usage of a run, lower `effort` before you change `model`. Lower `context_tokens` only when the cost report shows long sessions, because each turn sends the whole context again.
+**Choose.** Keep the defaults of loop.md until a run's cost says otherwise. To cut the plan usage of a run, lower `effort` before you change `model`.
 
 **Check.** `loop report` after the first Epic. The tickets with the most turns and the largest peak context show where the cost goes.
 
@@ -210,36 +210,31 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 - `CLAUDE_CODE_OAUTH_TOKEN` comes from `claude setup-token`, run as the account that should pay for the loop. Each agent run then uses that account, whichever account is signed in on the host. Leave it out when the host's own account is the one.
 - A secret never goes in the repo, the ticket file, a commit, or a log. The watch page masks the values it finds in the secrets file.
 
-**Check.** `loop start` fails at once with the name of any item that the vault lacks. Run `loop secrets` and then `loop start` on each host before the first Epic.
+**Check.** `loop secrets` fails at once with the name of any item that the vault lacks. Run `loop secrets` and then `loop start` on each host before the first Epic.
 
 ## Hosts
 
 **Find.** Which machines can run a loop for hours: an always-on machine suits it best. For each one, read the machine README for how to reach it, what it has installed, and how secrets get there.
 
-**Choose.** List in `tools` each command the gates and the agent call that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `timeout`, `tmux`, a sleep inhibitor, `docker` when `[stack]` is set, and `bw` on a host with no secrets file. On macOS, GNU `timeout` comes from coreutils and must be on the PATH under that name. Each host also needs the `loop` command from agent-workflow's `install.sh`, `gh` signed in, `claude` at or past the minimum version, Docker running, and the browsers of the UI review.
+**Choose.** List in `tools` each command the gates and the agent call that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `systemd-inhibit`, and `docker` when `[stack]` is set. Each host runs Linux with systemd, and also needs the `loop` command from agent-workflow's `install.sh`, linger on for the user, `bw` for `loop secrets`, `gh` signed in, `claude` at or past the minimum version, Docker Engine running, and the browsers of the UI review.
 
-| Host kind | Needs                                  |
-| --------- | -------------------------------------- |
-| Linux     | Docker Engine, `bw`, `systemd-inhibit` |
-| macOS     | Docker Desktop, `bw`, `caffeinate`     |
-
-**Check.** Run `loop start` on each host. It refuses and names every missing prerequisite.
+**Check.** `loginctl show-user $USER -p Linger` prints `Linger=yes`. Run `loop start` on each host. A missing prerequisite ends the run at once, and `journalctl --user -u loop-<name>-<Epic key>` names every one.
 
 ## Limits
 
-**Choose.** Start the first Epic with `parallel = 1`, because each parallel ticket runs a full stack, adds to the plan meter, and adds merge conflicts. Raise it when the first-pass rate is high and the host has memory for the stacks. The other defaults suit most repos. `agent_timeout_minutes` should exceed the longest legitimate ticket. `fix_attempts` caps the rework of one ticket. `circuit_breaker` stops a run when tickets stick in a row, because that pattern means a shared cause, such as a red main or a broken gate, and more attempts only spend the plan.
+**Choose.** Keep `parallel` at 1 for the first Epic, because each parallel ticket runs a full stack, adds to the plan meter, and adds merge conflicts. Raise it when the first-pass rate is high and the host has memory for the stacks. The other defaults suit most repos. `agent_timeout_minutes` should exceed the longest legitimate ticket. `fix_attempts` caps the rework of one ticket. `circuit_breaker` stops a run when tickets stick in a row, because that pattern means a shared cause, such as a red main or a broken gate, and more attempts only spend the plan.
 
 **Check.** After the first Epic, `loop report` shows the tickets that hit a limit. Raise a limit only for a cause you understand.
 
 ## Logs
 
-**Choose.** Nothing, unless port 8790 is taken on the host. Then set `[watch]` `port`. The watch page opens at `http://127.0.0.1:<port>` on the host. From a phone or another machine, open the host's tailnet address on the same port.
+**Choose.** Nothing. The watch page opens at `http://127.0.0.1:8790` on the host. From a phone or another machine, open the host's tailnet address on the same port. Free port 8790 when another process holds it.
 
-**Check.** `loop watch` answers on the port.
+**Check.** After `loop start`, `systemctl --user is-active loop-watch-8790` prints `active`, and the page answers on the port.
 
 ## Host setup
 
-Each host gets the `loop` command from `install.sh` and one run of `loop secrets` from the repo. Run it again after a secret changes:
+Each host gets the `loop` command from `install.sh`, linger with `loginctl enable-linger`, and one run of `loop secrets` from the repo. Run `loop secrets` again after a secret changes:
 
 ```sh
 BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
@@ -249,7 +244,7 @@ BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
 
 | Symptom                                                   | Value to fix                                                   |
 | --------------------------------------------------------- | -------------------------------------------------------------- |
-| `loop start` names missing commands                       | `tools`, or the host                                           |
+| The run's journal names missing commands                  | `tools`, or the host                                           |
 | The config refuses the file with an unknown key           | A typo in `loop.toml`                                          |
 | The frontier starts a ticket before its blocker           | The link type of the edges, or the Epic children query         |
 | A ticket cannot move to a status                          | `tracker.in_progress`, `tracker.landed`, or the workflow       |
@@ -261,4 +256,4 @@ BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
 | A test fails for a missing key in the loop only           | A secret a gate needs. Use a development default               |
 | The UI review is blocked, or saves no screenshots         | The sign-in, the skill, or `LOOP_RUN_DIR`                      |
 | The watch page shows red tool calls                       | An action that auto mode denies. Plan it as a human step       |
-| The run costs more than the plan allows                   | `effort`, `context_tokens`, then `parallel`                    |
+| The run costs more than the plan allows                   | `effort`, then `parallel`                                      |

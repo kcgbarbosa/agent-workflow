@@ -1,5 +1,3 @@
-"""The Jira REST client of the loop."""
-
 from __future__ import annotations
 
 import base64
@@ -10,10 +8,9 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-from .tracker import Blocker, Ticket, TrackerError
 
 FIELDS = ["summary", "status", "issuetype", "description", "issuelinks"]
 SEARCH = "/rest/api/3/search/jql"
@@ -23,8 +20,26 @@ BACKOFF_SECONDS = 5.0
 MAX_WAIT_SECONDS = 120.0
 
 
-class JiraError(TrackerError):
+class JiraError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class Blocker:
+    key: str
+    done: bool
+
+
+@dataclass(frozen=True)
+class Ticket:
+    key: str
+    summary: str
+    issue_type: str
+    status: str
+    done: bool
+    flagged: bool
+    blockers: tuple[Blocker, ...]
+    text: str
 
 
 class Jira:
@@ -45,24 +60,10 @@ class Jira:
         return self._ticket(data)
 
     def children(self, epic_key: str) -> list[Ticket]:
-        tickets: list[Ticket] = []
-        token: str | None = None
-        while True:
-            body: dict[str, Any] = {
-                "jql": f"parent = {epic_key} ORDER BY key ASC",
-                "fields": self._fields(),
-                "maxResults": 100,
-            }
-            if token:
-                body["nextPageToken"] = token
-            data = self._request("POST", SEARCH, body)
-            tickets += [self._ticket(issue) for issue in data.get("issues", [])]
-            token = data.get("nextPageToken")
-            if data.get("isLast", True) or not token:
-                return tickets
+        issues = self.search(f"parent = {epic_key} ORDER BY key ASC", self._fields())
+        return [self._ticket(issue) for issue in issues]
 
     def search(self, jql: str, fields: list[str]) -> list[dict[str, Any]]:
-        """The raw issues a JQL query finds, every page. The forecast reads Jira only through this."""
         issues: list[dict[str, Any]] = []
         token: str | None = None
         while True:
@@ -122,6 +123,10 @@ class Jira:
                 "X-Atlassian-Token": "no-check",
             }
             self._request("POST", f"/rest/api/3/issue/{key}/attachments", data=data, headers=headers)
+
+    def attachments(self, key: str) -> list[tuple[str, int]]:
+        data = self._request("GET", f"/rest/api/3/issue/{key}?fields=attachment")
+        return [(item["filename"], int(item["size"])) for item in data["fields"].get("attachment") or []]
 
     def flagged_field(self) -> str:
         """The id of the Flagged custom field. Each Jira site gives it a different id."""

@@ -5,19 +5,19 @@ from __future__ import annotations
 import json
 import re
 import shlex
-import subprocess
 from pathlib import Path
 from typing import Any
 
-from . import tiers
-from .config import Config
+from . import process, tiers
+from .config import CONTEXT_TOKENS, Config
 
 # The reviews run in their own sessions, so the head agent's context stays small. At the same cost per task,
 # Opus scores as well as Sonnet or better, so the reviews run on Opus at a set effort.
 REVIEW_MODEL = "claude-opus-5-5"
 REVIEW_EFFORT = "medium"
-# The oldest `claude` that knows each model the tiers name and prices the long prompts of Haiku 5.5.
-MIN_CLAUDE = (2, 1, 295)
+# The oldest `claude` that knows each model the tiers name, and that ends its background commands under `-p`
+# and exits on SIGTERM, which the loop's process function relies on.
+MIN_CLAUDE = (2, 1, 301)
 # The loop keeps the stack volumes for KC, so no agent run deletes one.
 VOLUME_DENY = ("Bash(docker volume rm *)", "Bash(docker volume prune*)", "Bash(docker system prune*)")
 # Where Claude Code makes the worktree of a `trial` subagent: in the main checkout, also for a ticket's run.
@@ -25,10 +25,10 @@ TRIALS = Path(".claude/worktrees")
 
 
 def claude_version() -> str:
-    """The version that `claude --version` prints, such as 2.1.295, or "" when it prints none."""
+    """The version that `claude --version` prints, such as 2.1.301, or "" when it prints none."""
     try:
-        result = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=30)
-    except OSError, subprocess.TimeoutExpired:
+        result = process.run(["claude", "--version"], seconds=30)
+    except OSError:
         return ""
     match = re.search(r"\d+\.\d+\.\d+", result.stdout)
     return match[0] if match else ""
@@ -39,7 +39,7 @@ def run_setup(config: Config) -> dict[str, Any]:
     return {
         "claude": claude_version(),
         "agent": f"{config.agent_model} {config.agent_effort}",
-        "context": config.agent_context_tokens,
+        "context": CONTEXT_TOKENS,
         "tiers": {name: f"{tier['model']} {tier['effort']}" for name, tier in tiers.load().items()},
         "review": f"{REVIEW_MODEL} {REVIEW_EFFORT}",
     }

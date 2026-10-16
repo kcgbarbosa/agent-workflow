@@ -1,18 +1,19 @@
-"""Git commands of the loop. Git and the tracker hold every state of a run."""
+"""Git commands of the loop. Git and Jira hold every state of a run."""
 
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
+
+from . import process
 
 
 class GitError(Exception):
     pass
 
 
-def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+def git(cwd: Path, *args: str, check: bool = True) -> process.Finished:
+    result = process.run(["git", *args], cwd)
     if check and result.returncode != 0:
         raise GitError(f"git {' '.join(args)}: {result.stderr.strip()}")
     return result
@@ -40,8 +41,12 @@ def has_ref(repo: Path, ref: str) -> bool:
 
 def landed(repo: Path, epic_branch: str, key: str) -> bool:
     """A ticket has landed when a merge on the Epic branch carries its key."""
-    log = out(repo, "log", "--merges", "--fixed-strings", f"--grep=({key})", "--format=%H", epic_branch)
-    return bool(log)
+    return landed_commit(repo, epic_branch, key) is not None
+
+
+def landed_commit(repo: Path, epic_branch: str, key: str) -> str | None:
+    log = out(repo, "log", "--merges", "--fixed-strings", f"--grep=({key})", "--format=%H", "-1", epic_branch)
+    return log or None
 
 
 def adds_to(repo: Path, ref: str, base: str) -> bool:

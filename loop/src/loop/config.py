@@ -5,6 +5,7 @@ An unknown key refuses the file, so a typo cannot fall back to a default.
 
 from __future__ import annotations
 
+import json
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -13,11 +14,18 @@ from pathlib import Path
 from typing import Any
 
 from .jira import Jira
-from .tracker import Tracker
 
 FILE = "loop.toml"
+SECRETS_FILE = "secrets.json"
 # The engine reads these secrets itself. A repo adds the ones its agents need.
 REQUIRED_SECRETS = ("JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC")
+WATCH_PORT = 8790
+# How long the forecast keeps what it read from Jira, so a page that stays open reads Jira at most that often.
+BACKLOG_MINUTES = 5
+# The window each agent run compacts at, so a long ticket never sends more than this on each turn.
+CONTEXT_TOKENS = 200_000
+# The heading of the list in the ticket text that each acceptance test covers, one test per line.
+ACCEPTANCE_HEADING = "What the user sees"
 
 
 class ConfigError(Exception):
@@ -81,15 +89,11 @@ class Config:
     ui_skill: str
     ui_accepted_unchecked: tuple[str, ...]
     acceptance_list: tuple[str, ...] | None
-    acceptance_heading: str
     main_branch: str
     agent_model: str
     agent_effort: str
-    agent_context_tokens: int
     agent_hint: str
     tools: tuple[str, ...]
-    watch_port: int
-    backlog_minutes: int
     plans: tuple[PlanSpan, ...]
     stack: Stack | None
     demo: Demo | None
@@ -97,7 +101,6 @@ class Config:
     state_dir: Path
 
     def stack_env(self, slot: int, key: str) -> dict[str, str]:
-        """The env vars that give a worktree its own Compose project and ports."""
         if self.stack is None:
             return {}
         env = {port: str(base + self.stack.port_step * slot) for port, base in self.stack.ports.items()}
@@ -105,22 +108,50 @@ class Config:
         env["COMPOSE_PROJECT_NAME"] = f"{self.name}-{key.lower()}"
         return env
 
-    def tracker(self, secrets: Mapping[str, str]) -> Tracker:
+    def jira(self, secrets: Mapping[str, str]) -> Jira:
         return Jira(self.tracker_url, secrets["JIRA_EMAIL"], secrets["JIRA_API_TOKEN"])
 
 
 def load(repo: Path, state_dir: Path | None = None) -> Config:
+    data = _read(repo)
+    try:
+        return _parse(repo, data, state_dir)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ConfigError(f"{repo / FILE}: {error}") from error
+
+
+def peek(repo: Path) -> str:
+    """The name, with no check of the other keys, so that `loop start` on the old code hands a file with a
+    new key to the new code."""
+    top = _Table(_read(repo), "")
+    try:
+        name: str = top.text("name")
+        return name
+    except (KeyError, TypeError, ValueError) as error:
+        raise ConfigError(f"{repo / FILE}: {error}") from error
+
+
+def state_dir_of(name: str) -> Path:
+    return Path.home() / ".local/state" / f"{name}-loop"
+
+
+def stored_secrets(state_dir: Path) -> dict[str, str]:
+    """The secrets that `loop secrets` wrote, or none when the file is missing or unreadable."""
+    try:
+        secrets = json.loads((state_dir / SECRETS_FILE).read_text())
+    except OSError, json.JSONDecodeError:
+        return {}
+    return {str(name): str(value) for name, value in secrets.items()} if isinstance(secrets, dict) else {}
+
+
+def _read(repo: Path) -> dict[str, Any]:
     path = repo / FILE
     try:
-        data = tomllib.loads(path.read_text())
+        return tomllib.loads(path.read_text())
     except FileNotFoundError as error:
         raise ConfigError(f"{path} is missing. The setup-loop skill writes it.") from error
     except tomllib.TOMLDecodeError as error:
         raise ConfigError(f"{path} is not valid TOML: {error}") from error
-    try:
-        return _parse(repo, data, state_dir)
-    except (KeyError, TypeError, ValueError) as error:
-        raise ConfigError(f"{path}: {error}") from error
 
 
 def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
@@ -178,7 +209,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         ticket_gate=gates.texts("ticket"),
         merge_gate=gates.texts("merge"),
         gate_timeout_minutes=gates.number("timeout_minutes", 60),
-        parallel=limits.number("parallel", 2),
+        parallel=limits.number("parallel", 1),
         agent_timeout_minutes=limits.number("agent_timeout_minutes", 90),
         fix_attempts=limits.number("fix_attempts", 2),
         circuit_breaker=limits.number("circuit_breaker", 2),
@@ -187,20 +218,16 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         ui_skill=ui.text("skill", "ui-review"),
         ui_accepted_unchecked=ui.texts("accepted_unchecked", ()),
         acceptance_list=acceptance_list,
-        acceptance_heading=acceptance.text("heading", "What the user sees"),
         main_branch=top.text("main_branch", "main"),
         agent_model=agent.text("model", "claude-opus-5-5"),
         agent_effort=agent.text("effort", "high"),
-        agent_context_tokens=agent.number("context_tokens", 200_000),
         agent_hint=top.text("agent_hint", ""),
         tools=top.texts("tools", ()),
-        watch_port=watch.number("port", 8790),
-        backlog_minutes=watch.number("backlog_minutes", 5),
         plans=_plans(watch.tables("plans")),
         stack=stack,
         demo=demo,
         secrets=secrets,
-        state_dir=state_dir or Path.home() / ".local/state" / f"{name}-loop",
+        state_dir=state_dir or state_dir_of(name),
     )
     tables = (
         top,
