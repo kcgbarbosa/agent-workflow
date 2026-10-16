@@ -77,6 +77,11 @@ UI_REVIEW_PROMPT = (
     " the review. List in `unchecked` only a part that the seeded data cannot show, with its path and the"
     " reason, so that KC reviews it by hand."
 )
+UI_FINISH_PROMPT = (
+    " The ticket {key} landed on the Epic branch with these UI review items open:\n\n{items}\n\n"
+    "Review the ticket on the Epic branch as it is now. The ticket file is {ticket}. "
+    "Return each item that is still open, in `findings` or `unchecked`."
+)
 REVIEW_FIX_PROMPT = (
     "The {review} found these problems:\n\n{findings}\n\nFix each one that is a real problem, and commit the "
     "fixes with {key} as the commit scope. Give each one you leave as it is in `notes`, with the reason."

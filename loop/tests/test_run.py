@@ -614,6 +614,7 @@ def test_a_ui_fault_that_is_still_there_after_one_fix_lands_and_keeps_the_epic_p
                 {"screenshot": True, "findings": [fault]},
                 {"screenshot": True, "findings": [fault]},
             ],
+            "DEMO-2-ui-finish": [{"screenshot": True, "findings": [fault]}],
         }
     )
 
@@ -621,7 +622,7 @@ def test_a_ui_fault_that_is_still_there_after_one_fix_lands_and_keeps_the_epic_p
 
     assert len(world.calls("DEMO-2")) == 2 and len(world.calls("DEMO-2-ui")) == 2
     gates = [line["result"] for line in world.decisions() if line["step"] == "ui-gate"]
-    assert gates == ["fail", "open"]
+    assert gates == ["fail", "open", "open"]
     assert not world.jira.issues["DEMO-2"].flagged
     assert f"UI fault left unfixed: {fault}" in world.jira.issues["DEMO-2"].comments[-1]
     create = world.records("gh")[-1]
@@ -643,6 +644,64 @@ def test_a_part_the_ui_review_could_not_check_keeps_the_epic_pr_a_draft(world: W
     assert world.run() == 0
 
     assert f"Not checked: {part}" in world.jira.issues["DEMO-2"].comments[-1]
+    create = world.records("gh")[-1]
+    assert "--draft" in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
+
+
+def test_the_finish_reviews_an_open_ui_item_again_and_clears_it_when_the_epic_covers_it(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
+    part = "/admin/materials: the seed has one row, not three."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
+            "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
+            "DEMO-2-ui-finish": [{"screenshot": True}],
+        }
+    )
+
+    assert world.run() == 0
+
+    (review,) = world.calls("DEMO-2-ui-finish")
+    assert review["prompt"].startswith("/ui-review ") and f"- Not checked: {part}" in review["prompt"]
+    assert review["resume"] is None and review["model"] == REVIEW_MODEL
+    gates = [line["result"] for line in world.decisions() if line["step"] == "ui-gate"]
+    assert gates == ["open", "pass"]
+    create = world.records("gh")[-1]
+    assert "--draft" not in create["args"] and "UI review left open" not in create["body"]
+
+
+def test_an_open_ui_item_that_the_finish_review_still_finds_keeps_the_epic_pr_a_draft(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
+    part = "/admin/materials: the seed has one row, not three."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
+            "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
+            "DEMO-2-ui-finish": [{"screenshot": True, "unchecked": [part]}],
+        }
+    )
+
+    assert world.run() == 0
+
+    gates = [line["result"] for line in world.decisions() if line["step"] == "ui-gate"]
+    assert gates == ["open", "open"]
+    create = world.records("gh")[-1]
+    assert "--draft" in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
+
+
+def test_a_finish_review_that_saves_no_screenshots_keeps_the_mark(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
+    part = "/admin/materials: the seed has one row, not three."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
+            "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
+        }
+    )
+
+    assert world.run() == 0
+
+    assert not world.jira.issues["DEMO-2"].flagged
     create = world.records("gh")[-1]
     assert "--draft" in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
 

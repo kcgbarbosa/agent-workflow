@@ -33,6 +33,7 @@ from .prompts import (
     REVIEW_FIX_PROMPT,
     REVIEW_SCHEMA,
     STUCK_COMMENT,
+    UI_FINISH_PROMPT,
     UI_OPEN_COMMENT,
     UI_REVIEW_PROMPT,
     USAGE_RESUME_PROMPT,
@@ -495,17 +496,23 @@ class EpicRun:
         if not screenshots(run.run_dir):
             raise AgentFailed(f"The UI review saved no screenshots in {run.run_dir}.")
         reviewed.write_text(head + "\n")
+        self.record_ui_review(run, review, head)
+        return None
+
+    def record_ui_review(self, run: TicketRun, review: AgentResult, head: str, detail: str = "") -> None:
+        """Marks the ticket with what the review left open, and comments it, or clears the mark."""
+        key = run.ticket.key
         accepted = [part for part in review.unchecked if self.accepted_unchecked(part)]
         left = [f"UI fault left unfixed: {fault}" for fault in review.findings]
         left += [f"Not checked: {part}" for part in review.unchecked if part not in accepted]
         self.record_notes(run.ticket, [f"Not checked, and accepted in loop.toml: {p}" for p in accepted])
         if left:
             (run.run_dir / UI_OPEN_FILE).write_text(json.dumps(left))
-            self.log(key, "ui-gate", "open", commit=head, detail=f"{len(left)} items")
+            self.log(key, "ui-gate", "open", commit=head, detail=f"{detail}{len(left)} items")
             self.track(key, "comment", lambda: self.tracker.comment(key, self.bullets(UI_OPEN_COMMENT, left)))
         else:
-            self.log(key, "ui-gate", "pass", commit=head)
-        return None
+            (run.run_dir / UI_OPEN_FILE).unlink(missing_ok=True)
+            self.log(key, "ui-gate", "pass", commit=head, detail=detail.strip())
 
     def accepted_unchecked(self, part: str) -> bool:
         """Whether `loop.toml` accepts a part that the UI review could not check, by a phrase in its text."""
@@ -668,17 +675,57 @@ class EpicRun:
             self.tracker.issue(key), EPIC_SLOT, self.epic_branch, self.epic_worktree, run_dir, restart=False
         )
         merge_base = out(self.epic_worktree, "merge-base", base, "HEAD")
-        # The ticket reviews already ran at landing, so the finish only runs the merge gate, which is the
-        # only test gate here, and leaves the review of the whole Epic to KC.
+        # The ticket reviews already ran at landing, so the finish runs the merge gate, which is the only test
+        # gate here, reviews again only the UI items left open, and leaves the review of the whole Epic to KC.
         failing: tuple[str, Path] | None = None
         log_file = run_dir / "finish-merge-gate.log"
         command = self.config.merge_gate
         if not self.gate(command, self.epic_worktree, self.config.stack_env(EPIC_SLOT, key), log_file, key):
             failing = (" ".join(command), log_file)
+        else:
+            self.review_ui_open(merge_base)
         self.push(self.epic_worktree, self.epic_branch, key)
         demo_failing = self.point_demo(run_dir)
         body = self.pr_body(run, merge_base)
         return self.open_pr(failing, body, demo_failing)
+
+    def review_ui_open(self, merge_base: str) -> None:
+        """Gives each ticket that landed with open UI items a new UI review on the Epic branch, because a
+        later ticket can cover an item, such as with a test or a seeded file. A failed review keeps the
+        mark."""
+        head = out(self.epic_worktree, "rev-parse", "HEAD")
+        for ticket in self.tracker.children(self.epic_key):
+            run_dir = self.home / "runs" / ticket.key
+            marked = run_dir / UI_OPEN_FILE
+            if not marked.exists():
+                continue
+            key = ticket.key
+            run = TicketRun(ticket, EPIC_SLOT, self.epic_branch, self.epic_worktree, run_dir, restart=False)
+            # The ticket got its screenshots at landing, so these are the review's own.
+            for shot in screenshots(run_dir):
+                shot.unlink()
+            items = "\n".join(f"- {item}" for item in json.loads(marked.read_text()))
+            prompt = UI_REVIEW_PROMPT.format(skill=self.config.ui_skill, run_dir=run_dir, base=merge_base)
+            prompt += UI_FINISH_PROMPT.format(key=key, ticket=run_dir / "ticket.md", items=items)
+            try:
+                review = self.review_agent(run, prompt, f"{key}-ui-finish")
+            except (AgentFailed, UsageLimit) as error:
+                self.log(
+                    key, "ui-gate", "open", commit=head, detail=f"At the finish, the review failed: {error}"
+                )
+                continue
+            if not screenshots(run_dir):
+                self.log(
+                    key,
+                    "ui-gate",
+                    "open",
+                    commit=head,
+                    detail="At the finish, the review saved no screenshots.",
+                )
+                continue
+            shots = screenshots(run_dir)
+            self.track(key, "attach", lambda key=key, shots=shots: self.tracker.attach(key, shots))
+            self.record_ui_review(run, review, head, detail="At the finish. ")
 
     def point_demo(self, run_dir: Path) -> tuple[str, Path] | None:
         """Points the always-on demo at the Epic branch. Returns the command and its log when it fails."""
