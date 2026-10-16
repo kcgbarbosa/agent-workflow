@@ -185,6 +185,7 @@ class FakeJira:
                 with fake.lock:
                     if path.startswith("/ntfy/"):
                         fake.notifications.append(body.decode())
+                        reached(f"ntfy:{body.decode()}")
                         return self._send({})
                     if path == "/rest/api/3/search/jql":
                         jql = json.loads(body)["jql"]

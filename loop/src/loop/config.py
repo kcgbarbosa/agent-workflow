@@ -5,6 +5,7 @@ An unknown key refuses the file, so a typo cannot fall back to a default.
 
 from __future__ import annotations
 
+import json
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from .jira import Jira
 from .tracker import Tracker
 
 FILE = "loop.toml"
+SECRETS_FILE = "secrets.json"
 # The engine reads these secrets itself. A repo adds the ones its agents need.
 REQUIRED_SECRETS = ("JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC")
 WATCH_PORT = 8790
@@ -130,6 +132,15 @@ def peek(repo: Path) -> tuple[str, int]:
 
 def state_dir_of(name: str) -> Path:
     return Path.home() / ".local/state" / f"{name}-loop"
+
+
+def stored_secrets(state_dir: Path) -> dict[str, str]:
+    """The secrets that `loop secrets` wrote, or none when the file is missing or unreadable."""
+    try:
+        secrets = json.loads((state_dir / SECRETS_FILE).read_text())
+    except OSError, json.JSONDecodeError:
+        return {}
+    return {str(name): str(value) for name, value in secrets.items()} if isinstance(secrets, dict) else {}
 
 
 def _read(repo: Path) -> dict[str, Any]:

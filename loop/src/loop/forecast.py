@@ -13,14 +13,14 @@ import statistics
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from . import report
-from .config import Config, PlanSpan
+from .config import Config, PlanSpan, stored_secrets
 from .jira import Jira
-from .watch import KEY, _is_gate, all_runs, landings, plan_meter, read_secrets
+from .report import KEY, all_runs, is_gate, iso, landings, line_time, plan_meter, ticket_key
 
 # Anthropic's published plans: the usage of each against Pro's, and the monthly price in US dollars, from
 # https://claude.com/pricing. Anthropic states the multiple for the 5-hour window, and none for the week.
@@ -149,13 +149,13 @@ class Backlog:
             if not projects:
                 raise BacklogError("No run on this host names a Jira project yet.")
             snapshot = {
-                "synced": _iso(time.time()),
+                "synced": iso(time.time()),
                 "projects": projects,
                 "epics": fetch(self._client(), projects),
             }
         except Exception as error:  # noqa: BLE001 - a failed read changes the forecast only.
             with self._lock:
-                self.error, self.error_at, self.syncing = str(error)[:300], _iso(time.time()), False
+                self.error, self.error_at, self.syncing = str(error)[:300], iso(time.time()), False
             return
         try:
             temporary = self.path.with_suffix(".tmp")
@@ -166,7 +166,7 @@ class Backlog:
             problem = f"The snapshot was read but not saved: {failure}"
         with self._lock:
             self.snapshot, self.syncing = snapshot, False
-            self.error, self.error_at = problem, (_iso(time.time()) if problem else None)
+            self.error, self.error_at = problem, (iso(time.time()) if problem else None)
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -217,10 +217,10 @@ def run_records(state_dir: Path, spans: tuple[PlanSpan, ...]) -> list[dict[str, 
     """
     records = []
     for epic, run in all_runs(state_dir):
-        started, ended = _time(run[0]), _time(run[-1])
+        started, ended = line_time(run[0]), line_time(run[-1])
         by_ticket: dict[str, list[dict[str, Any]]] = {}
         for line in run:
-            key = _key(line)
+            key = ticket_key(line)
             if key != epic:
                 by_ticket.setdefault(key, []).append(line)
         waits = _waits(run, ended)
@@ -238,7 +238,7 @@ def run_records(state_dir: Path, spans: tuple[PlanSpan, ...]) -> list[dict[str, 
                 "hours": max(0.0, ended - started - waited) / 3600,
                 "plan": plan_of(spans, started, ended),
                 "landed": landed,
-                "stuck": {_key(line) for line in run if line.get("step") == "stuck"},
+                "stuck": {ticket_key(line) for line in run if line.get("step") == "stuck"},
                 "fixes": _fixes(run),
                 "used": report.plan_usage(run)["used"],
                 "waits": waits,
@@ -248,12 +248,6 @@ def run_records(state_dir: Path, spans: tuple[PlanSpan, ...]) -> list[dict[str, 
             }
         )
     return records
-
-
-def _key(line: dict[str, Any]) -> str:
-    """The ticket of a line. A review session, such as `<KEY>-review`, belongs to its ticket."""
-    name = str(line.get("ticket", ""))
-    return match[0] if (match := KEY.match(name)) else name
 
 
 # The rounds of fixing that a run's lines record, by what asked for the fix.
@@ -267,9 +261,9 @@ def _fixes(run: list[dict[str, Any]]) -> dict[str, int]:
     counts = dict.fromkeys(FIXES, 0)
     for line in run:
         result = line.get("result")
-        if _is_gate(line, "ticket") and result == "fail":
+        if is_gate(line, "ticket") and result == "fail":
             counts["ticket_gate"] += 1
-        elif _is_gate(line, "merge") and result == "fail":
+        elif is_gate(line, "merge") and result == "fail":
             counts["merge_gate"] += 1
         elif line.get("step") == "code-review" and result == "findings":
             counts["code_review"] += 1
@@ -288,7 +282,7 @@ def _waits(run: list[dict[str, Any]], ended: float) -> list[dict[str, Any]]:
             continue
         match = RESETS.search(str(line.get("detail") or ""))
         if match:
-            first.setdefault(match[1], _time(line))
+            first.setdefault(match[1], line_time(line))
     waits = []
     for resets, since in first.items():
         try:
@@ -323,8 +317,8 @@ def period(plan: str | None, records: list[dict[str, Any]]) -> dict[str, Any]:
         "plan": plan,
         "name": PLANS[plan]["name"] if plan in PLANS else ("Unclear" if plan == "ambiguous" else "Not set"),
         "runs": len(records),
-        "from": _iso(min(record["started"] for record in records)) if records else None,
-        "to": _iso(max(record["ended"] for record in records)) if records else None,
+        "from": iso(min(record["started"] for record in records)) if records else None,
+        "to": iso(max(record["ended"] for record in records)) if records else None,
         "landed": len(landed),
         "first_pass_rate": sum(item["first_pass"] for item in landed) / len(landed) if landed else None,
         "fixes_per_landed": {kind: count / len(landed) for kind, count in fixes.items()} if landed else None,
@@ -405,8 +399,8 @@ def estimate(records: list[dict[str, Any]], plan: str | None) -> dict[str, Any] 
         "tickets": tickets,
         "own_tickets": own_tickets,
         "runs": len(basis),
-        "from": _iso(min(record["started"] for record in basis)),
-        "to": _iso(max(record["ended"] for record in basis)),
+        "from": iso(min(record["started"] for record in basis)),
+        "to": iso(max(record["ended"] for record in basis)),
         "five_hour": _share(basis, "five_hour"),
         "seven_day": _share(basis, "seven_day"),
         "landed_per_window": {
@@ -642,7 +636,7 @@ class Forecaster:
 
     def _jira(self) -> Search:
         # Read for each sync, so a new `loop secrets` takes effect without a restart.
-        secrets = read_secrets(self.config.state_dir)
+        secrets = stored_secrets(self.config.state_dir)
         if not secrets.get("JIRA_EMAIL") or not secrets.get("JIRA_API_TOKEN"):
             raise BacklogError("This host has no Jira secret in its secrets file. Run `loop secrets`.")
         return Jira(self.config.tracker_url, secrets["JIRA_EMAIL"], secrets["JIRA_API_TOKEN"])
@@ -663,11 +657,3 @@ class Forecaster:
 
     def refresh(self) -> bool:
         return self.backlog.refresh()
-
-
-def _time(line: dict[str, Any]) -> float:
-    return datetime.fromisoformat(str(line.get("time"))).timestamp()
-
-
-def _iso(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, UTC).isoformat(timespec="seconds")

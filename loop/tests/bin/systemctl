@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""A fake `systemctl --user` for the loop tests, over the units of the fake `systemd-run`. `list-units` lists
-the loaded units that match the pattern, `is-active` answers for one, `stop` sends SIGTERM to the unit's
-process and waits for it to end, as KillMode=mixed does, and `restart` does nothing. Each call goes to
+"""A fake `systemctl --user` for the loop tests, over the units of the fake `systemd-run`. `list-units` lists the
+loaded units that match the pattern, `is-active` answers for each unit named, `stop` sends SIGTERM to the
+unit's process and waits for it to end, as KillMode=mixed does, and `restart` does nothing. Each call goes to
 systemd.jsonl.
 """
 
@@ -28,9 +28,9 @@ if command == "list-units":
         if alive(name) and fnmatch.fnmatch(name, args[-1]):
             print(f"{name} loaded active running {name}")
 elif command == "is-active":
-    active = alive(args[1])
-    print("active" if active else "inactive")
-    sys.exit(0 if active else 3)
+    states = [alive(name) for name in args[1:]]
+    print("\n".join("active" if state else "inactive" for state in states))
+    sys.exit(0 if any(states) else 3)
 elif command == "stop" and alive(args[1]):
     state = units / f"{args[1]}.json"
     pid = json.loads(state.read_text())["pid"]

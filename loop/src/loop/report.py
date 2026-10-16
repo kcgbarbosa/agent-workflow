@@ -6,7 +6,11 @@ only the lines of `decisions.jsonl`, so it works for any run whose log is on thi
 
 from __future__ import annotations
 
+import json
 import re
+import time
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 HAIKU = "claude-haiku-5-5"
@@ -25,6 +29,137 @@ ROLES = {"head": "Head agent and its subagents", "review": "Reviews", "pr": "PR 
 # The dollar figures are what the API would bill. KC pays a plan, and its meter is the cost that counts.
 LIST_PRICE = "list price (API)"
 WINDOWS = {"five_hour": "5-hour", "seven_day": "Weekly"}
+
+
+KEY = re.compile(r"[A-Z][A-Z0-9]*-\d+")
+DECISIONS = "decisions.jsonl"
+LOOP_SUFFIX = "-loop"
+
+
+def read_lines(path: Path) -> list[dict[str, Any]]:
+    try:
+        text = path.read_text()
+    except OSError:
+        return []
+    lines = []
+    for line in text.splitlines():
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict):
+            lines.append(item)
+    return lines
+
+
+def projects(state_dir: Path) -> dict[str, Path]:
+    """The state folder of each project on this host, by name: this one first, then each sibling
+    `<name>-loop` folder. Each repo's `loop.toml` names its own folder there, so one page serves them all.
+    """
+    found = {state_dir.name.removesuffix(LOOP_SUFFIX): state_dir}
+    parent = state_dir.parent
+    for home in sorted(parent.iterdir()) if parent.is_dir() else []:
+        if home.name.endswith(LOOP_SUFFIX) and home.is_dir() and home != state_dir:
+            found.setdefault(home.name.removesuffix(LOOP_SUFFIX), home)
+    return found
+
+
+def epic_homes(state_dir: Path) -> list[Path]:
+    """The folder of each Epic with a log in the project's state folder."""
+    homes = state_dir.iterdir() if state_dir.is_dir() else []
+    return [home for home in homes if KEY.fullmatch(home.name) and (home / DECISIONS).exists()]
+
+
+def ticket_key(line: dict[str, Any]) -> str:
+    """The ticket of a line. A review session, such as `<KEY>-review`, belongs to its ticket."""
+    name = str(line.get("ticket", ""))
+    return match[0] if (match := KEY.match(name)) else name
+
+
+def is_gate(line: dict[str, Any], kind: str) -> bool:
+    """A gate line names its log, such as `ticket-gate-1.log`. A ticket gate that finds no commit has none."""
+    if kind == "ticket" and line.get("step") == "ticket-gate":
+        return True
+    return f"/{kind}-gate-" in str(line.get("detail") or "")
+
+
+def line_time(line: dict[str, Any]) -> float:
+    return datetime.fromisoformat(str(line.get("time"))).timestamp()
+
+
+def iso(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, UTC).isoformat(timespec="seconds")
+
+
+def all_runs(state_dir: Path) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Each run on this host, as its Epic key and its lines, the oldest first."""
+    runs = []
+    for home in epic_homes(state_dir):
+        runs += [(home.name, run) for run in split_runs(home.name, read_lines(home / DECISIONS))]
+    return sorted(runs, key=lambda item: str(item[1][0].get("time")))
+
+
+def landings(by_ticket: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Each ticket that landed in a run, from its lines in that run: whether its first ticket gate passed,
+    how many of its ticket gates failed, and its start and landing times with the minutes between them.
+    """
+    found = []
+    for key, lines in by_ticket.items():
+        land = next(
+            (line for line in lines if line.get("step") == "land" and line.get("result") == "landed"), None
+        )
+        if land is None:
+            continue
+        gates = [line for line in lines if is_gate(line, "ticket")]
+        start = next((line for line in lines if line.get("step") == "start"), None)
+        found.append(
+            {
+                "key": key,
+                "first_pass": bool(gates) and gates[0].get("result") == "pass",
+                "gate_failures": sum(1 for line in gates if line.get("result") == "fail"),
+                "start": line_time(start) if start else None,
+                "land": line_time(land),
+                "minutes": (line_time(land) - line_time(start)) / 60 if start else None,
+            }
+        )
+    return found
+
+
+def plan_meter(state_dir: Path) -> dict[str, dict[str, Any]]:
+    """The newest reading of the account's plan meter on this host, for each window: its utilization, when
+    it resets, when it was read, and whether it has reset since. The meter belongs to the account, so the
+    newest reading of any run of any project counts. A running agent logs a `meter` line as the meter moves,
+    and each agent line gives the reading at the agent's end. Dollars never stand in for it.
+    """
+    newest: dict[str, dict[str, Any]] = {}
+    for project in projects(state_dir).values():
+        for home in epic_homes(project):
+            for line in read_lines(home / DECISIONS):
+                for window, value in _readings(line).items():
+                    if window not in newest or value["read"] > newest[window]["read"]:
+                        newest[window] = value
+    now = time.time()
+    return {
+        window: {**value, "past": isinstance(value["resets_at"], int | float) and value["resets_at"] < now}
+        for window, value in newest.items()
+    }
+
+
+def _readings(line: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    read = str(line.get("time"))
+    if isinstance(meter := line.get("meter"), dict):
+        found = {
+            w: (v.get("utilization"), v.get("resets_at")) for w, v in meter.items() if isinstance(v, dict)
+        }
+    elif isinstance(plan := line.get("plan"), dict):
+        found = {w: (v.get("end"), v.get("resets_at")) for w, v in plan.items() if isinstance(v, dict)}
+    else:
+        return {}
+    return {
+        window: {"utilization": utilization, "resets_at": resets_at, "read": read}
+        for window, (utilization, resets_at) in found.items()
+        if isinstance(utilization, int | float)
+    }
 
 
 def split_runs(epic: str, lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:

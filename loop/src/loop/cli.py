@@ -34,7 +34,7 @@ from .units import UnitError
 from .update import Stale, source_checkout, update
 
 TOOLS = ("git", "claude", "gh", "systemd-inhibit")
-SECRETS_FILE = watch_page.SECRETS_FILE
+SECRETS_FILE = config_file.SECRETS_FILE
 # A check such as `docker info` or `bw status` that has not answered by then is taken as failed.
 QUIET_SECONDS = 120
 NO_SECRETS = "Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."

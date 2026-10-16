@@ -449,7 +449,7 @@ def test_the_page_serves_the_forecast_and_a_refresh(tmp_path: Path) -> None:
         found = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/forecast").read())
         request = urllib.request.Request(f"http://127.0.0.1:{port}/api/forecast/refresh", method="POST")
         started = json.loads(urllib.request.urlopen(request).read())
-        epics = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/epics").read())
+        home = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/home").read())
     finally:
         for server in servers:
             server.shutdown()
@@ -458,7 +458,7 @@ def test_the_page_serves_the_forecast_and_a_refresh(tmp_path: Path) -> None:
     assert found["plan"]["name"] == "Max 5x"
     assert found["backlog"] is None and found["sync"] is None
     assert started == {"started": True} and forecast.refreshed == 1
-    assert sorted(epic["key"] for epic in epics) == ["DEMO-1", "DEMO-5"]
+    assert sorted(run["key"] for run in home[0]["runs"]) == ["DEMO-1", "DEMO-5"]
 
 
 def test_a_page_with_no_forecast_answers_null(tmp_path: Path) -> None:
