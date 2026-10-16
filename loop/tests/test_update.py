@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import sys
 from pathlib import Path
 
 import pytest
 from conftest import sh, write_config
 
-from loop import cli
+from loop import cli, units
 from loop.update import Stale, update
 
 
@@ -85,7 +83,7 @@ def test_a_checkout_on_another_branch_runs_as_it_is(checkout: tuple[Path, Path])
     assert (local / "run.py").read_text() == "one"
 
 
-def test_start_takes_the_new_loop_before_it_reads_loop_toml(
+def test_start_takes_the_new_loop_and_hands_a_loop_toml_with_a_new_key_to_it(
     checkout: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     local, other = checkout
@@ -94,20 +92,29 @@ def test_start_takes_the_new_loop_before_it_reads_loop_toml(
     repo = tmp_path / "demo"
     repo.mkdir()
     write_config(repo)
-    # A key that only the new loop knows. The old code refuses it.
+    # A key that only the new loop knows. The old code refuses it, so `loop start` checks no key but the name.
     toml = repo / "loop.toml"
     toml.write_text('new_key = "x"\n' + toml.read_text())
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".local/state/demo-loop").mkdir(parents=True)
+    (tmp_path / ".local/state/demo-loop/secrets.json").write_text("{}")
     monkeypatch.setattr(cli, "source_checkout", lambda: local)
-    restarts: list[list[str]] = []
+    monkeypatch.setattr(units, "runs", lambda name: [])
+    started: list[tuple[str, str]] = []
 
-    def execv(path: str, args: list[str]) -> None:
-        restarts.append(args)
-        raise SystemExit(0)
+    def start_run(repo: Path, name: str, key: str, base: str | None) -> str:
+        started.append((name, key))
+        return "unit"
 
-    monkeypatch.setattr(os, "execv", execv)
+    def start_watch(repo: Path, restart: bool) -> None:
+        started.append(("watch", str(restart)))
 
-    with pytest.raises(SystemExit):
-        cli.main(["start", "DEMO-1", "--repo", str(repo)])
+    monkeypatch.setattr(units, "start_run", start_run)
+    monkeypatch.setattr(units, "start_watch", start_watch)
+    monkeypatch.setattr(cli, "open_watch", lambda port, name, key: "http://page")
+
+    assert cli.main(["start", "DEMO-1", "--repo", str(repo)]) == 0
 
     assert (local / "run.py").read_text() == "two"
-    assert restarts == [[sys.executable, "-m", "loop", "start", "DEMO-1", "--repo", str(repo)]]
+    # The dashboard restarts on the new code too.
+    assert started == [("demo", "DEMO-1"), ("watch", "True")]

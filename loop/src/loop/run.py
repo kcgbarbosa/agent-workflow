@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import threading
 import time
 import traceback
@@ -71,6 +72,8 @@ EPIC_SLOT = 1
 
 # A minute past the reset of a usage limit, so the limit is surely clear.
 PAST_RESET_SECONDS = 60
+# A wait for a usage limit looks this often for a stop.
+PAUSE_STEP_SECONDS = 60.0
 
 Outcome = Literal["landed", "stuck", "usage-limit"]
 Handoff = Literal["built", "land"] | Outcome
@@ -88,6 +91,10 @@ class UsageLimit(Exception):
 
 class AgentFailed(Exception):
     pass
+
+
+class Stopped(BaseException):
+    """SIGTERM stopped the run. It is no Exception, so no handler of a ticket's failure takes it."""
 
 
 @dataclass
@@ -136,10 +143,6 @@ def next_log(run_dir: Path, stem: str, suffix: str) -> Path:
     return run_dir / f"{stem}-{number}{suffix}"
 
 
-def pause(seconds: float) -> None:
-    time.sleep(seconds)
-
-
 def tail(text: str, lines: int = LOG_TAIL_LINES) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
@@ -163,6 +166,7 @@ class EpicRun:
         self.epic_summary = ""
         self.settings = agent_settings(config)
         self.paused_until = 0.0
+        self.stopping = threading.Event()
 
     # --- Run ---
 
@@ -172,6 +176,10 @@ class EpicRun:
         try:
             self.stop_stale_stacks()
             return self._run()
+        except Stopped:
+            self.log(self.epic_key, "stop", "stopped")
+            self.notify(f"{self.epic_key} stopped")
+            return 1
         except Exception as error:
             self.log(self.epic_key, "stop", "loop-error", detail=str(error))
             self.notify(f"{self.epic_key} stopped")
@@ -289,6 +297,7 @@ class EpicRun:
                 ] = run
 
             while True:
+                self.stop_point()
                 if not stopped:
                     busy = {run.ticket.key for run in running.values()} | finished
                     for ticket in self.frontier():
@@ -991,8 +1000,16 @@ class EpicRun:
         if end > now and now >= self.paused_until:
             self.notify(f"{self.epic_key} paused")
         self.paused_until = max(self.paused_until, end)
-        pause(max(0.0, self.paused_until - now))
+        left = self.paused_until - now
+        while left > 0:
+            self.stop_point()
+            time.sleep(min(left, PAUSE_STEP_SECONDS))
+            left -= PAUSE_STEP_SECONDS
         return True
+
+    def stop_point(self) -> None:
+        if self.stopping.is_set():
+            raise Stopped
 
     def agent_command(
         self,
@@ -1045,8 +1062,10 @@ class EpicRun:
             "LOOP_RUN_DIR": str(run.run_dir),
             **NO_BACKGROUND,
         }
+        self.stop_point()
         run.agent_log = next_log(run.run_dir, "agent", ".jsonl")
         errors_log = run.agent_log.with_suffix(".err")
+        ended = after_status(run.agent_log, STATUS_GRACE_SECONDS)
         finished = process.run(
             command,
             run.worktree,
@@ -1054,9 +1073,11 @@ class EpicRun:
             seconds=self.config.agent_timeout_minutes * process.MINUTE,
             stdout=run.agent_log,
             stderr=errors_log,
-            stop=after_status(run.agent_log, STATUS_GRACE_SECONDS),
+            stop=lambda: self.stopping.is_set() or ended(),
             on_kill=lambda: self.stack_down(run.worktree, run.slot, run.ticket.key, volumes=False),
         )
+        if finished.stopped:
+            self.stop_point()
         errors = errors_log.read_text()
         # Each turn ends with a result event, and a later turn's result can have no status.
         events = json_lines(run.agent_log.read_text())
@@ -1139,10 +1160,15 @@ class EpicRun:
         on_kill: Callable[[], object] | None = None,
     ) -> process.Finished:
         """A gate or the demo command, at the gate timeout, with its output in the log file."""
+        self.stop_point()
         seconds = self.config.gate_timeout_minutes * process.MINUTE
-        return process.run(
-            command, cwd, env, seconds=seconds, stdout=log_file, stderr="stdout", on_kill=on_kill
-        )
+        finished = process.run(
+            command, cwd, env, seconds=seconds, stdout=log_file, stderr="stdout",
+            stop=self.stopping.is_set, on_kill=on_kill,
+        )  # fmt: skip
+        if finished.stopped:
+            self.stop_point()
+        return finished
 
     def push(self, worktree: Path, branch: str, key: str) -> None:
         result = git(worktree, "push", "--set-upstream", "origin", branch, check=False)
@@ -1151,7 +1177,7 @@ class EpicRun:
     def stop_stale_stacks(self) -> None:
         """Stops the Compose projects of earlier runs, which hold the ports of the slots.
 
-        The run lock lets one run go at a time, so no other run uses them. The volumes stay for KC.
+        `loop start` lets one run of the repo go at a time, so no other run uses them. The volumes stay.
         """
         if self.config.stack is None:
             return
@@ -1173,7 +1199,8 @@ class EpicRun:
         self.command(command, worktree, self.config.stack_env(slot, key))
 
     def command(self, command: list[str], cwd: Path, stack: dict[str, str] | None = None) -> process.Finished:
-        """A short command, such as `gh` or `docker compose down`, at the gate timeout."""
+        """A short command, such as `gh` or `docker compose down`, at the gate timeout. A stop lets it end, so
+        the clean-up after a stop runs too."""
         env = {**self.child_env(), **(stack or {})}
         return process.run(command, cwd, env, seconds=self.config.gate_timeout_minutes * process.MINUTE)
 
@@ -1369,4 +1396,8 @@ def screenshots(run_dir: Path) -> list[Path]:
 
 def run(epic_key: str, config: Config, secrets: Mapping[str, str], base: str | None = None) -> int:
     """The run entry. It returns 0 when the Epic PR is open, and 1 when the loop stopped early."""
-    return EpicRun(epic_key, config, secrets, base).run()
+    epic_run = EpicRun(epic_key, config, secrets, base)
+    # `loop stop` stops the unit with SIGTERM. Each step looks for it, and ends its command through the
+    # process function.
+    signal.signal(signal.SIGTERM, lambda number, frame: epic_run.stopping.set())
+    return epic_run.run()

@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import math
 import mimetypes
-import os
 import re
 import statistics
 import threading
@@ -24,10 +23,9 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse
 
-from . import process, report
+from . import process, report, units
 from .stream import agent_plan
 
-RUN_LOCK = "run.lock"
 SECRETS_FILE = "secrets.json"
 BOARD = "board.json"
 DECISIONS = "decisions.jsonl"
@@ -118,19 +116,12 @@ def read_secrets(state_dir: Path) -> dict[str, str]:
 
 
 def active_run(state_dir: Path) -> str | None:
-    """The Epic key of the run that holds the lock, read from the lock file. The lock stays untouched."""
+    """The Epic key of the project's run unit, when systemd has one."""
     try:
-        holder = json.loads((state_dir / RUN_LOCK).read_text())
-        pid, epic = int(holder["pid"]), str(holder["epic"])
-    except OSError, ValueError, KeyError, TypeError:
+        found = units.runs(state_dir.name.removesuffix(LOOP_SUFFIX))
+    except units.UnitError:
         return None
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return None
-    except PermissionError:
-        pass
-    return epic
+    return found[0] if found else None
 
 
 def read_lines(path: Path) -> list[dict[str, Any]]:

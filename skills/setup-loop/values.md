@@ -15,7 +15,7 @@ loop:
 	loop start $(epic)
 ```
 
-A person can also ask a remote session on the host to run it. The run lives in a tmux session, so it outlives that session. An agent starts a run only with `loop start` (rule 12 of loop.md).
+A person can also ask a remote session on the host to run it. The run is a systemd user unit, so it outlives that session, and `loop stop <Epic key>` ends it. An agent starts a run only with `loop start` (rule 12 of loop.md).
 
 **Check.** `make -n loop epic=TIDE-12` prints `loop start TIDE-12`.
 
@@ -210,20 +210,15 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 - `CLAUDE_CODE_OAUTH_TOKEN` comes from `claude setup-token`, run as the account that should pay for the loop. Each agent run then uses that account, whichever account is signed in on the host. Leave it out when the host's own account is the one.
 - A secret never goes in the repo, the ticket file, a commit, or a log. The watch page masks the values it finds in the secrets file.
 
-**Check.** `loop start` fails at once with the name of any item that the vault lacks. Run `loop secrets` and then `loop start` on each host before the first Epic.
+**Check.** `loop secrets` fails at once with the name of any item that the vault lacks. Run `loop secrets` and then `loop start` on each host before the first Epic.
 
 ## Hosts
 
 **Find.** Which machines can run a loop for hours: an always-on machine suits it best. For each one, read the machine README for how to reach it, what it has installed, and how secrets get there.
 
-**Choose.** List in `tools` each command the gates and the agent call that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `tmux`, a sleep inhibitor, `docker` when `[stack]` is set, and `bw` on a host with no secrets file. Each host also needs the `loop` command from agent-workflow's `install.sh`, `gh` signed in, `claude` at or past the minimum version, Docker running, and the browsers of the UI review.
+**Choose.** List in `tools` each command the gates and the agent call that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `systemd-inhibit`, and `docker` when `[stack]` is set. Each host runs Linux with systemd, and also needs the `loop` command from agent-workflow's `install.sh`, linger on for the user, `bw` for `loop secrets`, `gh` signed in, `claude` at or past the minimum version, Docker Engine running, and the browsers of the UI review.
 
-| Host kind | Needs                                  |
-| --------- | -------------------------------------- |
-| Linux     | Docker Engine, `bw`, `systemd-inhibit` |
-| macOS     | Docker Desktop, `bw`, `caffeinate`     |
-
-**Check.** Run `loop start` on each host. It refuses and names every missing prerequisite.
+**Check.** `loginctl show-user $USER -p Linger` prints `Linger=yes`. Run `loop start` on each host. A missing prerequisite ends the run at once, and `journalctl --user -u loop-<name>-<Epic key>` names every one.
 
 ## Limits
 
@@ -235,11 +230,11 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 **Choose.** Nothing, unless port 8790 is taken on the host. Then set `[watch]` `port`. The watch page opens at `http://127.0.0.1:<port>` on the host. From a phone or another machine, open the host's tailnet address on the same port.
 
-**Check.** `loop watch` answers on the port.
+**Check.** After `loop start`, `systemctl --user is-active loop-watch` prints `active`, and the page answers on the port.
 
 ## Host setup
 
-Each host gets the `loop` command from `install.sh` and one run of `loop secrets` from the repo. Run it again after a secret changes:
+Each host gets the `loop` command from `install.sh`, linger with `loginctl enable-linger`, and one run of `loop secrets` from the repo. Run `loop secrets` again after a secret changes:
 
 ```sh
 BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
@@ -249,7 +244,7 @@ BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
 
 | Symptom                                                   | Value to fix                                                   |
 | --------------------------------------------------------- | -------------------------------------------------------------- |
-| `loop start` names missing commands                       | `tools`, or the host                                           |
+| The run's journal names missing commands                  | `tools`, or the host                                           |
 | The config refuses the file with an unknown key           | A typo in `loop.toml`                                          |
 | The frontier starts a ticket before its blocker           | The link type of the edges, or the Epic children query         |
 | A ticket cannot move to a status                          | `tracker.in_progress`, `tracker.landed`, or the workflow       |

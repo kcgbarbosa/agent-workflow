@@ -14,17 +14,17 @@ The loop changes often. Read its current version before you judge a run:
 
 - [`../setup-loop/loop.md`](../setup-loop/loop.md), the fixed design: what each step should do.
 - `git -C ~/dev/agent-workflow fetch -q`, then `git -C ~/dev/agent-workflow log --oneline -10 -- loop skills/setup-loop` and `git -C ~/dev/agent-workflow status -sb`: the latest loop changes, and whether this checkout is behind origin.
-- The repo's `loop.toml` and `docs/agents/loop.md`. The repo is the pane path of the `<name>-loop` tmux session, from `tmux display -p -t <name>-loop '#{pane_current_path}'`. With no session, ask KC which repo.
+- The repo's `loop.toml` and `docs/agents/loop.md`. The repo is the working directory of the run's unit, from `systemctl --user list-units 'loop-*'` and `systemctl --user show -p WorkingDirectory <unit>`. With no run unit, ask KC which repo.
 
 Done when you can say what each step, gate, and limit of this run should be.
 
 ## 2. Read the run
 
-The run's files are in `~/.local/state/<name>-loop/`. `run.lock` names the running Epic and its pid. With no lock, the Epic is the newest folder there.
+The run's files are in `~/.local/state/<name>-loop/`. The unit `loop-<name>-<Epic key>` names the running Epic. With no unit, the Epic is the newest folder there.
 
-- `kill -0 <pid>` and `tmux ls`: is the run alive?
+- `systemctl --user is-active loop-<name>-<Epic key>`: is the run alive?
 - `curl -s localhost:<port>/api/epic/<Epic key>`, where the port is `[watch]` `port`, 8790 by default: the state, `stats`, `plan`, and each ticket's column, `step` with its `since`, and `recent` tool calls.
-- The last 30 lines of `decisions.jsonl`, and `tmux capture-pane -p -t <name>-loop -S -30`.
+- The last 30 lines of `decisions.jsonl`, and `journalctl --user -u loop-<name>-<Epic key> -n 30`.
 - `loop report <Epic key>`, run from the repo, when the cost looks off.
 
 When the watch page does not answer, read the same facts from `decisions.jsonl` and `board.json`.
@@ -35,13 +35,13 @@ Done when you know each ticket's state and what the running ticket is doing righ
 
 Check every item. Each one that holds is a flag.
 
-- **Dead**: the lock's pid or the `<name>-loop` tmux session is gone, and `decisions.jsonl` ends without a `stop` or `pr` line.
+- **Dead**: the run's unit is gone, and `decisions.jsonl` ends without a `stop` or `pr` line.
 - **Slow**: an agent past `agent_timeout_minutes`, a gate past `gates.timeout_minutes`, or `recent` repeating the same tool call.
 - **Stuck**: a stuck ticket, a `blocked` agent, or stuck tickets in a row near `circuit_breaker`.
 - **Denied**: a tool call that auto mode denied. `/api/agent/<Epic key>/<ticket key>/<n>` marks each one `"denied": true`. Check the newest agent log of the running ticket.
 - **Plan**: `five_hour.utilization` of `/api/usage`, the newest meter reading on the host, above 0.8, or `plan.fits.five_hour` at 0. The loop pauses at the limit and resumes at `resets_at` (rule 8).
 - **Paused**: a ticket's `step.paused` is true.
-- **Errors**: a traceback in the tmux pane, or an `agent-*.err` with content.
+- **Errors**: a traceback in the unit's journal, or an `agent-*.err` with content.
 - **Drift**: the run does something the design from step 1 says it should not. Name the rule.
 - **Stale loop**: the agent-workflow checkout is behind origin, so the next `loop start` takes new code.
 

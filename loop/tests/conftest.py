@@ -6,21 +6,25 @@ The fake commands in `bin/` come first on PATH, so no test calls the real Jira, 
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from collections.abc import Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fake_jira import FakeJira
+from fake_units import alive
 
-from loop import config
+from loop import cli, config, watch
+from loop.update import Update
 from loop.watch import read_lines
 
 BIN = Path(__file__).parent / "bin"
@@ -34,6 +38,8 @@ TAKE_TERMINAL = (
     "os.execv(sys.argv[1], sys.argv[1:])"
 )
 SECRETS = {"JIRA_EMAIL": "kc@example.com", "JIRA_API_TOKEN": "secret-token", "NTFY_TOPIC": "secret-topic"}
+UNIT = f"loop-demo-{EPIC}.service"
+TAILNET = "100.64.0.7"
 
 
 CONFIG = """
@@ -107,6 +113,7 @@ class World:
     origin: Path
     home: Path
     fakes: Path
+    monkeypatch: pytest.MonkeyPatch
 
     @property
     def state(self) -> Path:
@@ -137,13 +144,12 @@ class World:
         """Runs `loop run` and returns its exit code. Its output shows when the test fails.
 
         With `terminal`, the run has a pseudo-terminal as its controlling terminal and stdin, and it is the
-        terminal's foreground process group, as under tmux.
+        terminal's foreground process group, as when a person runs it in a terminal.
         """
         write_config(
             self.repo, self.jira.url, parallel, landed_keys_only, extra, ui_extra, gates_extra, limits_extra
         )
-        self.state.mkdir(parents=True, exist_ok=True)
-        (self.state / "secrets.json").write_text(json.dumps(SECRETS))
+        self.write_secrets(SECRETS)
         on = ["--on", base] if base else []
         command = [sys.executable, str(LOOP_WITH_FAST_CLOCK), "run", EPIC, "--repo", str(self.repo), *on]
         env = {**os.environ, "HOME": str(self.home)}
@@ -165,6 +171,49 @@ class World:
             )
         print(finished.stdout, finished.stderr, sep="\n")
         return finished.returncode
+
+    def write_secrets(self, secrets: dict[str, str]) -> None:
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "secrets.json").write_text(json.dumps(secrets))
+
+    def start(self, parallel: int = 1, new_code: bool = False) -> tuple[int, str]:
+        """Runs `loop start` in this process, with the loop's own checkout current, or just updated with
+        `new_code`, and returns the exit code and the output. The fake `systemd-run` starts `loop run`. It
+        writes the secrets file when the test has not."""
+        write_config(self.repo, self.jira.url, parallel)
+        if not (self.state / "secrets.json").exists():
+            self.write_secrets(SECRETS)
+        self.monkeypatch.setattr(cli, "source_checkout", lambda: self.home / "agent-workflow")
+        self.monkeypatch.setattr(cli, "update", lambda checkout: Update("The loop is current.", new_code))
+        return self.cli("start")
+
+    def stop(self) -> tuple[int, str]:
+        return self.cli("stop")
+
+    def cli(self, command: str) -> tuple[int, str]:
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            code = cli.main([command, EPIC, "--repo", str(self.repo)])
+        print(output.getvalue())
+        return code, output.getvalue()
+
+    def unit_active(self, unit: str = UNIT) -> bool:
+        return alive(unit, self.fakes / "units")
+
+    def wait_for_run(self) -> None:
+        """Waits for the run's unit to end, and prints its output."""
+        deadline = time.monotonic() + 300
+        while self.unit_active() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not self.unit_active(), "the run did not end"
+        print((self.fakes / "units" / f"{UNIT}.log").read_text())
+
+    def wait_for_call(self, name: str) -> None:
+        """Waits until the agent run of the session name has started."""
+        deadline = time.monotonic() + 60
+        while not self.calls(name) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert self.calls(name), f"no agent run of {name}"
 
     def push_branch(self, branch: str, files: dict[str, str], start: str = "origin/main") -> None:
         """Pushes a commit of the files on the branch, as another Epic's PR branch."""
@@ -241,6 +290,11 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
     tools = {str(Path(found).parent) for tool in ("git", "python3") if (found := shutil.which(tool))}
     monkeypatch.setenv("PATH", ":".join([str(BIN), *sorted(tools)]))
     monkeypatch.setenv("BW_SESSION", "vault-session-key")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # `loop start` opens the page on the screen it has.
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(watch, "addresses", lambda: ["127.0.0.1", TAILNET])
 
     origin = tmp_path / "origin.git"
     sh(tmp_path, "git", "init", "-q", "--bare", str(origin))
@@ -255,7 +309,11 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[World]:
 
     jira = FakeJira()
     jira.add(EPIC, "The Loop", issue_type="Epic")
-    world = World(jira, repo, origin, tmp_path / "home", fakes)
+    world = World(jira, repo, origin, tmp_path / "home", fakes, monkeypatch)
     world.plan({})
     yield world
+    # A test that fails leaves no run behind.
+    for state in (fakes / "units").glob("*.json"):
+        if (pid := json.loads(state.read_text())["pid"]) is not None and alive(state.stem, fakes / "units"):
+            os.kill(pid, 9)
     jira.close()

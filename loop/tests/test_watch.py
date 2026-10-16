@@ -6,11 +6,14 @@ import json
 import os
 import time
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from loop.cli import one_run
+import pytest
+
 from loop.watch import (
     Watch,
     active_run,
@@ -26,6 +29,28 @@ from loop.watch import (
 
 EPIC = "DEMO-1"
 TOKEN = "secret-token-value"
+BIN = Path(__file__).parent / "bin"
+
+
+@pytest.fixture(autouse=True)
+def units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The fake `systemctl`, over the units in the test's folder. No unit is loaded until a test adds one."""
+    monkeypatch.setenv("FAKE_CLAUDE_DIR", str(tmp_path))
+    monkeypatch.setenv("PATH", f"{BIN}:{os.environ['PATH']}")
+    (tmp_path / "units").mkdir()
+    return tmp_path / "units"
+
+
+@contextmanager
+def active(home: Path, epic_key: str) -> Iterator[None]:
+    """The project's run unit of the Epic is loaded while the block runs."""
+    name = home.name.removesuffix("-loop")
+    unit = Path(os.environ["FAKE_CLAUDE_DIR"], "units", f"loop-{name}-{epic_key}.service.json")
+    unit.write_text(json.dumps({"pid": None}))
+    try:
+        yield
+    finally:
+        unit.unlink()
 
 
 def write_lines(path: Path, lines: list[dict[str, Any]]) -> None:
@@ -207,10 +232,14 @@ def test_the_page_serves_no_file_outside_the_run_folders(tmp_path: Path) -> None
         assert watch.handle(path)[0] == 404, path
 
 
-def test_the_page_knows_the_active_run_from_the_lock(tmp_path: Path) -> None:
-    with one_run(tmp_path, EPIC):
-        assert active_run(tmp_path) == EPIC
-    assert active_run(tmp_path) is None
+def test_the_page_knows_the_active_run_from_its_unit(tmp_path: Path, units: Path) -> None:
+    home = tmp_path / "demo-loop"
+    assert active_run(home) is None
+
+    (units / f"loop-demo-{EPIC}.service.json").write_text(json.dumps({"pid": None}))
+
+    assert active_run(home) == EPIC
+    assert active_run(tmp_path / "other-loop") is None
 
 
 def test_loop_watch_serves_the_page_and_the_api(tmp_path: Path) -> None:
@@ -339,7 +368,7 @@ def test_a_running_ticket_shows_its_current_step_and_its_last_activity(tmp_path:
     # The DEMO-4 log is newer than its last line, so an agent runs after the code review: the UI review.
     os.utime(home / "runs" / "DEMO-4" / "agent-1.jsonl", (time.time(), time.time()))
 
-    with one_run(tmp_path, EPIC):
+    with active(tmp_path, EPIC):
         view = epic_view(tmp_path, EPIC)
 
     tickets = {ticket["key"]: ticket for ticket in view["tickets"]}
@@ -451,7 +480,7 @@ def test_the_plan_meter_is_the_newest_reading_on_the_host_and_never_the_cost(tmp
     log.write_text(json.dumps(event) + "\n" + json.dumps({"type": "result", "total_cost_usd": 9.0}) + "\n")
 
     assert plan_meter(tmp_path)["five_hour"]["utilization"] == 0.45
-    with one_run(tmp_path, EPIC):
+    with active(tmp_path, EPIC):
         meter = plan_meter(tmp_path)
 
     assert meter["five_hour"]["utilization"] == 0.61 and not meter["five_hour"]["past"]
@@ -498,7 +527,7 @@ def test_the_home_page_lists_the_runs_of_each_project_with_the_running_one_first
         json.dumps({"summary": "Other", "tickets": [{"key": "OTHER-3"}, {"key": "OTHER-4"}]})
     )
 
-    with one_run(theirs, "OTHER-2"):
+    with active(theirs, "OTHER-2"):
         home = json.loads(Watch(ours).handle("/api/home")[2])
 
     names = [(project["name"], project["running"]) for project in home]
