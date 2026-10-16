@@ -1,9 +1,9 @@
-"""`loop watch`: a read-only web page of the runs on this host.
+"""`loop watch`: a web page of the runs on this host.
 
 It reads only what the run writes to the state folder: `decisions.jsonl`, `board.json`, the agent logs, the
-gate logs, and the screenshots, and asks systemd which runs are active. It changes nothing the loop reads, so
-it can run while a run lasts, after it, or without one. The capacity forecast (`forecast.py`) writes its own
-Jira snapshot, which no run reads.
+gate logs, and the screenshots, and asks systemd which runs are active. Only Start and Stop change anything,
+through the functions that `loop start` and `loop stop` call. The capacity forecast (`forecast.py`) writes its
+own Jira snapshot, which no run reads.
 """
 
 from __future__ import annotations
@@ -22,12 +22,14 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
 from . import process, report, units
-from .config import stored_secrets
+from .config import Config, ConfigError, stored_secrets
+from .forecast import BacklogError, jira_client, open_epics, project_keys
 from .report import DECISIONS, KEY, LOOP_SUFFIX, epic_homes, is_gate, iso, plan_meter, projects, read_lines
 from .steps import STEPS, current_step
+from .tracker import TrackerError
 
 BOARD = "board.json"
 PAGE = Path(__file__).with_name("watch.html")
@@ -673,9 +675,14 @@ class Forecast(Protocol):
 
 
 class Watch:
-    def __init__(self, state_dir: Path, forecast: Forecast | None = None) -> None:
+    """`config` is the project whose `loop.toml` started `loop watch`. Start and Stop act on it only."""
+
+    def __init__(
+        self, state_dir: Path, forecast: Forecast | None = None, config: Config | None = None
+    ) -> None:
         self.state_dir = state_dir
         self.forecast = forecast
+        self.config = config
 
     def masker(self) -> Masker:
         # Read for each request, so a new `loop secrets` takes effect without a restart.
@@ -689,7 +696,12 @@ class Watch:
         if not parts:
             return HTTPStatus.OK, "text/html; charset=utf-8", PAGE.read_bytes()
         if parts == ["api", "home"]:
-            return self.json(host_view(self.state_dir))
+            control = self.config.name if self.config else None
+            return self.json(
+                [{**project, "control": project["name"] == control} for project in host_view(self.state_dir)]
+            )
+        if parts == ["api", "start"] and self.config:
+            return self.json(self.startable(self.config))
         if parts == ["api", "usage"]:
             return self.json(plan_meter(self.state_dir))
         if parts == ["api", "forecast"]:
@@ -721,11 +733,33 @@ class Watch:
             return self.file(state_dir / parts[1], "/".join(parts[2:]))
         return self.missing()
 
+    def startable(self, config: Config) -> dict[str, Any]:
+        """The open Epics that Start lists: those of the Jira projects whose Epics ran on this host."""
+        try:
+            epics = open_epics(jira_client(config), project_keys(config.state_dir))
+        except (BacklogError, TrackerError) as error:
+            return {"epics": [], "error": str(error)}
+        return {"epics": [{"key": epic["key"], "summary": epic["summary"]} for epic in epics]}
+
     def post(self, url: str) -> tuple[HTTPStatus, str, bytes]:
-        """The one request that does something: read the backlog from Jira now. No run reads the result."""
-        if urlparse(url).path.rstrip("/") == "/api/forecast/refresh" and self.forecast:
+        """Start and Stop of a run, and a read of the backlog from Jira now, which no run reads."""
+        parts = urlparse(url).path.strip("/").split("/")
+        if parts == ["api", "forecast", "refresh"] and self.forecast:
             return self.json({"started": self.forecast.refresh()})
-        return self.missing()
+        if len(parts) != 3 or parts[1] not in ("start", "stop") or not KEY.fullmatch(parts[2]):
+            return self.missing()
+        command, epic_key = parts[1], parts[2]
+        if parts[0] != "api" or self.config is None:
+            return self.missing()
+        try:
+            if command == "start":
+                units.start_epic(self.config.repo, epic_key, None, new_code=False)
+                return self.json({"started": epic_key})
+            if units.stop_run(self.config.name, epic_key):
+                return self.json({"stopped": epic_key})
+            return self.refused(f"No run of {epic_key} is active.")
+        except (units.UnitError, ConfigError) as error:
+            return self.refused(str(error))
 
     def json(self, data: Any) -> tuple[HTTPStatus, str, bytes]:
         body = json.dumps(self.masker().data(data)).encode()
@@ -742,17 +776,32 @@ class Watch:
         text = self.masker().text(path.read_text(errors="replace"))
         return HTTPStatus.OK, "text/plain; charset=utf-8", text.encode()
 
+    def refused(self, reason: str) -> tuple[HTTPStatus, str, bytes]:
+        return HTTPStatus.CONFLICT, "application/json", json.dumps({"error": reason}).encode()
+
     def missing(self) -> tuple[HTTPStatus, str, bytes]:
         return HTTPStatus.NOT_FOUND, "text/plain", b"Not found"
 
 
-def handler(watch: Watch) -> type[BaseHTTPRequestHandler]:
+FORBIDDEN = HTTPStatus.FORBIDDEN, "text/plain", b"Forbidden"
+
+
+def handler(watch: Watch, names: set[str]) -> type[BaseHTTPRequestHandler]:
+    """Answers only a Host of this host's `names`. A site whose name resolves to this host, as in DNS
+    rebinding, sends its own name, and gets 403."""
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 - the name http.server calls.
-            self.reply(*watch.handle(self.path))
+            self.reply(*(watch.handle(self.path) if self.allowed() else FORBIDDEN))
 
         def do_POST(self) -> None:  # noqa: N802 - the name http.server calls.
-            self.reply(*watch.post(self.path))
+            self.reply(*(watch.post(self.path) if self.allowed() else FORBIDDEN))
+
+        def allowed(self) -> bool:
+            try:
+                return urlsplit(f"//{self.headers.get('Host', '')}").hostname in names
+            except ValueError:
+                return False
 
         def reply(self, status: HTTPStatus, kind: str, body: bytes) -> None:
             self.send_response(status)
@@ -773,27 +822,47 @@ def handler(watch: Watch) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+def tailnet() -> tuple[str, str] | None:
+    """This host's IPv4 address on the tailnet and its MagicDNS name, when it is on a tailnet."""
+    try:
+        result = process.run(["tailscale", "status", "--json"], seconds=5)
+        own = json.loads(result.stdout)["Self"]
+    except OSError, ValueError, KeyError, TypeError:
+        return None
+    address = next((ip for ip in own.get("TailscaleIPs") or [] if "." in ip), None)
+    return (address, str(own.get("DNSName", "")).rstrip(".").lower()) if address else None
+
+
 def addresses() -> list[str]:
     """Localhost, and this host's tailnet address when it has one. No other network reaches the page."""
-    found = ["127.0.0.1"]
-    try:
-        result = process.run(["tailscale", "ip", "-4"], seconds=5)
-    except OSError:
-        return found
-    if result.returncode == 0 and result.stdout.strip():
-        found.append(result.stdout.split()[0])
-    return found
+    found = tailnet()
+    return ["127.0.0.1", found[0]] if found else ["127.0.0.1"]
+
+
+def host_names() -> set[str]:
+    """The names a request may give as its Host: localhost, the tailnet address, and the MagicDNS name, in
+    full and as the host name alone, which the tailnet's search domain completes."""
+    names = {"localhost", "127.0.0.1"}
+    if found := tailnet():
+        address, dns = found
+        names |= {address, dns, dns.split(".")[0]} - {""}
+    return names
 
 
 def serve(
-    state_dir: Path, port: int, hosts: list[str] | None = None, forecast: Forecast | None = None
+    state_dir: Path,
+    port: int,
+    hosts: list[str] | None = None,
+    forecast: Forecast | None = None,
+    config: Config | None = None,
 ) -> list[ThreadingHTTPServer]:
     """Starts one server for each address, each in its own thread, and returns them."""
-    watch = Watch(state_dir, forecast)
+    watch = Watch(state_dir, forecast, config)
+    names = host_names()
     servers = []
     for host in hosts or addresses():
         try:
-            server = ThreadingHTTPServer((host, port), handler(watch))
+            server = ThreadingHTTPServer((host, port), handler(watch, names))
         except OSError as error:
             if host == "127.0.0.1":
                 raise

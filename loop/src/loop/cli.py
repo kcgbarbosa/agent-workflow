@@ -30,14 +30,13 @@ from .config import Config, ConfigError
 from .forecast import Forecaster
 from .run import run
 from .tracker import TrackerError
-from .units import UnitError
+from .units import NO_SECRETS, UnitError
 from .update import Stale, source_checkout, update
 
 TOOLS = ("git", "claude", "gh", "systemd-inhibit")
 SECRETS_FILE = config_file.SECRETS_FILE
 # A check such as `docker info` or `bw status` that has not answered by then is taken as failed.
 QUIET_SECONDS = 120
-NO_SECRETS = "Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
 
 
 class Refused(Exception):
@@ -212,15 +211,9 @@ def awake(name: str, epic_key: str) -> Iterator[None]:
 
 def start(repo: Path, epic_key: str, base: str | None, new_code: bool) -> int:
     """Starts the run as a systemd user unit, so it outlives the agent or shell that starts it, and the
-    dashboard as a user service. The run checks the rest of the prerequisites itself."""
+    dashboard as a user service."""
+    unit = units.start_epic(repo, epic_key, base, new_code)
     name, port = config_file.peek(repo)
-    if not (config_file.state_dir_of(name) / SECRETS_FILE).exists():
-        raise Refused(f"This host has no secrets file. {NO_SECRETS}")
-    if active := units.runs(name):
-        unit = units.run_unit(name, active[0])
-        raise Refused(f"A run is active: {unit}. `loop stop {active[0]}` stops it.")
-    unit = units.start_run(repo, name, epic_key, base)
-    units.start_watch(repo, port, restart=new_code)
     page = open_watch(port, name, epic_key)
     print(f"The loop is building {epic_key}. Watch it at {page}, or with `journalctl --user -fu {unit}`.")
     return 0
@@ -239,7 +232,7 @@ def watch(config: Config) -> int:
     """Serves the page until the process stops. It changes nothing the loop reads."""
     forecast = Forecaster(config)
     try:
-        servers = watch_page.serve(config.state_dir, config.watch_port, forecast=forecast)
+        servers = watch_page.serve(config.state_dir, config.watch_port, forecast=forecast, config=config)
     except OSError as error:
         raise Refused(f"loop watch cannot listen on port {config.watch_port}: {error}") from error
     for server in servers:

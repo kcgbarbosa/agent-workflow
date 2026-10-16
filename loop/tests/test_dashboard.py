@@ -7,12 +7,19 @@ import json
 import os
 import signal
 import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
-from conftest import EPIC, World
+from conftest import EPIC, MAGIC_DNS, SECRETS, TAILNET, World, write_config
 from test_crash import two_tickets
 
+from loop import config, watch
 from loop.watch import Watch
+
+Send = Callable[..., tuple[int, Any]]
 
 
 def api(world: World, path: str) -> Any:
@@ -43,6 +50,38 @@ def wait_until(check: Any, seconds: float = 60) -> None:
     while not check() and time.monotonic() < deadline:
         time.sleep(0.1)
     assert check()
+
+
+@contextmanager
+def dashboard(world: World) -> Iterator[Send]:
+    """`loop watch` of the demo repo, as its unit serves it, and a function that sends it a request with a
+    Host header. The default Host is localhost."""
+    write_config(world.repo, world.jira.url, parallel=1)
+    world.write_secrets(SECRETS)
+    settings = config.load(world.repo)
+    servers = watch.serve(settings.state_dir, 0, ["127.0.0.1"], config=settings)
+    port = servers[0].server_address[1]
+
+    def send(method: str, path: str, host: str = "localhost") -> tuple[int, Any]:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}", method=method, headers={"Host": f"{host}:{port}"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                body = response.read()
+                status = response.status
+        except urllib.error.HTTPError as error:
+            body, status = error.read(), error.code
+        try:
+            return status, json.loads(body)
+        except json.JSONDecodeError:
+            return status, body.decode()
+
+    try:
+        yield send
+    finally:
+        for server in servers:
+            server.shutdown()
 
 
 def test_a_run_killed_mid_step_shows_as_stopped_with_the_step_it_stopped_in(world: World) -> None:
@@ -112,7 +151,7 @@ def test_the_plan_meter_still_shows_for_a_running_run(world: World) -> None:
 
 
 # The fields the page reads, for each view.
-HOME = {"name", "runs"}
+HOME = {"name", "runs", "control"}
 HOME_RUN = {"key", "summary", "updated", "running", "status", "progress", "stuck", "working"}
 EPIC_VIEW = {
     "key", "summary", "branch", "status", "resumes", "progress", "queue", "state", "stop_reason", "pr_url",
@@ -151,3 +190,85 @@ def test_every_view_keeps_the_data_it_has_today_except_fields_the_page_does_not_
     # The project list and the Epic list are part of the home view now.
     assert api(world, "/api/projects") == 404
     assert api(world, "/api/epics") == 404
+
+
+def test_the_run_view_has_a_start_button_that_lists_the_projects_open_epics_and_starts_the_one_kc_picks(
+    world: World,
+) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.jira.add("DEMO-4", "An Epic that is done", issue_type="Epic", status="Done")
+    world.jira.add("DEMO-5", "The Second Loop", issue_type="Epic")
+    world.jira.add("DEMO-6", "Add the next part", parent="DEMO-5")
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}], "DEMO-6": [{"write": {"b.txt": "b"}, "stall": 120}]})
+    assert world.run() == 0
+
+    with dashboard(world) as send:
+        _, home = send("GET", "/api/home")
+        _, start = send("GET", "/api/start")
+        started = send("POST", "/api/start/DEMO-5")
+        world.wait_for_call("DEMO-6")
+        _, view = send("GET", "/api/epic/DEMO-5")
+        send("POST", "/api/stop/DEMO-5")
+
+    assert [(project["name"], project["control"]) for project in home] == [("demo", True)]
+    assert start["epics"] == [
+        {"key": EPIC, "summary": "The Loop"},
+        {"key": "DEMO-5", "summary": "The Second Loop"},
+    ]
+    assert started == (200, {"started": "DEMO-5"})
+    assert view["status"] == "running"
+    assert ticket(view, "DEMO-6")["column"] == "running"
+
+
+def test_a_running_run_has_a_stop_button_after_a_stop_the_view_shows_the_run_as_stopped(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "stall": 120}]})
+
+    with dashboard(world) as send:
+        send("POST", f"/api/start/{EPIC}")
+        world.wait_for_call("DEMO-2")
+        _, running = send("GET", f"/api/epic/{EPIC}")
+        stopped = send("POST", f"/api/stop/{EPIC}")
+        _, after = send("GET", f"/api/epic/{EPIC}")
+        again = send("POST", f"/api/stop/{EPIC}")
+
+    assert running["status"] == "running"
+    assert stopped == (200, {"stopped": EPIC})
+    assert not world.unit_active()
+    assert (after["status"], after["stop_reason"]) == ("stopped", "stopped")
+    assert again == (409, {"error": f"No run of {EPIC} is active."})
+
+
+def test_both_work_from_the_iphone_at_the_tailnet_address(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}, "stall": 120}]})
+
+    with dashboard(world) as send:
+        page = send("GET", "/", host=MAGIC_DNS.split(".")[0])
+        started = send("POST", f"/api/start/{EPIC}", host=TAILNET)
+        refused = send("POST", f"/api/start/{EPIC}", host=MAGIC_DNS)
+        world.wait_for_call("DEMO-2")
+        stopped = send("POST", f"/api/stop/{EPIC}", host=MAGIC_DNS)
+        _, after = send("GET", f"/api/epic/{EPIC}", host=TAILNET)
+
+    assert page[0] == 200
+    assert "<title>My Loop</title>" in page[1]
+    assert started == (200, {"started": EPIC})
+    assert refused[0] == 409
+    assert f"A run is active: loop-demo-{EPIC}.service" in refused[1]["error"]
+    assert stopped == (200, {"stopped": EPIC})
+    assert after["status"] == "stopped"
+
+
+def test_a_request_with_a_host_that_is_not_t14s_gets_403(world: World) -> None:
+    with dashboard(world) as send:
+        answers = [
+            send("GET", "/", host="rebind.example.com"),
+            send("GET", "/api/home", host="rebind.example.com"),
+            send("GET", "/api/start", host="100.64.0.8"),
+            send("POST", f"/api/start/{EPIC}", host="t14.rebind.example.com"),
+            send("POST", f"/api/stop/{EPIC}", host="rebind.example.com"),
+        ]
+
+    assert [status for status, _ in answers] == [403] * len(answers)
+    assert not [call for call in world.records("systemd") if call["tool"] == "systemd-run"]
