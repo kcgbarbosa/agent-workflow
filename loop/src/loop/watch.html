@@ -355,7 +355,7 @@ const VERDICT = {
   passed: ["UI review passed", "ok"], unfixed: ["Passed with faults left unfixed", "warn"],
   faults: ["UI review found faults", "bad"], unreviewed: ["Not reviewed yet", ""],
 };
-const RESULT = { pass: "ok", landed: "ok", ok: "ok", done: "ok", "pr-open": "ok", fail: "bad", stuck: "bad", error: "bad", "loop-error": "bad", conflict: "bad", timeout: "bad", findings: "warn", "usage-pause": "warn", unfixed: "warn", restart: "warn" };
+const RESULT = { pass: "ok", landed: "ok", ok: "ok", done: "ok", "pr-open": "ok", fail: "bad", stuck: "bad", error: "bad", "loop-error": "bad", conflict: "bad", timeout: "bad", findings: "warn", "usage-pause": "warn", open: "warn", unfixed: "warn", restart: "warn" };
 const STOPPED = {
   "circuit-breaker": "The run stopped after stuck tickets in a row (the circuit breaker).",
   "usage-limit": "The run stopped at a usage limit that resets too late to wait for.",

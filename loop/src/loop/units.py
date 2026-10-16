@@ -13,7 +13,6 @@ EPIC_KEY = r"[A-Z][A-Z0-9]*-\d+"
 ENV = ("PATH", "HOME", "LANG", "SSH_AUTH_SOCK")
 RUN_PROPERTIES = ("KillMode=mixed", "TimeoutStopSec=10min")
 WATCH_PROPERTIES = ("Restart=always", "RestartSec=5")
-# One dashboard serves every project on the host.
 WATCH_UNIT = f"loop-watch-{config.WATCH_PORT}.service"
 NO_SECRETS = "Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`."
 

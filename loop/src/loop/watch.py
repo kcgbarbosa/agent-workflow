@@ -356,7 +356,7 @@ def verdict(ui_review: dict[str, Any] | None, shots: list[dict[str, Any]]) -> st
     newest = max(shot["time"] for shot in shots)
     if ui_review is None or str(ui_review.get("time")) < newest:
         return "unreviewed"
-    return {"pass": "passed", "fail": "faults", "unfixed": "unfixed"}.get(
+    return {"pass": "passed", "fail": "faults", "open": "unfixed", "unfixed": "unfixed"}.get(
         str(ui_review["result"]), "unreviewed"
     )
 

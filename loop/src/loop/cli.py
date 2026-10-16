@@ -34,7 +34,6 @@ from .units import NO_SECRETS, UnitError
 from .update import Stale, source_checkout, update
 
 TOOLS = ("git", "claude", "gh", "systemd-inhibit")
-SECRETS_FILE = config_file.SECRETS_FILE
 # A check such as `docker info` or `bw status` that has not answered by then is taken as failed.
 QUIET_SECONDS = 120
 
@@ -123,7 +122,7 @@ def claude_problem(version: str) -> str | None:
 
 
 def secrets_file(config: Config) -> Path:
-    return config.state_dir / SECRETS_FILE
+    return config.state_dir / config_file.SECRETS_FILE
 
 
 def bitwarden_unlocked() -> bool:
@@ -178,8 +177,9 @@ def check_services(config: Config, secrets: dict[str, str]) -> None:
     try:
         config.jira(secrets).check_access()
     except JiraError as error:
-        changed = " If a secret changed, run `loop secrets` again." if secrets_file(config).exists() else ""
-        raise Refused(f"The tracker refuses the credentials: {error}{changed}") from error
+        raise Refused(
+            f"Jira refuses the credentials: {error} If a secret changed, run `loop secrets` again."
+        ) from error
     if _quiet(["git", "ls-remote", "--exit-code", "origin", "HEAD"], cwd=config.repo) != 0:
         raise Refused("The remote origin does not answer.")
 

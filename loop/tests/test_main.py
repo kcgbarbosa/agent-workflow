@@ -10,7 +10,8 @@ import pytest
 from conftest import write_config
 
 from loop import cli, config, watch
-from loop.cli import SECRETS_FILE, Refused, main, read_secrets
+from loop.cli import Refused, main, read_secrets
+from loop.config import SECRETS_FILE
 
 
 def test_the_loop_refuses_to_run_when_a_prerequisite_is_missing(

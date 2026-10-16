@@ -469,6 +469,8 @@ def test_a_screenshot_counts_as_reviewed_only_when_a_ui_review_line_follows_it()
     assert verdict({"result": "pass", "time": at(5)}, shots) == "unreviewed"
     assert verdict({"result": "pass", "time": at(12)}, shots) == "passed"
     assert verdict({"result": "fail", "time": at(12)}, shots) == "faults"
+    assert verdict({"result": "open", "time": at(12)}, shots) == "unfixed"
+    # An older log names the result `unfixed`.
     assert verdict({"result": "unfixed", "time": at(12)}, shots) == "unfixed"
 
 
