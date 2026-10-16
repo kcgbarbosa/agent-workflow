@@ -269,9 +269,6 @@ details.forecast > summary h2::before { content: "▸ "; color: var(--text-muted
 details.forecast[open] > summary { padding-bottom: 0; }
 details.forecast[open] > summary h2::before { content: "▾ "; }
 .forecast h3 { margin: 24px 0 8px; font-size: 14px; font-weight: 500; color: var(--text-muted); }
-.forecast .sync { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 12px; color: var(--text-muted); font-size: 13px; }
-.forecast .sync.warn { color: var(--warn); }
-.forecast ul.plain { margin: 6px 0 0; padding-left: 18px; }
 .forecast .scroll { overflow-x: auto; }
 .forecast .scroll td:first-child { min-width: 150px; }
 @media (max-width: 1023px) { details.forecast > summary { padding-bottom: 16px; } }
@@ -1040,30 +1037,10 @@ function loadForecast(now) {
   });
 }
 
-async function refreshBacklog(button) {
-  button.disabled = true;
-  button.textContent = "Reading Jira...";
-  try { await fetch("/api/forecast/refresh", { method: "POST" }); } catch { /* The status line says what happened. */ }
-  setTimeout(() => loadForecast(true), 3000);
-}
-
 const num = (n, digits = 1) => (typeof n === "number" ? n.toFixed(digits).replace(/\.0+$/, "") : "-");
-const range = (s, unit = "%") => (s && typeof s.per_ticket === "number"
-  ? `${num(s.per_ticket)}${unit}${typeof s.low === "number" && s.low !== s.high ? ` (${num(s.low)} to ${num(s.high)})` : ""}` : "-");
+const share = (n) => (typeof n === "number" ? `${num(n)}%` : "-");
 const day = (iso) => (iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" }) : "");
-
-function syncLine(f) {
-  const s = f.sync;
-  const button = h("button", { class: "btn", onclick: (e) => refreshBacklog(e.currentTarget), disabled: s && s.syncing }, s && s.syncing ? "Reading Jira..." : "Refresh from Jira");
-  if (!s) return h("div", { class: "sync" }, "No Jira snapshot.");
-  let text;
-  if (s.error && s.synced) text = `Jira did not answer ${ago(s.error_at)}: ${s.error} The open Epics are from ${when(s.synced)}.`;
-  else if (s.error) text = `Jira did not answer: ${s.error}`;
-  else if (s.synced) text = `Jira read ${ago(s.synced)}. It is read again every ${plural(s.interval_minutes, "minute", "minutes")}.`;
-  else text = "Reading Jira for the first time.";
-  const warn = s.error || (s.synced && s.stale);
-  return h("div", { class: `sync${warn ? " warn" : ""}` }, h("span", {}, text, s.stale && s.synced && !s.error ? " The snapshot is stale." : ""), button);
-}
+const about = (n, digits = 1) => (typeof n === "number" ? `About ${num(n, digits)}` : "-");
 
 function fillForecast() {
   const wrap = ui.forecastWrap;
@@ -1072,66 +1049,39 @@ function fillForecast() {
   if (f === undefined) { wrap.replaceChildren(h("div", { class: "empty" }, "Loading...")); return; }
   if (!f) { wrap.replaceChildren(h("div", { class: "empty" }, "This page has no forecast. Start it with loop watch from the repo.")); return; }
   const plan = f.plan ? f.plan.name : "the plan";
-  const e = f.estimate;
   const c = f.capacity;
-  const b = f.backlog;
-  const parts = [h("div", { class: "note" }, h("b", {}, f.verdict.says),
-    f.verdict.collect.length ? h("ul", { class: "plain" }, f.verdict.collect.map((x) => h("li", {}, x))) : "")];
-  parts.push(syncLine(f));
+  const o = f.open;
+  const parts = [];
+  const table = (head, rows) => h("div", { class: "scroll" }, h("table", { class: "steps cost" }, h("tbody", {},
+    h("tr", { class: "sec" }, head.map((x, i) => h("td", { class: i ? "n" : "" }, x))), rows)));
 
   // The open work, by Epic.
   parts.push(h("h3", {}, `Open work${f.project ? ` in ${f.project}` : ""}`));
-  if (!b) parts.push(h("div", { class: "muted" }, "No Jira snapshot yet."));
-  else if (!b.epics.length) parts.push(h("div", { class: "muted" }, "No open Epic has tickets in Jira."));
+  if (f.jira && f.jira.error) parts.push(h("div", { class: "why" }, `Jira did not answer: ${f.jira.error}`));
+  else if (!o || !o.epics.length) parts.push(h("div", { class: "muted" }, "Jira has no open Epic."));
   else {
-    const need = (n) => [range(n.five_hour), range(n.seven_day)];
-    const rows = b.epics.map((x) => h("tr", {},
-      h("td", {}, h("span", { class: "key" }, x.key), " ", x.summary),
-      h("td", { class: "n" }, `${x.left} of ${x.total}`),
-      h("td", { class: "n" }, `${x.ready}`),
-      ...need(x.need).map((v) => h("td", { class: "n" }, v))));
-    rows.push(h("tr", {}, h("td", {}, h("b", {}, "All open Epics")), h("td", { class: "n" }, h("b", {}, `${b.left}`)), h("td", { class: "n" }, ""),
-      ...need(b.need).map((v) => h("td", { class: "n" }, h("b", {}, v)))));
-    parts.push(h("div", { class: "scroll" }, h("table", { class: "steps cost" }, h("tbody", {},
-      h("tr", { class: "sec" }, h("td", {}, "Epic"), h("td", { class: "n" }, "Left"), h("td", { class: "n" }, "Can start"),
-        h("td", { class: "n" }, "5-hour"), h("td", { class: "n" }, "Weekly")), rows))));
-    parts.push(h("div", { class: "fine" }, `5-hour and Weekly are the share of one ${plan} window the tickets left need, with the range from the lowest to the highest run.`));
-    if (b.unsplit.length) parts.push(h("div", { class: "fine" }, `Not split into tickets yet, so not counted: ${b.unsplit.map((x) => `${x.key} ${x.summary}`).join(", ")}.`));
+    const row = (label, left, need) => h("tr", {}, h("td", {}, label), h("td", { class: "n" }, left),
+      h("td", { class: "n" }, share(need.five_hour)), h("td", { class: "n" }, share(need.seven_day)));
+    parts.push(table(["Epic", "Left", "5-hour", "Weekly"], [
+      ...o.epics.map((x) => row([h("span", { class: "key" }, x.key), " ", x.summary], x.left === null ? "Not split yet" : `${x.left}`, x.need)),
+      row(h("b", {}, "All open Epics"), h("b", {}, `${o.left}`), o.need)]));
+    parts.push(h("div", { class: "fine" }, `5-hour and Weekly are the share of one ${plan} window the tickets left need. Jira read ${ago(f.jira.read)}.`));
   }
 
-  // What the plan allows against what the loop can do.
+  // What the plan fits.
   parts.push(h("h3", {}, `Capacity on ${plan}`));
-  if (!e || !c) parts.push(h("div", { class: "muted" }, "No run has landed a ticket under a meter reading yet."));
+  if (!c) parts.push(h("div", { class: "muted" }, `No run on ${plan} has landed a ticket under a meter reading yet.`));
   else {
-    const figs = [
-      h("div", { title: "The share of the window per landed ticket. The range is the lowest and the highest run." }, h("b", {}, range(e.five_hour)), "of a 5-hour window per ticket"),
-      h("div", {}, h("b", {}, range(e.seven_day)), "of a weekly window per ticket"),
-      h("div", { title: "At the share per ticket above. The range is the dearest and the cheapest run." }, h("b", {}, `About ${num(c.five_hour_by_usage)}`),
-        `tickets fit in a 5-hour window by usage${c.five_hour_most !== null ? ` (${num(c.five_hour_fewest)} to ${num(c.five_hour_most)})` : ""}`),
-      h("div", { title: "The tickets the runs landed over their hours of running, less the waits for a usage limit. The range is the slowest and the fastest run." },
-        h("b", {}, c.five_hour_by_time !== null ? `About ${num(c.five_hour_by_time)}` : "-"),
-        `tickets the loop lands in 5 hours of running${e.landed_per_window.low !== null ? ` (${num(e.landed_per_window.low)} to ${num(e.landed_per_window.high)})` : ""}`),
-      h("div", {}, h("b", {}, c.week_tickets ? `About ${num(c.week_tickets, 0)}` : "-"), "tickets fit in a weekly window"),
-      h("div", {}, h("b", {}, c.weeks_for_backlog !== null ? num(c.weeks_for_backlog, 2) : "-"), "weekly windows the open tickets need"),
+    const fits = (x) => [
+      h("div", {}, h("b", {}, about(x.five_hour)), "tickets per 5-hour window"),
+      h("div", {}, h("b", {}, about(x.week, 0)), "tickets per week"),
+      h("div", {}, h("b", {}, num(x.weeks, 2)), "weeks for the open work"),
     ];
-    if (c.week_left_tickets !== null) figs.push(h("div", {}, h("b", {}, `About ${num(c.week_left_tickets, 0)}`), "more tickets fit in this week's window"));
-    parts.push(h("div", { class: "figs" }, figs));
-    const basis = `From ${plural(e.tickets, "landed ticket", "landed tickets")} in ${plural(e.runs, "run", "runs")}, ${day(e.from)} to ${day(e.to)}. Confidence ${e.confidence}: ${plan} has ${plural(e.own_tickets, "landed ticket", "landed tickets")} of its own.`;
-    parts.push(h("div", { class: "fine" }, basis, e.scaled ? ` That is fewer than ${f.min_tickets}, so the other plans' runs count too, scaled by Anthropic's stated multiples.` : "",
-      " The weekly meter reads in whole percents, so one run's weekly share is only good to a point either way."));
-    for (const u of c.upgrades) {
-      parts.push(h("h3", {}, `${u.name}, $${u.price_more} a month more`));
-      parts.push(h("div", { class: "figs" },
-        h("div", {}, h("b", {}, `About ${num(u.five_hour_tickets)}`), "tickets would fit in a 5-hour window by usage"),
-        h("div", {}, h("b", {}, u.gain === null ? "-" : Math.abs(u.gain_high - u.gain_low) < 0.05 ? `${num(u.gain)}x` : `${num(u.gain_low)}x to ${num(u.gain_high)}x`), "the tickets the loop would land per 5-hour window, against now"),
-        h("div", {}, h("b", {}, u.week_tickets ? `About ${num(u.week_tickets, 0)}` : "-"), "tickets would fit in a weekly window")));
-      parts.push(h("div", { class: "fine" }, {
-        plan: `The loop's pace caps the gain. More allowance helps only up to the tickets it lands in 5 hours of running.`,
-        loop: `${plan} already fits more than the loop lands in 5 hours, so more allowance would add room you do not use. It would help only if the weekly window or your own use runs out.`,
-        unclear: `The gain depends on whether ${plan} or the loop's pace is the limit, which the data cannot tell yet.`,
-        unknown: "No run time to compare with yet.",
-      }[c.limit]));
+    parts.push(h("div", { class: "figs" }, fits(c)));
+    for (const b of c.bigger) {
+      parts.push(h("div", { class: "fine" }, `${b.name}, $${b.price_more} a month more: ${about(b.five_hour)} tickets per 5-hour window, ${about(b.week, 0).toLowerCase()} per week, ${num(b.weeks, 2)} weeks for the open work.`));
     }
+    parts.push(h("div", { class: "fine" }, `From ${plural(c.tickets, "landed ticket", "landed tickets")} in ${plural(c.runs, "run", "runs")} on ${plan}. A bigger plan is scaled by Anthropic's stated multiple.`));
   }
 
   // Each plan's runs, side by side.
@@ -1139,25 +1089,17 @@ function fillForecast() {
     parts.push(h("h3", {}, "Plans compared"));
     const cols = f.periods;
     const row = (label, get) => h("tr", {}, h("td", {}, label), ...cols.map((p) => h("td", { class: "n" }, get(p))));
-    parts.push(h("div", { class: "scroll" }, h("table", { class: "steps cost" }, h("tbody", {},
-      h("tr", { class: "sec" }, h("td", {}, ""), ...cols.map((p) => h("td", { class: "n" }, `${p.name}${p.preliminary && p.plan !== "ambiguous" && p.plan !== null ? " (preliminary)" : ""}`))),
+    parts.push(table(["", ...cols.map((p) => p.name)], [
       row("Runs", (p) => `${p.runs}, ${day(p.from)} to ${day(p.to)}`),
       row("Tickets landed", (p) => `${p.landed}`),
       row("Landed on their first ticket gate", (p) => (p.first_pass_rate === null ? "-" : `${Math.round(p.first_pass_rate * 100)}%`)),
-      row("Ticket gate failures per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.ticket_gate, 2) : "-")),
-      row("Merge gate failures per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.merge_gate, 2) : "-")),
-      row("Code reviews with findings per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.code_review, 2) : "-")),
-      row("UI reviews with faults per landed ticket", (p) => (p.fixes_per_landed ? num(p.fixes_per_landed.ui_review, 2) : "-")),
+      row("Fix rounds per landed ticket", (p) => num(p.fixes_per_landed, 2)),
       row("Tickets stuck", (p) => `${p.stuck}`),
       row("Median time to land, less waits", (p) => (p.median_minutes === null ? "-" : length(p.median_minutes))),
-      row("Usage limits hit, and hours a run waited", (p) => `${p.waits}${p.waits ? `, ${num(p.waited_hours)} h` : ""}`),
-      row("Landed tickets with a meter reading", (p) => `${p.metered_tickets}`),
-      row("5-hour window per ticket, own plan", (p) => range(p.five_hour)),
-      row("Weekly window per ticket, own plan", (p) => range(p.seven_day)),
-      row("Pro 5-hour windows per ticket", (p) => num(p.pro_windows_per_ticket, 2))))));
-    parts.push(h("div", { class: "fine" }, "Percentages are of each plan's own window, so they do not compare across plans. Pro 5-hour windows scale them by Anthropic's stated multiples (Pro 1, Max 5x 5, Max 20x 20). A run that may straddle a plan change counts as Unclear. Tickets differ in size, and the Epics differ too, so a change between plans is not caused by the plan alone."));
+      row("Usage limits hit, and hours a run waited", (p) => `${p.waits}${p.waits ? `, ${num(p.waited_hours)} h` : ""}`)]));
+    parts.push(h("div", { class: "fine" }, "A fix round is a failed ticket gate, a failed merge gate, a code review with findings, or a UI review with faults. A run that may straddle a plan change counts as Unclear. Tickets differ in size, so a change between plans is not caused by the plan alone."));
   }
-  parts.push(h("div", { class: "fine" }, `The meter is the account's, so your own sessions during a run count toward it. It is read per run, so a ticket's share is its run's share over the tickets it landed, and work that never landed counts too. A ticket is left when Jira has it open, not in ${f.landed_status}, and no run on this host landed it. Prices are the subscription's, not the API list price.`));
+  parts.push(h("div", { class: "fine" }, `The meter is the account's, so your own sessions during a run count toward it. A ticket is left when Jira has it open, not in ${f.landed_status}, and no run on this host landed it. Prices are the subscription's, not the API list price.`));
   wrap.replaceChildren(...parts);
 }
 

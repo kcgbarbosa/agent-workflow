@@ -2,8 +2,7 @@
 
 It reads only what the run writes to the state folder: `decisions.jsonl`, `board.json`, the agent logs, the
 gate logs, and the screenshots, and asks systemd which runs are active. Only Start and Stop change anything,
-through the functions that `loop start` and `loop stop` call. The capacity forecast (`forecast.py`) writes its
-own Jira snapshot, which no run reads.
+through the functions that `loop start` and `loop stop` call.
 """
 
 from __future__ import annotations
@@ -671,8 +670,6 @@ class Forecast(Protocol):
 
     def view(self) -> dict[str, Any]: ...
 
-    def refresh(self) -> bool: ...
-
 
 class Watch:
     """`config` is the project whose `loop.toml` started `loop watch`. Start and Stop act on it only."""
@@ -742,10 +739,8 @@ class Watch:
         return {"epics": [{"key": epic["key"], "summary": epic["summary"]} for epic in epics]}
 
     def post(self, url: str) -> tuple[HTTPStatus, str, bytes]:
-        """Start and Stop of a run, and a read of the backlog from Jira now, which no run reads."""
+        """Start and Stop of a run, the only requests that change anything."""
         parts = urlparse(url).path.strip("/").split("/")
-        if parts == ["api", "forecast", "refresh"] and self.forecast:
-            return self.json({"started": self.forecast.refresh()})
         if len(parts) != 3 or parts[1] not in ("start", "stop") or not KEY.fullmatch(parts[2]):
             return self.missing()
         command, epic_key = parts[1], parts[2]
