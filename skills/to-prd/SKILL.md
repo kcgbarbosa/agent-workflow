@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # To PRD
 
-Write the **PRD** of one feature: a product requirements document that a person reads, polished enough for a portfolio. It is the description of the feature's Jira Epic. The spec stays the agent-facing source of truth; the PRD is generated from it and never edited by hand.
+Write the **PRD** of one feature: a one-page brief that an executive reads in two minutes and comes away knowing what is being built, for whom, and why. It is the description of the feature's Jira Epic. The spec is the long, agent-facing source of truth that the tickets and the build follow; the PRD is a short summary generated from it and never edited by hand. Every detail the PRD leaves out stays in the spec, which the PRD links.
 
 Do NOT interview the user. Synthesize from the sources below, show the draft, and wait for approval.
 
@@ -27,17 +27,17 @@ If the spec, the Epic, the metrics file, or the personas file cannot be read, st
 
 ### 2. Draft the PRD
 
-Write plain professional prose, as a product manager would. The PRD is exempt from any simplified-English rule that the repo's other documents follow. The no-em-dash rule and `unslop` still apply. Use the template below.
+Write for an executive: plain business prose about people, outcomes, and trade-offs, at 500 words or fewer. Name what a person does and gains, and leave the mechanism to the spec: routes, fields, error codes, screen components, test data and vendor settings stay there. Name a vendor only by its role, such as "the sign-in provider". The PRD is exempt from any simplified-English rule that the repo's other documents follow. The no-em-dash rule and `unslop` still apply. Use the template below.
 
 <prd-rules>
 
 - The PRD body holds no ADR number, no ticket key and no story ID.
 - The PRD body holds no name or title of a real person. Persona names are fictional. The one exception is the Owner line, which takes the owner given in `docs/agents/issue-tracker.md`.
 - Success numbers come only from the metrics file. Each goal copies its baseline and target from one row. A feature with no row gets a named signal and no target. Keep the caveat that a figure carries, for example "estimate". End the goals with one line that names the baseline source.
-- Scenario names equal the spec's story group names.
+- Scenario names equal story group names of the spec.
 - Take the Target from the Epic's sprint or due date. When the Epic has none, write "Target: not set".
 - Write Rollout only for a feature that ships after go-live. The spec's Further Notes and the README say when go-live is. When they do not say, leave Rollout out and tell the user.
-- Leave out Decisions and open questions when it is empty. Every other section stays.
+- Leave out Open questions when none needs the owner or blocks the feature. Every other section stays.
 
 </prd-rules>
 
@@ -48,26 +48,21 @@ Owner: <name>. Target: <sprint or date>.
 
 **TL;DR.** One sentence: what changes for the user and why it matters.
 
-**Problem.** Who has it, what it costs them or us, and why now. What we are not solving.
+**Problem.** Two or three sentences: who has it, what it costs them or us, and why now. One sentence on what we are not solving.
 
 **Who it's for.** The key persona first, then the others, one line each. Take them from the personas file. Match each to a Role in the README Users table.
 
-**Approach.** A short paragraph. Enough to picture the solution, not to build it.
+**How it works.** Two short scenarios, each a person doing a real task start to finish in two or three sentences.
 
-**Goals and success.** Two to four outcomes. Each has the baseline, the target, how it is measured, and why it matters.
+**Goals and success.** Two or three outcomes, one line each: the baseline, the target, and how it is measured.
 
-**How it works.** Two or three short scenarios, each a person doing a real task start to finish.
+**Scope.** One line for the Musts, one line for the Should and Later groups, and at most four items not included, each with where it goes later.
 
-**Scope.**
+**Key decisions.** The two to four choices an executive would question, one line each: what was chosen and what was given up.
 
-- In: one line per story group, tagged Must, Should or Later, with why.
-- Not included: each item with the reason and where it goes later.
+**Open questions.** One line each: the question, who answers it, and by when.
 
-**Decisions and open questions.** Each decision: what was chosen, why, what was given up. Each open question: who answers it and by when.
-
-**Dependencies and rollout.** Dependencies always apply. Write the rollout only for a feature that ships after go-live.
-
-**Acceptance.** What can be checked on the deployed result, one line each, in user terms. `/to-tickets` turns each line into "What the user sees" lines, and each of those becomes an acceptance test (`docs/agents/testing.md`).
+**Dependencies and rollout.** One or two lines. Write the rollout only for a feature that ships after go-live.
 
 **Spec.** A link to the spec file on the default branch, built from the git remote. When the Epic has merged and the spec is archived, link the Confluence page that `docs/agents/issue-tracker.md` names.
 
@@ -77,9 +72,10 @@ Owner: <name>. Target: <sprint or date>.
 
 Before you show it, check every line of the draft against the rules:
 
+- The body, from the TL;DR to the Spec line, is 500 words or fewer. Count it, and cut detail into the spec until it fits.
 - Each number traces to a row of the metrics file. Remove any that does not.
 - Each persona is in the personas file. Each scenario name is a story group name of the spec.
-- No ADR number, ticket key, story ID, or em dash remains, and no real name remains except the Owner line.
+- No ADR number, ticket key, story ID, em dash, route, field name or error code remains, and no real name remains except the Owner line.
 
 ### 4. Show the draft and wait
 
