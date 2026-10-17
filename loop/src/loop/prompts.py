@@ -70,7 +70,7 @@ ACCEPTANCE_PROMPT = (
     "and its tag is {key}. Make it pass on the real stack, and commit it with {key} as the commit scope."
 )
 UI_REVIEW_PROMPT = (
-    "/{skill} The run folder is {run_dir}. The base is `{base}`. "
+    "/{skill} The screenshot folder is {shots}. The base is `{base}`. "
     + REVIEW_RULES
     + " When the environment lacks something that a screen needs, such as a secret, a bucket, or a seeded"
     " file, return `blocked` with what is missing. A screen that shows an error in place of its content fails"

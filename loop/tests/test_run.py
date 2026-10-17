@@ -670,12 +670,22 @@ def test_a_ui_change_lands_only_after_a_ui_review_and_its_screenshots_reach_the_
     assert world.run() == 0
 
     (review,) = world.calls("DEMO-2-ui")
-    assert review["run_dir"] in review["prompt"]
+    assert f"The screenshot folder is {review['run_dir']}/screenshots." in review["prompt"]
     assert review["resume"] is None
     assert review["no_background"] == "1" and world.calls("DEMO-2")[0]["no_background"] == "1"
     assert review["bash_max_ms"] == world.calls("DEMO-2")[0]["bash_max_ms"] == str(60 * 60_000)
     assert len(world.calls("DEMO-2")) == 1
     assert world.jira.issues["DEMO-2"].attachments == ["home-360-chromium-en.png"]
+
+
+def test_an_image_outside_the_screenshot_folder_does_not_reach_the_ticket(world: World) -> None:
+    world.jira.add("DEMO-2", "Fix the tests", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"tests/home.txt": "x"}, "stray_image": True}]})
+
+    assert world.run() == 0
+
+    assert world.calls("DEMO-2-ui") == []
+    assert world.jira.issues["DEMO-2"].attachments == []
 
 
 def test_a_ui_fault_goes_back_to_the_agent_and_the_fixed_commit_gets_a_new_review(world: World) -> None:
