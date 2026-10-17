@@ -69,6 +69,7 @@ def test_each_agent_may_run_the_gates_and_reset_its_stack_without_a_prompt(tmp_p
         "Bash(make check)", "Bash(make check *)", "Bash(make lint test)", "Bash(make lint test *)",
     ]  # fmt: skip
     assert "Bash(docker volume rm *)" in settings["permissions"]["deny"]
+    assert {"ScheduleWakeup", "CronCreate", "Monitor"} <= set(settings["permissions"]["deny"])
     rules = settings["autoMode"]["allow"]
     assert rules[0] == "$defaults" and settings["autoMode"]["environment"][0] == "$defaults"
     assert any("`demo-<ticket key>`" in rule and "The volumes stay." in rule for rule in rules)

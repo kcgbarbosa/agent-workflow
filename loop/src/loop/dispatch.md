@@ -29,3 +29,7 @@ Give each `reader` one question about sources outside the repo, such as a librar
 A subagent that returns nothing, declines, or stops before it finishes has not answered. Narrow the request and send it again, or do the work yourself. A `scout` miss covers only the names and folders it lists.
 
 A skill that dispatches its own subagents keeps doing so.
+
+# Your status ends the session
+
+The session ends when your turn ends, and the status you give then is final. Nothing wakes you later, so do not end your turn to wait for a result. Run each command in the foreground, and give a long one, such as the acceptance tests, a Bash timeout long enough for it. Do not detach a command with `&`, `nohup`, or `setsid`, because the loop does not wait for it and its result is lost.

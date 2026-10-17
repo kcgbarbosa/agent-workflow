@@ -20,6 +20,16 @@ REVIEW_EFFORT = "medium"
 MIN_CLAUDE = (2, 1, 301)
 # The loop keeps the stack volumes for KC, so no agent run deletes one.
 VOLUME_DENY = ("Bash(docker volume rm *)", "Bash(docker volume prune*)", "Bash(docker system prune*)")
+# A session ends at its status, so nothing wakes it for a later turn. These tools wait for one.
+WAIT_TOOLS: tuple[str, ...] = (
+    "ScheduleWakeup",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "RemoteTrigger",
+    "Monitor",
+    "Workflow",
+)
 # Where Claude Code makes the worktree of a `trial` subagent: in the main checkout, also for a ticket's run.
 TRIALS = Path(".claude/worktrees")
 
@@ -66,7 +76,7 @@ def agent_settings(config: Config) -> str:
         f"Loop gates: running {named} in a loop worktree is allowed, also with the output redirected to a "
         "file. The loop runs the same commands as its gates.",
     ]
-    deny: tuple[str, ...] = ()
+    deny: tuple[str, ...] = WAIT_TOOLS
     if config.stack:
         project = f"{config.name}-<ticket key>"
         environment.append(
@@ -79,7 +89,7 @@ def agent_settings(config: Config) -> str:
             f"`{project}`, for example `docker stop {config.name}-abc-11-db-1` or `docker compose down`, "
             "is allowed to free a port or reset a test stack. The volumes stay."
         )
-        deny = VOLUME_DENY
+        deny += VOLUME_DENY
     settings = {
         "permissions": {"allow": allow, "deny": list(deny)},
         "autoMode": {"environment": environment, "allow": classifier_allow},

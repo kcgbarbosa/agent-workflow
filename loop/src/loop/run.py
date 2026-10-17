@@ -1067,6 +1067,8 @@ class EpicRun:
             **self.secrets,
             "LOOP_RUN_DIR": str(run.run_dir),
             **NO_BACKGROUND,
+            # A command as long as a gate, such as the acceptance tests, then fits in the foreground.
+            "BASH_MAX_TIMEOUT_MS": str(self.config.gate_timeout_minutes * 60_000),
         }
         self.stop_point()
         run.agent_log = next_log(run.run_dir, "agent", ".jsonl")
