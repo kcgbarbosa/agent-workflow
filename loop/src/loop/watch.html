@@ -287,6 +287,10 @@ dialog.start:focus-visible { outline: none; }
 dialog.start .pbody { display: grid; gap: 12px; }
 dialog.start .actions { display: flex; justify-content: flex-end; }
 .note .btn { margin-top: 12px; }
+.phead .btn { flex: none; min-height: 32px; }
+.list button:disabled { cursor: default; }
+.list button:disabled .what { color: var(--text-muted); }
+.list button:disabled:hover .what > div:first-child { text-decoration: none; }
 
 /* --- Screenshot viewer --- */
 .viewer { position: fixed; inset: 0; z-index: 20; background: var(--ground); display: flex; flex-direction: column; }
@@ -496,7 +500,7 @@ async function refresh() {
     document.getElementById("run").replaceChildren();
     document.getElementById("views").replaceChildren();
     document.getElementById("main").replaceChildren(h("div", { class: "panel empty" }, "No runs of this project on this host yet. ", h("code", {}, "loop start <Epic key>"), " starts one.",
-      project.control ? h("div", {}, h("button", { class: "btn primary", onclick: openStart, disabled: !!ui.busy }, ui.busy === "start" ? "Starting..." : "Start")) : ""));
+      project.control ? h("div", {}, startButton(project.name)) : ""));
     return;
   }
   if (!ui.epic || !ui.epics.some((e) => e.key === ui.epic)) {
@@ -529,7 +533,7 @@ async function refreshHome() {
   let home;
   try { [home, ui.usage] = await Promise.all([getJson("/api/home"), getJson("/api/usage")]); } catch { return; }
   ui.home = home;
-  const drawn = JSON.stringify([home, ui.usage, ui.page, [...ui.homeOpen], Math.floor(Date.now() / AGE_MS)]);
+  const drawn = JSON.stringify([home, ui.usage, ui.page, [...ui.homeOpen], ui.busy, Math.floor(Date.now() / AGE_MS)]);
   if (drawn !== ui.drawn) { ui.drawn = drawn; renderHome(); }
 }
 
@@ -567,7 +571,7 @@ function projectPanel(p) {
   });
   const toggle = () => { if (open) ui.homeOpen.delete(p.name); else ui.homeOpen.add(p.name); renderHome(); };
   return h("section", { class: "panel" },
-    h("div", { class: "phead" }, h("h2", {}, p.name)),
+    h("div", { class: "phead" }, h("h2", {}, p.name), p.control && !p.runs.some((r) => r.running) ? startButton(p.name) : ""),
     h("div", { class: "pbody" }, p.runs.length
       ? [h("ul", { class: "list epics" }, rows),
         p.runs.length > RUNS_SHOWN ? h("div", { class: "more" }, h("button", { class: "textbtn", onclick: toggle },
@@ -638,19 +642,38 @@ function controlButton(v) {
     return h("button", { class: "btn", onclick: () => stopRun(v.key), disabled: !!ui.busy }, ui.busy === "stop" ? "Stopping..." : "Stop");
   }
   if (ui.epics.some((e) => e.running)) return "";
-  return h("button", { class: "btn primary", onclick: openStart, disabled: !!ui.busy }, ui.busy === "start" ? "Starting..." : "Start");
+  // The board is the run's last read of Jira, so the page needs no Jira read to name the button.
+  if (v.progress.complete < v.progress.total) {
+    return h("button", { class: "btn primary", onclick: () => startRun(ui.project, v.key), disabled: !!ui.busy }, ui.busy === "start" ? "Starting..." : "Resume");
+  }
+  return startButton(ui.project, "Start another Epic");
 }
 
-async function openStart() {
+function startButton(name, label = "Start a run") {
+  return h("button", { class: "btn primary", onclick: () => openStart(name), disabled: !!ui.busy }, ui.busy === "start" ? "Starting..." : label);
+}
+
+// What a run of each Epic does, from the open tickets that Jira has under it.
+const READINESS = {
+  ready: (e) => ["Ready", "ok", `${plural(e.open, "open ticket", "open tickets")}, never run`],
+  resume: (e) => ["Resume", "run", `${plural(e.open, "open ticket", "open tickets")}, ran before`],
+  landed: () => ["All landed", "", "No open tickets. A run opens the Epic PR."],
+  "no-tickets": () => ["No tickets", "", "Run /to-tickets first."],
+};
+
+async function openStart(name) {
   const dialog = document.getElementById("start");
   const body = h("div", { class: "pbody" }, h("div", { class: "muted" }, "Reading the open Epics from Jira..."));
-  dialog.replaceChildren(h("div", { class: "phead" }, h("h2", {}, `Start a run of ${ui.project}`)), body);
+  dialog.replaceChildren(h("div", { class: "phead" }, h("h2", {}, `Start a run of ${name}`)), body);
   dialog.showModal();
   let data;
   try { data = await getJson("/api/start"); } catch (e) { data = { epics: [], error: e.message }; }
-  const rows = data.epics.map((e) => h("li", {}, h("button", { onclick: () => startRun(e.key) },
-    h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, e.key), " ", e.summary)),
-    ui.epics.some((r) => r.key === e.key) ? h("span", { class: "muted" }, "Ran before") : "")));
+  const rows = data.epics.map((e) => {
+    const [label, tone, reason] = READINESS[e.state](e);
+    return h("li", {}, h("button", { onclick: () => startRun(name, e.key), disabled: e.state === "no-tickets" },
+      h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, e.key), " ", e.summary), h("div", { class: "rowreason" }, reason)),
+      tile([label, tone], false)));
+  });
   body.replaceChildren(
     data.error ? h("div", { class: "why" }, data.error) : rows.length ? h("ul", { class: "list epics" }, rows) : h("div", { class: "muted" }, "Jira has no open Epic in the projects that ran on this host."),
     h("div", { class: "actions" }, h("button", { class: "btn", onclick: () => dialog.close() }, "Cancel")));
@@ -665,11 +688,11 @@ async function post(path) {
 
 async function busy(what, work) {
   ui.busy = what;
-  if (ui.view) render(); else refresh();
+  if (ui.view && ui.page !== "home") render(); else { ui.drawn = null; refresh(); }
   try { await work(); } catch (e) { alert(e.message); } finally { ui.busy = null; ui.drawn = null; refresh(); }
 }
 
-function startRun(key) {
+function startRun(name, key) {
   document.getElementById("start").close();
   return busy("start", async () => {
     await post(`/api/start/${key}`);
@@ -677,11 +700,11 @@ function startRun(key) {
     const until = Date.now() + START_WAIT_MS;
     while (Date.now() < until) {
       const home = await getJson("/api/home").catch(() => []);
-      const project = home.find((p) => p.name === ui.project);
-      if (project && project.runs.some((r) => r.key === key && r.running)) { go("", ui.project, key); return; }
+      const project = home.find((p) => p.name === name);
+      if (project && project.runs.some((r) => r.key === key && r.running)) { go("", name, key); return; }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    throw new Error(`The run of ${key} started, but wrote nothing in a minute. Its journal says why: journalctl --user -u loop-${ui.project}-${key}`);
+    throw new Error(`The run of ${key} started, but wrote nothing in a minute. Its journal says why: journalctl --user -u loop-${name}-${key}`);
   });
 }
 
