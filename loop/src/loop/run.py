@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 from . import process, repo
 from .claude import REVIEW_EFFORT, REVIEW_MODEL, TRIALS, agent_settings, run_setup
-from .config import ACCEPTANCE_HEADING, CONTEXT_TOKENS, Config
+from .config import ACCEPTANCE_HEADING, CONTEXT_TOKENS, SHOTS_DIR, Config
 from .jira import JiraError, Ticket
 from .prompts import (
     ACCEPTANCE_PROMPT,
@@ -568,12 +568,12 @@ class EpicRun:
             for shot in [] if run.resumes(f"{key}-ui") else screenshots(run.run_dir):
                 shot.unlink()
             prompt = UI_REVIEW_PROMPT.format(
-                skill=self.config.ui_skill, run_dir=run.run_dir, base=self.epic_branch
+                skill=self.config.ui_skill, shots=shots_dir(run.run_dir), base=self.epic_branch
             )
             review = self.review_agent(run, prompt, f"{key}-ui")
             if not review.findings or self.rounds(key, "ui-gate", "fail") >= UI_FIX_ROUNDS:
                 if not screenshots(run.run_dir):
-                    raise AgentFailed(f"The UI review saved no screenshots in {run.run_dir}.")
+                    raise AgentFailed(f"The UI review saved no screenshots in {shots_dir(run.run_dir)}.")
                 self.record_ui_review(run, review, head)
                 return None
             faults = review.findings
@@ -807,7 +807,9 @@ class EpicRun:
             for shot in screenshots(run_dir):
                 shot.unlink()
             items = "\n".join(f"- {item}" for item in left[key])
-            prompt = UI_REVIEW_PROMPT.format(skill=self.config.ui_skill, run_dir=run_dir, base=merge_base)
+            prompt = UI_REVIEW_PROMPT.format(
+                skill=self.config.ui_skill, shots=shots_dir(run_dir), base=merge_base
+            )
             prompt += UI_FINISH_PROMPT.format(key=key, ticket=run_dir / "ticket.md", items=items)
             try:
                 review = self.through_limits(
@@ -1416,8 +1418,16 @@ def normal(text: str) -> str:
     return " ".join(text.split())
 
 
+def shots_dir(run_dir: Path) -> Path:
+    """The folder of the UI review's screenshots, made when it is not there yet."""
+    folder = run_dir / SHOTS_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 def screenshots(run_dir: Path) -> list[Path]:
-    return sorted(path for path in run_dir.rglob("*") if path.suffix.lower() in IMAGE_SUFFIXES)
+    folder = run_dir / SHOTS_DIR
+    return sorted(path for path in folder.rglob("*") if path.suffix.lower() in IMAGE_SUFFIXES)
 
 
 def run(epic_key: str, config: Config, secrets: Mapping[str, str], base: str | None = None) -> int:

@@ -24,7 +24,7 @@ from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
 from . import process, report, units
-from .config import WATCH_PORT, Config, ConfigError, stored_secrets
+from .config import SHOTS_DIR, WATCH_PORT, Config, ConfigError, stored_secrets
 from .forecast import BacklogError, fetch, is_open, jira_client, project_keys
 from .jira import JiraError
 from .report import DECISIONS, KEY, LOOP_SUFFIX, epic_homes, is_gate, iso, plan_meter, projects, read_lines
@@ -529,7 +529,7 @@ def _shots(home: Path, run_dir: Path) -> list[dict[str, Any]]:
     """The screenshots of the ticket's last UI review, each with the time it was saved."""
     return [
         {"path": path, "time": iso((home / path).stat().st_mtime)}
-        for path in _files(home, run_dir, image=True)
+        for path in _files(home, run_dir / SHOTS_DIR, image=True)
     ]
 
 

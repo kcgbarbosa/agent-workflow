@@ -20,6 +20,9 @@ SECRETS_FILE = "secrets.json"
 # The engine reads these secrets itself. A repo adds the ones its agents need.
 REQUIRED_SECRETS = ("JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC")
 WATCH_PORT = 8790
+# The UI review's own folder in a run folder. The loop attaches only it, because an agent can save other
+# images in the run folder, such as the screenshots of each acceptance run.
+SHOTS_DIR = "screenshots"
 # How long the forecast keeps what it read from Jira, so a page that stays open reads Jira at most that often.
 BACKLOG_MINUTES = 5
 # The window each agent run compacts at, so a long ticket never sends more than this on each turn.

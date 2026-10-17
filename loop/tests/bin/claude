@@ -95,7 +95,14 @@ if step.get("child"):
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
     (home / "agent-child.pid").write_text(str(child.pid))
 if step.get("screenshot"):
-    Path(os.environ["LOOP_RUN_DIR"], "home-360-chromium-en.png").write_bytes(b"\x89PNG fake")
+    shots = Path(os.environ["LOOP_RUN_DIR"], "screenshots")
+    shots.mkdir(exist_ok=True)
+    (shots / "home-360-chromium-en.png").write_bytes(b"\x89PNG fake")
+if step.get("stray_image"):
+    # An image the agent saved outside the screenshot folder, such as one of an acceptance run.
+    stray = Path(os.environ["LOOP_RUN_DIR"], "acc", "full", "home--chromium-en.png")
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_bytes(b"\x89PNG stray")
 reached(f"claude:{name}")
 
 
