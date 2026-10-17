@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
 from . import process, report, units
 from .config import WATCH_PORT, Config, ConfigError, stored_secrets
-from .forecast import BacklogError, jira_client, open_epics, project_keys
+from .forecast import BacklogError, fetch, is_open, jira_client, project_keys
 from .jira import JiraError
 from .report import DECISIONS, KEY, LOOP_SUFFIX, epic_homes, is_gate, iso, plan_meter, projects, read_lines
 from .steps import STEPS, current_step
@@ -665,6 +665,29 @@ def tool_summary(name: str, tool_input: dict[str, Any]) -> tuple[str, str, str]:
 # --- Server ---
 
 
+# The order of the Start list: the Epics a run has work in first.
+READINESS = ("ready", "resume", "landed", "no-tickets")
+
+
+def readiness(epics: list[dict[str, Any]], state_dir: Path, landed_status: str) -> list[dict[str, Any]]:
+    """Each open Epic with what a run of it does: `ready` builds its open tickets for the first time,
+    `resume` goes on with them, `landed` has none open and opens the Epic PR, and `no-tickets` has no
+    tickets to build until `/to-tickets` writes them.
+    """
+    rows = []
+    for epic in epics:
+        left = sum(1 for ticket in epic["tickets"] if is_open(ticket, landed_status))
+        ran = (state_dir / epic["key"] / DECISIONS).exists()
+        if not epic["tickets"]:
+            state = "no-tickets"
+        elif not left:
+            state = "landed"
+        else:
+            state = "resume" if ran else "ready"
+        rows.append({"key": epic["key"], "summary": epic["summary"], "state": state, "open": left})
+    return sorted(rows, key=lambda row: READINESS.index(row["state"]))
+
+
 class Forecast(Protocol):
     """The capacity forecast, which `loop watch` wires in from `forecast.py`."""
 
@@ -733,10 +756,10 @@ class Watch:
     def startable(self, config: Config) -> dict[str, Any]:
         """The open Epics that Start lists: those of the Jira projects whose Epics ran on this host."""
         try:
-            epics = open_epics(jira_client(config), project_keys(config.state_dir))
+            epics = fetch(jira_client(config), project_keys(config.state_dir))
         except (BacklogError, JiraError) as error:
             return {"epics": [], "error": str(error)}
-        return {"epics": [{"key": epic["key"], "summary": epic["summary"]} for epic in epics]}
+        return {"epics": readiness(epics, config.state_dir, config.landed_status)}
 
     def post(self, url: str) -> tuple[HTTPStatus, str, bytes]:
         """Start and Stop of a run, the only requests that change anything."""

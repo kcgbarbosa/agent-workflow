@@ -192,13 +192,18 @@ def test_every_view_keeps_the_data_it_has_today_except_fields_the_page_does_not_
     assert api(world, "/api/epics") == 404
 
 
-def test_the_run_view_has_a_start_button_that_lists_the_projects_open_epics_and_starts_the_one_kc_picks(
+def test_start_lists_the_projects_open_epics_with_what_a_run_of_each_does_and_starts_the_one_kc_picks(
     world: World,
 ) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    # A flagged ticket stays open after the run, so the Epic has work to resume.
+    world.jira.add("DEMO-3", "Add a part that waits for KC", parent=EPIC, flagged=True)
     world.jira.add("DEMO-4", "An Epic that is done", issue_type="Epic", status="Done")
     world.jira.add("DEMO-5", "The Second Loop", issue_type="Epic")
     world.jira.add("DEMO-6", "Add the next part", parent="DEMO-5")
+    world.jira.add("DEMO-7", "An Epic with no tickets yet", issue_type="Epic")
+    world.jira.add("DEMO-8", "An Epic whose tickets are done", issue_type="Epic")
+    world.jira.add("DEMO-9", "A part that is done", parent="DEMO-8", status="Done")
     world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}], "DEMO-6": [{"write": {"b.txt": "b"}, "stall": 120}]})
     assert world.run() == 0
 
@@ -212,8 +217,10 @@ def test_the_run_view_has_a_start_button_that_lists_the_projects_open_epics_and_
 
     assert [(project["name"], project["control"]) for project in home] == [("demo", True)]
     assert start["epics"] == [
-        {"key": EPIC, "summary": "The Loop"},
-        {"key": "DEMO-5", "summary": "The Second Loop"},
+        {"key": "DEMO-5", "summary": "The Second Loop", "state": "ready", "open": 1},
+        {"key": EPIC, "summary": "The Loop", "state": "resume", "open": 1},
+        {"key": "DEMO-8", "summary": "An Epic whose tickets are done", "state": "landed", "open": 0},
+        {"key": "DEMO-7", "summary": "An Epic with no tickets yet", "state": "no-tickets", "open": 0},
     ]
     assert started == (200, {"started": "DEMO-5"})
     assert view["status"] == "running"

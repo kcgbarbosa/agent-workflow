@@ -131,9 +131,7 @@ def open_work(
     rows = []
     for epic in epics:
         left = sum(
-            1
-            for ticket in epic["tickets"]
-            if not ticket["done"] and ticket["status"] != landed_status and ticket["key"] not in landed
+            1 for ticket in epic["tickets"] if is_open(ticket, landed_status) and ticket["key"] not in landed
         )
         tickets = left if epic["tickets"] else None
         rows.append(
@@ -141,6 +139,11 @@ def open_work(
         )
     total = sum(row["left"] or 0 for row in rows)
     return {"epics": rows, "left": total, "need": _need(total, each)}
+
+
+def is_open(ticket: dict[str, Any], landed_status: str) -> bool:
+    """Whether Jira has the ticket open and not in the status the loop gives a landed ticket."""
+    return not ticket["done"] and ticket["status"] != landed_status
 
 
 def _need(tickets: int | None, each: dict[str, Any] | None) -> dict[str, float]:
