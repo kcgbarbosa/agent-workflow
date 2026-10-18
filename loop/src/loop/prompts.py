@@ -44,6 +44,11 @@ REVIEW_SCHEMA = json.dumps(
                 "items": {"type": "string"},
                 "description": "Each problem that needs a change, with its file and line or its screenshot.",
             },
+            "open": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "The number of each earlier finding in the prompt that is still not fixed.",
+            },
             "unchecked": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -64,6 +69,17 @@ REVIEW_RULES = (
     "before you give your result."
 )
 CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. " + REVIEW_RULES
+# A later review looks only at the commits since the last one, so each round has less to review than the one
+# before it, and a fix is not reviewed again as new code.
+CODE_REVIEW_AGAIN_PROMPT = (
+    "/code-review {since} The spec is the ticket file {ticket}. An earlier review of the ticket, at {since}, "
+    "covered all the work up to that commit. Review only the ticket's own commits since then, not the work "
+    "of other tickets that a merge of the Epic branch brought in.{earlier} " + REVIEW_RULES
+)
+EARLIER_FINDINGS = (
+    " That review found these problems:\n\n{findings}\n\nGive in `open` the number of each one that the new "
+    "commits did not fix, and give it again in `findings`."
+)
 ACCEPTANCE_PROMPT = (
     "These lines of what the user sees have no acceptance test of the same name:\n\n{missing}\n\n"
     "Write one test for each line, as the repo's testing doc gives: its title is the line, word for word, "
@@ -77,11 +93,6 @@ UI_REVIEW_PROMPT = (
     " the review. List in `unchecked` only a part that the seeded data cannot show, with its path and the"
     " reason, so that KC reviews it by hand."
 )
-UI_FINISH_PROMPT = (
-    " The ticket {key} landed on the Epic branch with these UI review items open:\n\n{items}\n\n"
-    "Review the ticket on the Epic branch as it is now. The ticket file is {ticket}. "
-    "Return each item that is still open, in `findings` or `unchecked`."
-)
 REVIEW_FIX_PROMPT = (
     "The {review} found these problems:\n\n{findings}\n\nFix each one that is a real problem, and commit the "
     "fixes with {key} as the commit scope. Give each one you leave as it is in `notes`, with the reason."
@@ -90,7 +101,8 @@ USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Co
 PR_PROMPT = (
     "/pr Write the body of the Epic pull request for the diff `{merge_base}..HEAD` to the file "
     "`{body_file}`. Do not commit, push, or open the pull request. In Evidence, give this ticket "
-    "table as it is:\n\n{tickets}"
+    "table as it is:\n\n{tickets}\n\nThe log of the merge gate is `{gate_log}`. In Evidence, also name each "
+    "test that it shows as flaky, which failed and then passed on a retry."
 )
 LANDED_KEYS_PROMPT = "\n\nName no ticket key that the table does not give."
 # The loop's own comments start with these lines, so the ticket file leaves them out.

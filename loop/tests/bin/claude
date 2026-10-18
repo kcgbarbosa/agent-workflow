@@ -166,6 +166,7 @@ if step.get("notes"):
 if "findings" in record["schema"]["properties"]:
     output["findings"] = step.get("findings", [])
     output["unchecked"] = step.get("unchecked", [])
+    output["open"] = step.get("open", [])
 emit({"type": "result", "is_error": False, "session_id": session, "result": "", "structured_output": output, **cost(0.5, 3)})
 if step.get("late_turn"):
     emit({"type": "result", "is_error": False, "session_id": session, "result": "The reviews are applied.", **cost(0.75, 4)})
