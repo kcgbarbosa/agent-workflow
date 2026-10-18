@@ -24,16 +24,17 @@ from .jira import JiraError, Ticket
 from .prompts import (
     ACCEPTANCE_PROMPT,
     AGENT_SCHEMA,
+    CODE_REVIEW_AGAIN_PROMPT,
     CODE_REVIEW_PROMPT,
     DECISIONS_COMMENT,
     DISPATCH,
+    EARLIER_FINDINGS,
     LANDED_KEYS_PROMPT,
     NOTES_COMMENT,
     PR_PROMPT,
     REVIEW_FIX_PROMPT,
     REVIEW_SCHEMA,
     STUCK_COMMENT,
-    UI_FINISH_PROMPT,
     UI_OPEN_COMMENT,
     UI_REVIEW_PROMPT,
     USAGE_RESUME_PROMPT,
@@ -59,12 +60,9 @@ NOT_LANDED = "Done in the tracker, not landed"
 UNFINISHED = ("Stuck", "Not built", NOT_LANDED)
 USAGE_LIMIT = re.compile(r"usage limit|hit your limit|limit reached|rate.?limit", re.IGNORECASE)
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
-# The rounds of code review findings that are not a fix attempt. Findings after them use one, so a review
-# that always finds something cannot keep a ticket running.
-FREE_REVIEW_ROUNDS = 1
-# The faults of a UI review go back to the head agent this often. A fault left after that lands with the
-# ticket and keeps the Epic PR a draft, because it costs less to fix by hand than to review again.
-UI_FIX_ROUNDS = 1
+# A code review that still finds problems after this many rounds makes the ticket stuck, so two fixes that
+# undo each other cannot keep a ticket running. Only a finding that a fix left open uses a fix attempt.
+MAX_REVIEW_ROUNDS = 4
 NO_BACKGROUND = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
 # The loop stops a session that still runs this long after its status.
 STATUS_GRACE_SECONDS = 10.0
@@ -106,6 +104,8 @@ class AgentResult:
     session: str
     findings: list[str] = field(default_factory=list)
     unchecked: list[str] = field(default_factory=list)
+    # The numbers of the earlier findings that a later code review found still open.
+    still_open: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -115,8 +115,10 @@ class GateFailure:
     log: Path
     # The failure is on the Epic branch, so the ticket branch takes the Epic branch before the fix.
     on_epic: bool = False
-    # The first round of review findings is part of the build, not a fix attempt.
+    # Review findings use a fix attempt only when a fix left an earlier one open.
     attempt: bool = True
+    # No fix follows, so the ticket is stuck, as after a code review past its rounds.
+    last: bool = False
 
 
 @dataclass
@@ -413,6 +415,9 @@ class EpicRun:
 
     def send_back(self, run: TicketRun, failure: GateFailure) -> Outcome | None:
         """Makes the failure the fix of the next build, or the ticket stuck with no fix attempt left."""
+        if failure.last:
+            reason = f"{failure.reason} It still found problems after {MAX_REVIEW_ROUNDS} rounds."
+            return self.stuck(run.ticket, reason, failure.log, run.slot)
         if failure.attempt and self.attempts(run.ticket.key) >= self.config.fix_attempts:
             return self.stuck(run.ticket, failure.reason, failure.log, run.slot)
         if failure.on_epic:
@@ -544,60 +549,87 @@ class EpicRun:
     def code_review(self, run: TicketRun) -> GateFailure | None:
         """`/code-review` in its own session. Its findings go back to the head agent's session."""
         key, head = run.ticket.key, self.head(run)
-        findings = self.unanswered(key, "code-review", head, "findings")
-        if findings is None:
-            prompt = CODE_REVIEW_PROMPT.format(base=self.epic_branch, ticket=run.run_dir / "ticket.md")
-            findings = self.review_agent(run, prompt, f"{key}-review").findings
-            if not findings:
-                self.log(key, "code-review", "pass", commit=head)
-                return None
-            detail = f"{len(findings)} findings"
-            self.log(key, "code-review", "findings", commit=head, detail=detail, findings=findings)
-        fix = self.fix_prompt("code review", findings, key)
-        attempt = self.rounds(key, "code-review", "findings") > FREE_REVIEW_ROUNDS
+        line = self.unanswered(key, "code-review", head, "findings") or self.review_code(run, head)
+        if line is None:
+            return None
+        fix = self.fix_prompt("code review", [str(item) for item in line.get("findings", [])], key)
         return GateFailure(
-            "The code review found problems.", fix, run.agent_log or run.run_dir, attempt=attempt
+            "The code review found problems.",
+            fix,
+            run.agent_log or run.run_dir,
+            attempt=bool(line.get("open")),
+            last=self.rounds(key, "code-review", "findings") > MAX_REVIEW_ROUNDS,
         )
 
-    def ui_gate(self, run: TicketRun) -> GateFailure | None:
-        """A UI review of the last commit, with screenshots. Its faults go back to the head agent."""
-        key, head = run.ticket.key, self.head(run)
-        faults = self.unanswered(key, "ui-gate", head, "fail")
-        if faults is None:
-            # A review that goes on after a usage limit keeps the screenshots it saved.
-            for shot in [] if run.resumes(f"{key}-ui") else screenshots(run.run_dir):
-                shot.unlink()
-            prompt = UI_REVIEW_PROMPT.format(
-                skill=self.config.ui_skill, shots=shots_dir(run.run_dir), base=self.epic_branch
-            )
-            review = self.review_agent(run, prompt, f"{key}-ui")
-            if not review.findings or self.rounds(key, "ui-gate", "fail") >= UI_FIX_ROUNDS:
-                if not screenshots(run.run_dir):
-                    raise AgentFailed(f"The UI review saved no screenshots in {shots_dir(run.run_dir)}.")
-                self.record_ui_review(run, review, head)
-                return None
-            faults = review.findings
-            self.log(key, "ui-gate", "fail", commit=head, detail=f"{len(faults)} faults", findings=faults)
-        fix = self.fix_prompt("UI review", faults, key)
-        return GateFailure("The UI review found faults.", fix, run.agent_log or run.run_dir, attempt=False)
+    def review_code(self, run: TicketRun, head: str) -> dict[str, Any] | None:
+        """Runs the code review and logs its result, which it returns when it has findings. A review after an
+        earlier one looks only at the commits since it, with the earlier findings."""
+        key, ticket = run.ticket.key, run.run_dir / "ticket.md"
+        earlier = self.last_review(key)
+        found: list[str] = []
+        if earlier is None:
+            prompt = CODE_REVIEW_PROMPT.format(base=self.epic_branch, ticket=ticket)
+        else:
+            found = [str(item) for item in earlier.get("findings", [])]
+            listed = "\n".join(f"{n}. {finding}" for n, finding in enumerate(found, 1))
+            more = EARLIER_FINDINGS.format(findings=listed) if found else ""
+            prompt = CODE_REVIEW_AGAIN_PROMPT.format(since=earlier["commit"], ticket=ticket, earlier=more)
+        review = self.review_agent(run, prompt, f"{key}-review")
+        if not review.findings:
+            self.log(key, "code-review", "pass", commit=head)
+            return None
+        still_open = sorted({n for n in review.still_open if 1 <= n <= len(found)})
+        detail = f"{len(review.findings)} findings"
+        fields: dict[str, Any] = {"findings": review.findings, "open": still_open}
+        self.log(key, "code-review", "findings", commit=head, detail=detail, **fields)
+        return fields
 
-    def unanswered(self, key: str, step: str, head: str, result: str) -> list[str] | None:
-        """The findings of the step's last result at HEAD, when it is `result` and no head agent run
-        answered it, as after a kill. They go back to the agent with no new review."""
+    def last_review(self, key: str) -> dict[str, Any] | None:
+        """The ticket's last code review result since it was last stuck."""
+        results = ("pass", "findings")
+        lines = self.since_stuck(key)
+        return next(
+            (x for x in reversed(lines) if x.get("step") == "code-review" and x.get("result") in results),
+            None,
+        )
+
+    def ui_gate(self, run: TicketRun) -> None:
+        """A UI review of the last commit, with screenshots. It only advises: what it finds stays open on the
+        ticket, and the ticket lands."""
+        key, head = run.ticket.key, self.head(run)
+        # A review that goes on after a usage limit keeps the screenshots it saved.
+        for shot in [] if run.resumes(f"{key}-ui") else screenshots(run.run_dir):
+            shot.unlink()
+        prompt = UI_REVIEW_PROMPT.format(
+            skill=self.config.ui_skill, shots=shots_dir(run.run_dir), base=self.epic_branch
+        )
+        try:
+            review = self.review_agent(run, prompt, f"{key}-ui")
+        except AgentFailed as error:
+            review = AgentResult(
+                "blocked", str(error), "", unchecked=[f"The UI review did not finish: {error}"]
+            )
+        if review.status == "done" and not screenshots(run.run_dir):
+            review.unchecked.append(f"The UI review saved no screenshots in {shots_dir(run.run_dir)}.")
+        self.record_ui_review(run, review, head)
+
+    def unanswered(self, key: str, step: str, head: str, result: str) -> dict[str, Any] | None:
+        """The step's last result line at HEAD, when it is `result` and no head agent run answered it, as
+        after a kill. Its findings go back to the agent with no new review."""
         for line in reversed(self.ticket_lines(key)):
             if line.get("commit") != head or line.get("result") == "started":
                 continue
             if line.get("step") == "build":
                 return None
             if line.get("step") == step:
-                return [str(item) for item in line.get("findings", [])] if line["result"] == result else None
+                return line if line["result"] == result else None
         return None
 
     def record_ui_review(self, run: TicketRun, review: AgentResult, head: str, detail: str = "") -> None:
         """Logs what the review left open, and comments it on the ticket."""
         key = run.ticket.key
         accepted = [part for part in review.unchecked if self.accepted_unchecked(part)]
-        left = [f"UI fault left unfixed: {fault}" for fault in review.findings]
+        left = [f"UI fault: {fault}" for fault in review.findings]
         left += [f"Not checked: {part}" for part in review.unchecked if part not in accepted]
         self.record_notes(run.ticket, [f"Not checked, and accepted in loop.toml: {p}" for p in accepted])
         if left:
@@ -777,55 +809,16 @@ class EpicRun:
         run = TicketRun(self.jira.issue(key), EPIC_SLOT, self.epic_branch, self.epic_worktree, run_dir)
         merge_base = out(self.epic_worktree, "merge-base", base, "HEAD")
         # The ticket reviews already ran at landing, so the finish runs the merge gate, which is the only test
-        # gate here, reviews again only the UI items left open, and leaves the review of the whole Epic to KC.
+        # gate here, and leaves the review of the whole Epic to KC.
         failing: tuple[str, Path] | None = None
         log_file = run_dir / "finish-merge-gate.log"
         command = self.config.merge_gate
         if not self.gate(command, self.epic_worktree, self.config.stack_env(EPIC_SLOT, key), log_file, key):
             failing = (" ".join(command), log_file)
-        else:
-            self.review_ui_open(merge_base)
         self.push(self.epic_worktree, self.epic_branch, key)
         demo_failing = self.point_demo(run_dir)
-        body = self.pr_body(run, merge_base)
+        body = self.pr_body(run, merge_base, log_file)
         return self.open_pr(failing, body, demo_failing)
-
-    def review_ui_open(self, merge_base: str) -> None:
-        """Gives each ticket that landed with open UI items a new UI review on the Epic branch, because a
-        later ticket can cover an item, such as with a test or a seeded file. A failed review keeps the
-        items open."""
-        head = out(self.epic_worktree, "rev-parse", "HEAD")
-        left = self.ui_open()
-        for ticket in self.jira.children(self.epic_key):
-            key = ticket.key
-            if key not in left:
-                continue
-            run_dir = self.home / "runs" / key
-            run_dir.mkdir(parents=True, exist_ok=True)
-            run = TicketRun(ticket, EPIC_SLOT, self.epic_branch, self.epic_worktree, run_dir)
-            # The ticket got its screenshots at landing, so these are the review's own.
-            for shot in screenshots(run_dir):
-                shot.unlink()
-            items = "\n".join(f"- {item}" for item in left[key])
-            prompt = UI_REVIEW_PROMPT.format(
-                skill=self.config.ui_skill, shots=shots_dir(run_dir), base=merge_base
-            )
-            prompt += UI_FINISH_PROMPT.format(key=key, ticket=run_dir / "ticket.md", items=items)
-            try:
-                review = self.through_limits(
-                    run, functools.partial(self.review_agent, run, prompt, f"{key}-ui-finish")
-                )
-            except (AgentFailed, UsageLimit) as error:
-                failed = f"At the finish, the review failed: {error}"
-                self.log(key, "ui-gate", "open", commit=head, detail=failed, items=left[key])
-                continue
-            shots = screenshots(run_dir)
-            if not shots:
-                failed = "At the finish, the review saved no screenshots."
-                self.log(key, "ui-gate", "open", commit=head, detail=failed, items=left[key])
-                continue
-            self.track(key, "attach", functools.partial(self.attach_once, key, shots))
-            self.record_ui_review(run, review, head, detail="At the finish. ")
 
     def point_demo(self, run_dir: Path) -> tuple[str, Path] | None:
         """Points the always-on demo at the Epic branch. Returns the command and its log when it fails."""
@@ -838,7 +831,7 @@ class EpicRun:
         self.log(self.epic_key, "demo", "ok" if passed else "fail", detail=str(log_file))
         return None if passed else (" ".join(command), log_file)
 
-    def pr_body(self, run: TicketRun, merge_base: str) -> str:
+    def pr_body(self, run: TicketRun, merge_base: str, gate_log: Path) -> str:
         """The body an agent writes with the `pr` skill, or a table of the tickets when it writes none."""
         key = self.epic_key
         tickets = ["| Ticket | Result |", "| ------ | ------ |"]
@@ -847,7 +840,9 @@ class EpicRun:
         table = "\n".join(tickets)
         body_file = run.run_dir / "pr-body.md"
         body_file.unlink(missing_ok=True)
-        prompt = PR_PROMPT.format(merge_base=merge_base, body_file=body_file, tickets=table)
+        prompt = PR_PROMPT.format(
+            merge_base=merge_base, body_file=body_file, tickets=table, gate_log=gate_log
+        )
         if self.config.name_landed_keys_only:
             prompt += LANDED_KEYS_PROMPT
         write = functools.partial(
@@ -885,7 +880,8 @@ class EpicRun:
             for ticket in self.jira.children(key)
             if ticket.key in left
         }
-        draft = bool(failing or demo_failing or unfinished or ui_open)
+        # Open UI items are advice, so they are listed but do not make the PR a draft.
+        draft = bool(failing or demo_failing or unfinished)
         body_file = self.home / "runs" / key / "pr-body.md"
         demo = f"**Demo:** {self.config.demo.url}\n\n" if self.config.demo and not demo_failing else ""
         body_file.write_text(demo + self.pr_notes(failing, unfinished, ui_open, demo_failing) + body)
@@ -921,11 +917,10 @@ class EpicRun:
         ui_open: Mapping[str, int],
         demo_failing: tuple[str, Path] | None = None,
     ) -> str:
-        """What stops the Epic PR from being ready: unfinished tickets, a failing gate, a failed demo command,
-        open UI items.
+        """What stops the Epic PR from being ready: unfinished tickets, a failing gate, a failed demo command.
+        Then the open UI items, which do not stop it.
 
-        A PR with none of these has no notes, because it is ready to merge. The agents' decisions and notes
-        stay in the ticket comments.
+        A PR with none of these has no notes. The agents' decisions and notes stay in the ticket comments.
         """
         lines: list[str] = []
         if unfinished:
@@ -1126,7 +1121,8 @@ class EpicRun:
         self.record_notes(run.ticket, [str(item) for item in output.get("notes", [])])
         findings = [str(item) for item in output.get("findings", [])]
         unchecked = [str(item) for item in output.get("unchecked", [])]
-        return AgentResult(status, reason, session_id, findings, unchecked)
+        still_open = [item for item in output.get("open", []) if isinstance(item, int)]
+        return AgentResult(status, reason, session_id, findings, unchecked, still_open)
 
     def meter_logger(self, name: str, agent_log: Path) -> Callable[[], None]:
         """Logs the plan meter while the agent runs, so the dashboard has a reading minutes old. A reading
@@ -1259,9 +1255,9 @@ class EpicRun:
         )
         if reviews:
             text += (
-                "- When the gate passes, the loop runs the code review, and the UI review for a UI change, "
-                "in their own sessions, and sends you what they find. Return done when the work is committed "
-                "and the gate passes.\n"
+                "- When the gate passes, the loop runs the code review in its own session and sends you what "
+                "it finds. For a UI change, a UI review runs after it, and what it finds stays open on the "
+                "ticket for KC. Return done when the work is committed and the gate passes.\n"
             )
         if self.config.agent_hint:
             text += f"- {self.config.agent_hint}\n"

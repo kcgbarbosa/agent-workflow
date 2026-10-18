@@ -517,21 +517,57 @@ def test_the_code_review_runs_in_its_own_session_and_its_findings_go_back_to_the
     assert world.results("DEMO-2", "code-review") == ["findings", "pass"]
 
 
-def test_code_review_findings_after_the_first_fix_use_fix_attempts(world: World) -> None:
+def test_a_later_code_review_looks_only_at_the_commits_since_the_last_one(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    finding = "a.txt:1 holds the wrong letter."
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": "a"}}, {"write": {"a.txt": "b"}}],
+            "DEMO-2-review": [{"findings": [finding]}],
+        }
+    )
+
+    assert world.run() == 0
+
+    first, again = world.calls("DEMO-2-review")
+    assert first["prompt"].startswith(f"/code-review feat/{EPIC}-")
+    since = again["prompt"].split()[1]
+    assert since != first["prompt"].split()[1] and f"at {since}," in again["prompt"]
+    assert f"1. {finding}" in again["prompt"]
+
+
+def test_a_finding_that_a_fix_leaves_open_uses_a_fix_attempt(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     finding = "a.txt:1 holds the wrong letter."
     world.plan(
         {
             "DEMO-2": [{"write": {"a.txt": str(n)}} for n in range(4)],
-            "DEMO-2-review": [{"findings": [finding]}] * 4,
+            "DEMO-2-review": [{"findings": [finding]}] + [{"findings": [finding], "open": [1]}] * 3,
         }
     )
 
     world.run()
 
-    # The first round of findings is free, and the fix attempts cap the rounds after it.
+    # The first fix is part of the build, and each fix that leaves the finding open uses an attempt.
     assert len(world.calls("DEMO-2-review")) == 4 and len(world.calls("DEMO-2")) == 4
     assert world.jira.issues["DEMO-2"].flagged
+
+
+def test_new_findings_in_each_fix_use_no_fix_attempt_up_to_the_round_limit(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"a.txt": str(n)}} for n in range(6)],
+            "DEMO-2-review": [{"findings": [f"a.txt:1 has problem {n}."]} for n in range(6)],
+        }
+    )
+
+    world.run()
+
+    assert len(world.calls("DEMO-2-review")) == loop_run.MAX_REVIEW_ROUNDS + 1
+    assert len(world.calls("DEMO-2")) == loop_run.MAX_REVIEW_ROUNDS + 1
+    assert world.jira.issues["DEMO-2"].flagged
+    assert f"after {loop_run.MAX_REVIEW_ROUNDS} rounds" in world.jira.issues["DEMO-2"].comments[-1]
 
 
 def test_a_commit_after_a_passed_review_gets_a_new_code_review_and_keeps_the_ui_review(world: World) -> None:
@@ -688,59 +724,29 @@ def test_an_image_outside_the_screenshot_folder_does_not_reach_the_ticket(world:
     assert world.jira.issues["DEMO-2"].attachments == []
 
 
-def test_a_ui_fault_goes_back_to_the_agent_and_the_fixed_commit_gets_a_new_review(world: World) -> None:
+def test_a_ui_fault_stays_open_on_the_ticket_and_the_ticket_lands_with_no_fix(world: World) -> None:
     world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
     fault = "home--intermediary--webkit-es.png shows English text."
     world.plan(
         {
-            "DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}, {"write": {"frontend/src/home.tsx": "y"}}],
-            "DEMO-2-ui": [{"screenshot": True, "findings": [fault]}, {"screenshot": True}],
+            "DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}],
+            "DEMO-2-ui": [{"screenshot": True, "findings": [fault]}],
         }
     )
 
     assert world.run() == 0
 
-    fix = world.calls("DEMO-2")[1]
-    assert fix["resume"] is not None and fault in fix["prompt"]
-    assert len(world.calls("DEMO-2-ui")) == 2
-    assert world.results("DEMO-2", "ui-gate") == ["fail", "pass"]
-    assert world.calls("DEMO-2-ui-finish") == []
-    (pr,) = world.prs()
-    assert not pr["draft"] and "UI review left open" not in pr["body"]
-
-
-def test_a_ui_fault_that_is_still_there_after_one_fix_lands_and_keeps_the_epic_pr_a_draft(
-    world: World,
-) -> None:
-    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
-    fault = "home--intermediary--webkit-es.png shows English text."
-    world.plan(
-        {
-            "DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}, {"write": {"frontend/src/home.tsx": "y"}}],
-            "DEMO-2-ui": [
-                {"screenshot": True, "findings": [fault]},
-                {"screenshot": True, "findings": [fault]},
-            ],
-            "DEMO-2-ui-finish": [{"screenshot": True, "findings": [fault]}],
-        }
-    )
-
-    assert world.run() == 0
-
-    assert len(world.calls("DEMO-2")) == 2 and len(world.calls("DEMO-2-ui")) == 2
-    gates = world.results(step="ui-gate")
-    assert gates == ["fail", "open", "open"]
+    assert len(world.calls("DEMO-2")) == 1 and len(world.calls("DEMO-2-ui")) == 1
+    assert world.results("DEMO-2", "ui-gate") == ["open"]
     assert not world.jira.issues["DEMO-2"].flagged
-    assert "merge(DEMO-2): Change the home screen" in world.epic_log()
     assert fault in world.jira.issues["DEMO-2"].comments[-1]
-    assert len(world.calls("DEMO-2-ui-finish")) == 1
+    assert "merge(DEMO-2): Change the home screen" in world.epic_log()
     (pr,) = world.prs()
-    assert pr["draft"]
-    assert "**UI review left open:** DEMO-2 (1)." in pr["body"]
+    assert not pr["draft"] and "**UI review left open:** DEMO-2 (1)." in pr["body"]
     assert fault not in pr["body"]
 
 
-def test_a_part_the_ui_review_could_not_check_keeps_the_epic_pr_a_draft(world: World) -> None:
+def test_a_part_the_ui_review_could_not_check_is_listed_in_the_ready_epic_pr(world: World) -> None:
     world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
     part = "/admin/materials: the seed has one row, not three."
     world.plan(
@@ -754,64 +760,7 @@ def test_a_part_the_ui_review_could_not_check_keeps_the_epic_pr_a_draft(world: W
 
     assert f"Not checked: {part}" in world.jira.issues["DEMO-2"].comments[-1]
     create = world.records("gh")[-1]
-    assert "--draft" in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
-
-
-def test_the_finish_reviews_an_open_ui_item_again_and_clears_it_when_the_epic_covers_it(world: World) -> None:
-    world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
-    part = "/admin/materials: the seed has one row, not three."
-    world.plan(
-        {
-            "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
-            "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
-            "DEMO-2-ui-finish": [{"screenshot": True}],
-        }
-    )
-
-    assert world.run() == 0
-
-    (review,) = world.calls("DEMO-2-ui-finish")
-    assert part in review["prompt"] and review["resume"] is None
-    gates = world.results(step="ui-gate")
-    assert gates == ["open", "pass"]
-    create = world.records("gh")[-1]
-    assert "--draft" not in create["args"] and "UI review left open" not in create["body"]
-
-
-def test_an_open_ui_item_that_the_finish_review_still_finds_keeps_the_epic_pr_a_draft(world: World) -> None:
-    world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
-    part = "/admin/materials: the seed has one row, not three."
-    world.plan(
-        {
-            "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
-            "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
-            "DEMO-2-ui-finish": [{"screenshot": True, "unchecked": [part]}],
-        }
-    )
-
-    assert world.run() == 0
-
-    gates = world.results(step="ui-gate")
-    assert gates == ["open", "open"]
-    create = world.records("gh")[-1]
-    assert "--draft" in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
-
-
-def test_a_finish_review_that_saves_no_screenshots_keeps_the_mark(world: World) -> None:
-    world.jira.add("DEMO-2", "Add the upload screen", parent=EPIC)
-    part = "/admin/materials: the seed has one row, not three."
-    world.plan(
-        {
-            "DEMO-2": [{"write": {"frontend/src/upload.tsx": "x"}}],
-            "DEMO-2-ui": [{"screenshot": True, "unchecked": [part]}],
-        }
-    )
-
-    assert world.run() == 0
-
-    assert not world.jira.issues["DEMO-2"].flagged
-    create = world.records("gh")[-1]
-    assert "--draft" in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
+    assert "--draft" not in create["args"] and "**UI review left open:** DEMO-2 (1)." in create["body"]
 
 
 def test_the_open_ui_items_in_the_epic_pr_come_from_the_log(world: World) -> None:
@@ -831,7 +780,7 @@ def test_the_open_ui_items_in_the_epic_pr_come_from_the_log(world: World) -> Non
     assert world.run() == 0
 
     (pr,) = world.prs()
-    assert pr["draft"] and "**UI review left open:** DEMO-2 (1)." in pr["body"]
+    assert not pr["draft"] and "**UI review left open:** DEMO-2 (1)." in pr["body"]
 
 
 def test_a_part_that_loop_toml_accepts_as_unchecked_is_a_note_and_the_epic_pr_is_ready(world: World) -> None:
@@ -851,14 +800,31 @@ def test_a_part_that_loop_toml_accepts_as_unchecked_is_a_note_and_the_epic_pr_is
     assert "--draft" not in create["args"] and "UI review left open" not in create["body"]
 
 
-def test_a_ui_review_that_saves_no_screenshots_makes_the_ticket_stuck(world: World) -> None:
+def test_a_ui_review_that_saves_no_screenshots_lands_the_ticket_with_an_open_item(world: World) -> None:
     world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}]})
 
-    world.run()
+    assert world.run() == 0
 
-    assert world.jira.issues["DEMO-2"].flagged
-    assert "saved no screenshots" in world.jira.issues["DEMO-2"].comments[0]
+    assert not world.jira.issues["DEMO-2"].flagged
+    assert "saved no screenshots" in world.jira.issues["DEMO-2"].comments[-1]
+    assert world.results("DEMO-2", "ui-gate") == ["open"]
+
+
+def test_a_blocked_ui_review_lands_the_ticket_with_an_open_item(world: World) -> None:
+    world.jira.add("DEMO-2", "Change the home screen", parent=EPIC)
+    world.plan(
+        {
+            "DEMO-2": [{"write": {"frontend/src/home.tsx": "x"}}],
+            "DEMO-2-ui": [{"status": "blocked", "reason": "The seed fails."}],
+        }
+    )
+
+    assert world.run() == 0
+
+    assert not world.jira.issues["DEMO-2"].flagged
+    assert "The seed fails." in world.jira.issues["DEMO-2"].comments[-1]
+    assert "merge(DEMO-2): Change the home screen" in world.epic_log()
 
 
 def test_a_restart_keeps_the_screenshots_of_the_same_commit(world: World) -> None:
@@ -936,6 +902,7 @@ def test_an_agent_writes_the_epic_pr_body_with_the_pr_skill(world: World) -> Non
 
     write = world.calls(f"{EPIC}-pr")[-1]
     assert "| DEMO-2 | Landed |" in write["prompt"]
+    assert "finish-merge-gate.log" in write["prompt"] and "flaky" in write["prompt"]
     create = world.records("gh")[-1]
     assert create["body"].startswith("**Failing gate:** `make check`")
     assert create["body"].endswith(body)
