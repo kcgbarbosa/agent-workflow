@@ -208,7 +208,7 @@ class EpicRun:
         git(self.epic_worktree, "reset", "--hard", "--quiet")
         git(self.epic_worktree, "switch", "--quiet", self.epic_branch)
         self.log(self.epic_key, "start", "ok", detail=self.epic_branch, setup=run_setup(self.config))
-        if not self.sync_base():
+        if not self.sync_epic() or not self.sync_base():
             return 1
         self.recover()
         for ticket in self.jira.children(self.epic_key):
@@ -249,6 +249,28 @@ class EpicRun:
         self.log(self.epic_key, "base", "missing", detail=self.base)
         self.notify(f"{self.epic_key} stopped")
         return False
+
+    def sync_epic(self) -> bool:
+        """Merges the commits that KC pushed to the Epic branch on origin, such as a merge of main, so the
+        loop builds on them and its next push is not refused.
+
+        Returns False, with the branch as it was, when they do not merge.
+        """
+        key = self.epic_key
+        git(self.repo, "fetch", "--prune", "origin")
+        ref = f"origin/{self.epic_branch}"
+        if not repo.has_ref(self.repo, f"refs/remotes/{ref}"):
+            return True
+        if repo.is_ancestor(self.epic_worktree, ref, "HEAD"):
+            return True
+        merged = git(self.epic_worktree, "merge", "--no-edit", ref, check=False)
+        if merged.returncode != 0:
+            git(self.epic_worktree, "merge", "--abort", check=False)
+            self.log(key, "origin", "conflict", detail=tail(merged.stdout + merged.stderr))
+            self.notify(f"{key} stopped")
+            return False
+        self.log(key, "origin", "merged", detail=ref)
+        return True
 
     def sync_base(self) -> bool:
         """Merges the base branch into a stacked Epic branch, so a fix to the base reaches the work on top.
@@ -797,7 +819,7 @@ class EpicRun:
     def finish(self) -> int:
         """Runs the merge gate on the Epic branch and opens the Epic PR."""
         key = self.epic_key
-        if not self.sync_base():
+        if not self.sync_epic() or not self.sync_base():
             return 1
         base = f"origin/{self.base}"
         if out(self.epic_worktree, "rev-list", "--count", f"{base}..HEAD") == "0":

@@ -1353,6 +1353,54 @@ def test_a_base_branch_that_does_not_merge_stops_the_run_and_leaves_the_branch_a
     assert ("base", "conflict") in [(line["step"], line["result"]) for line in world.decisions()]
 
 
+def push_to_the_epic(world: World, files: dict[str, str], start: str | None = None) -> str:
+    """Pushes a commit of the files to the Epic branch on origin, as KC does between runs. A start other
+    than the Epic branch on origin replaces its history."""
+    branch = sh(world.repo, "git", "for-each-ref", "--format=%(refname:short)", f"refs/heads/feat/{EPIC}-*")
+    clone = world.repo.parent / "kc"
+    sh(world.repo, "git", "worktree", "add", "-q", "--detach", str(clone), start or f"origin/{branch}")
+    for name, text in files.items():
+        (clone / name).write_text(text)
+    sh(clone, "git", "add", "-A")
+    sh(clone, "git", "commit", "-q", "-m", "fix: a push of KC")
+    sh(clone, "git", "push", "-q", "--force", "origin", f"HEAD:{branch}")
+    sh(world.repo, "git", "worktree", "remove", "--force", str(clone))
+    return branch
+
+
+def test_a_push_of_kc_to_the_epic_branch_is_merged_in_and_the_next_push_goes_through(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+    world.run()
+    branch = push_to_the_epic(world, {"kc.txt": "kc"})
+    world.jira.add("DEMO-3", "Add the second part", parent=EPIC)
+    world.plan({"DEMO-3": [{"write": {"b.txt": "b"}}]})
+
+    assert world.run() == 0
+
+    assert world.epic_file("kc.txt").read_text() == "kc"
+    sh(world.repo, "git", "fetch", "-q", "origin")
+    pushed = sh(world.repo, "git", "ls-tree", "--name-only", f"origin/{branch}").split()
+    assert {"a.txt", "b.txt", "kc.txt"} <= set(pushed)
+    assert "fail" not in world.results(step="push")
+    assert "merged" in world.results(EPIC, "origin")
+
+
+def test_a_push_of_kc_that_does_not_merge_stops_the_run_and_leaves_the_branch_as_it_was(
+    world: World,
+) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+    world.run()
+    push_to_the_epic(world, {"a.txt": "kc"}, start="origin/main")
+
+    assert world.run() == 1
+
+    assert world.epic_file("a.txt").read_text() == "a"
+    assert sh(world.epic_file("."), "git", "status", "--porcelain") == ""
+    assert "conflict" in world.results(EPIC, "origin")
+
+
 def test_a_base_branch_that_is_gone_stops_the_run(world: World) -> None:
     assert world.run(base="feat/DEMO-0-gone") == 1
 
