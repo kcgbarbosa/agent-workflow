@@ -27,6 +27,7 @@ record = {
     "targets": targets,
     "cwd": os.getcwd(),
     "project": os.environ.get("COMPOSE_PROJECT_NAME"),
+    "db_port": os.environ.get("DB_PORT"),
     "stdin_null": os.stat(0).st_rdev == os.stat(os.devnull).st_rdev,
 }
 for name in ("make.jsonl", "commands.jsonl"):

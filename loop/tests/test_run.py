@@ -129,6 +129,48 @@ def test_the_epic_stack_stops_when_the_run_stops(world: World) -> None:
     assert last["args"] == ["compose", "down"] and last["project"] == "demo-demo-1"
 
 
+def test_a_slot_whose_port_another_project_holds_moves_to_a_spare_slot(world: World) -> None:
+    # Slot 1, the Epic's, has DB_PORT 55442. The spare slots start after the two ticket slots, at slot 4.
+    holder = "step-subject\tstep-subject-db-1\t127.0.0.1:55442->5432/tcp\n"
+    (world.fakes / "containers.txt").write_text(holder)
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run() == 0
+
+    merge_gates = [record for record in world.records("make") if record["project"] == "demo-demo-1"]
+    assert merge_gates and all(record["db_port"] == "55472" for record in merge_gates)
+    moved = [line for line in world.decisions() if line["step"] == "slot"]
+    assert [line["result"] for line in moved] == ["moved"]
+    assert "step-subject-db-1" in moved[0]["detail"] and "55442" in moved[0]["detail"]
+
+
+def test_a_slot_keeps_the_ports_that_its_own_stack_holds(world: World) -> None:
+    (world.fakes / "containers.txt").write_text("demo-demo-1\tdemo-demo-1-db-1\t127.0.0.1:55442->5432/tcp\n")
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run() == 0
+
+    merge_gates = [record for record in world.records("make") if record["project"] == "demo-demo-1"]
+    assert merge_gates and all(record["db_port"] == "55442" for record in merge_gates)
+    assert not any(line["step"] == "slot" for line in world.decisions())
+
+
+def test_a_ticket_with_no_free_slot_is_stuck_with_the_container_that_holds_its_port(world: World) -> None:
+    (world.fakes / "containers.txt").write_text("other\tother-web-1\t0.0.0.0:8000-8200->8000-8200/tcp\n")
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    world.run()
+
+    assert world.jira.issues["DEMO-2"].flagged
+    assert world.calls("DEMO-2") == []
+    stuck = next(line for line in world.decisions() if line["step"] == "stuck" and line["result"] == "stuck")
+    assert "Port 8020 is held by the container other-web-1." in stuck["detail"]
+    assert "No spare slot has its ports free." in stuck["detail"]
+
+
 def test_a_failed_ticket_gate_goes_back_to_the_session_with_the_log_tail(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.plan({"DEMO-2": [{"write": {"a.txt": "a", "TICKET_FAIL": "x"}}, {"delete": ["TICKET_FAIL"]}]})

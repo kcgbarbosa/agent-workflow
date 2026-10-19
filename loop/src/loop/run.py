@@ -69,6 +69,10 @@ STATUS_GRACE_SECONDS = 10.0
 LOG_TAIL_LINES = 80
 # Slot 0 is the main checkout, and the Epic branch has its own slot.
 EPIC_SLOT = 1
+# A slot whose ports another Compose project holds moves to one of the spare slots after the ticket slots.
+SPARE_SLOTS = 8
+# A host port that `docker ps` shows a container publishing, as in `127.0.0.1:55442->5432/tcp`, or a range.
+PUBLISHED_PORT = re.compile(r":(\d+)(?:-(\d+))?->")
 
 # A minute past the reset of a usage limit, so the limit is surely clear.
 PAST_RESET_SECONDS = 60
@@ -90,6 +94,10 @@ class UsageLimit(Exception):
 
 
 class AgentFailed(Exception):
+    pass
+
+
+class PortsTaken(Exception):
     pass
 
 
@@ -164,6 +172,9 @@ class EpicRun:
         self.home = config.state_dir / epic_key
         self.log_path = self.home / "decisions.jsonl"
         self._log_lock = threading.Lock()
+        # The spare slot that each moved slot uses for the rest of the run.
+        self.slot_moves: dict[int, int] = {}
+        self._slot_lock = threading.Lock()
         self.stuck_in_row = 0
         self.epic_branch = ""
         self.epic_worktree = self.home / "worktrees" / epic_key
@@ -526,7 +537,7 @@ class EpicRun:
         log_file = next_log(run.run_dir, "ticket-gate", ".log")
         command = self.config.ticket_gate
         if self.gate(
-            command, run.worktree, self.config.stack_env(run.slot, run.ticket.key), log_file, run.ticket.key
+            command, run.worktree, self.stack_env(run.slot, run.ticket.key), log_file, run.ticket.key
         ):
             failure = self.acceptance_check(run, head)
             if failure is None:
@@ -551,7 +562,7 @@ class EpicRun:
         listed = self.command(
             [part.replace("{key}", key) for part in command],
             run.worktree,
-            self.config.stack_env(run.slot, key),
+            self.stack_env(run.slot, key),
         )
         if listed.returncode != 0:
             reason = f"The acceptance list `{' '.join(command)}` failed."
@@ -762,7 +773,7 @@ class EpicRun:
                 )
             log_file = next_log(run.run_dir, "merge-gate", ".log")
             command = self.config.merge_gate
-            if not self.gate(command, epic, self.config.stack_env(EPIC_SLOT, self.epic_key), log_file, key):
+            if not self.gate(command, epic, self.stack_env(EPIC_SLOT, self.epic_key), log_file, key):
                 gate = " ".join(command)
                 prompt = (
                     f"The merge gate `{gate}` failed on the Epic branch with this branch merged in. "
@@ -835,7 +846,7 @@ class EpicRun:
         failing: tuple[str, Path] | None = None
         log_file = run_dir / "finish-merge-gate.log"
         command = self.config.merge_gate
-        if not self.gate(command, self.epic_worktree, self.config.stack_env(EPIC_SLOT, key), log_file, key):
+        if not self.gate(command, self.epic_worktree, self.stack_env(EPIC_SLOT, key), log_file, key):
             failing = (" ".join(command), log_file)
         self.push(self.epic_worktree, self.epic_branch, key)
         demo_failing = self.point_demo(run_dir)
@@ -1082,7 +1093,7 @@ class EpicRun:
         command = self.agent_command(run, prompt, session, name, schema, model, effort)
         env = {
             **self.child_env(),
-            **self.config.stack_env(run.slot, run.ticket.key),
+            **self.stack_env(run.slot, run.ticket.key),
             **self.secrets,
             "LOOP_RUN_DIR": str(run.run_dir),
             **NO_BACKGROUND,
@@ -1237,6 +1248,52 @@ class EpicRun:
                 down = self.command(["docker", "compose", "--project-name", name, "down"], self.home)
                 result = "ok" if down.returncode == 0 else "fail"
                 self.log(self.epic_key, "stop-stale-stack", result, detail=name)
+
+    def stack_env(self, slot: int, key: str) -> dict[str, str]:
+        """The env of the slot's stack, on ports that no other Compose project holds. When another project,
+        such as a stack from a session outside the loop, holds one, the slot moves to a free spare slot."""
+        if self.config.stack is None:
+            return {}
+        with self._slot_lock:
+            env = self.config.stack_env(self.slot_moves.get(slot, slot), key)
+            held = self.held_ports(env["COMPOSE_PROJECT_NAME"])
+            taken = self.taken(env, held)
+            if not taken:
+                return env
+            first = EPIC_SLOT + self.config.parallel + 1
+            for spare in range(first, first + SPARE_SLOTS):
+                moved = self.config.stack_env(spare, key)
+                if spare not in self.slot_moves.values() and not self.taken(moved, held):
+                    self.slot_moves[slot] = spare
+                    self.log(key, "slot", "moved", detail=f"{taken} The stack moved to slot {spare}.")
+                    return moved
+            raise PortsTaken(f"{taken} No spare slot has its ports free.")
+
+    def taken(self, env: dict[str, str], held: dict[int, str]) -> str:
+        """Which of the stack's ports another project holds, as a sentence, or "" when none is held."""
+        assert self.config.stack is not None
+        ports = [int(env[name]) for name in self.config.stack.ports]
+        return " ".join(
+            f"Port {port} is held by the container {held[port]}." for port in ports if port in held
+        )
+
+    def held_ports(self, project: str) -> dict[int, str]:
+        """The host ports that the running containers of other Compose projects publish, with the container
+        that holds each one."""
+        listed = self.command(
+            ["docker", "ps", "--format", '{{.Label "com.docker.compose.project"}}\t{{.Names}}\t{{.Ports}}'],
+            self.home,
+        )
+        held: dict[int, str] = {}
+        for line in listed.stdout.splitlines() if listed.returncode == 0 else []:
+            owner, _, rest = line.partition("\t")
+            container, _, published = rest.partition("\t")
+            if owner == project:
+                continue
+            for low, high in PUBLISHED_PORT.findall(published):
+                for port in range(int(low), int(high or low) + 1):
+                    held[port] = container
+        return held
 
     def stack_down(self, worktree: Path, slot: int, key: str, volumes: bool) -> None:
         if self.config.stack is None or not worktree.exists():
