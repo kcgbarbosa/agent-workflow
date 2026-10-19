@@ -853,14 +853,33 @@ class EpicRun:
         # The ticket reviews already ran at landing, so the finish runs the merge gate, which is the only test
         # gate here, and leaves the review of the whole Epic to KC.
         failing: tuple[str, Path] | None = None
-        log_file = run_dir / "finish-merge-gate.log"
         command = self.config.merge_gate
-        if not self.gate(command, self.epic_worktree, self.stack_env(EPIC_SLOT, key), log_file, key):
-            failing = (" ".join(command), log_file)
+        head = out(self.epic_worktree, "rev-parse", "HEAD")
+        passed = self.gate_passed_at(head)
+        if passed is not None:
+            # The same commit gives the same result, so a gate that passed at this HEAD runs no second time.
+            log_file = passed
+            self.log(key, "finish", "gate-passed", commit=head, detail=str(log_file))
+        else:
+            log_file = run_dir / "finish-merge-gate.log"
+            stack = self.stack_env(EPIC_SLOT, key)
+            if not self.gate(command, self.epic_worktree, stack, log_file, key):
+                failing = (" ".join(command), log_file)
         self.push(self.epic_worktree, self.epic_branch, key)
         demo_failing = self.point_demo(run_dir)
         body = self.pr_body(run, merge_base, log_file)
         return self.open_pr(failing, body, demo_failing)
+
+    def gate_passed_at(self, head: str) -> Path | None:
+        """The log of the merge gate when its last result at this commit, at a landing or a finish, passed."""
+        step = " ".join(self.config.merge_gate)
+        last = None
+        for line in read_lines(self.log_path):
+            if line.get("step") == step and line.get("commit") == head:
+                last = line
+        if last is None or last.get("result") != "pass":
+            return None
+        return Path(str(last.get("detail")))
 
     def point_demo(self, run_dir: Path) -> tuple[str, Path] | None:
         """Points the always-on demo at the Epic branch. Returns the command and its log when it fails."""
