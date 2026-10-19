@@ -68,13 +68,19 @@ REVIEW_RULES = (
     "Give each command a timeout long enough for it. Stop each server you start, such as a dev server, "
     "before you give your result."
 )
-CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. " + REVIEW_RULES
+# The gates run the tests, so a code review reads the diff, and its time goes to what no test shows.
+CODE_REVIEW_TESTS = (
+    "The ticket gate `{gate}` passed at this commit, and the merge gate `{merge}` runs every test at "
+    "landing. Review by reading the diff and its tests. Run a test only to confirm a problem that you "
+    "suspect. "
+)
+CODE_REVIEW_PROMPT = "/code-review {base} The spec is the ticket file {ticket}. {tests}" + REVIEW_RULES
 # A later review looks only at the commits since the last one, so each round has less to review than the one
 # before it, and a fix is not reviewed again as new code.
 CODE_REVIEW_AGAIN_PROMPT = (
     "/code-review {since} The spec is the ticket file {ticket}. An earlier review of the ticket, at {since}, "
     "covered all the work up to that commit. Review only the ticket's own commits since then, not the work "
-    "of other tickets that a merge of the Epic branch brought in.{earlier} " + REVIEW_RULES
+    "of other tickets that a merge of the Epic branch brought in.{earlier} {tests}" + REVIEW_RULES
 )
 EARLIER_FINDINGS = (
     " That review found these problems:\n\n{findings}\n\nGive in `open` the number of each one that the new "

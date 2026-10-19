@@ -75,6 +75,21 @@ def test_each_agent_gets_the_ticket_file_the_secrets_and_its_own_stack(world: Wo
     assert land["ticket"] == "DEMO-2" and land["commit"]
 
 
+def test_the_head_agent_and_the_code_review_learn_that_the_gates_run_the_tests(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    world.run()
+
+    ticket = (world.run_dir("DEMO-2") / "ticket.md").read_text()
+    assert "After you return done, the loop runs `make lint test`" in ticket
+    assert "the merge gate `make check` runs every test" in ticket
+    assert "Run the tests that cover your change." in ticket
+    review = world.calls("DEMO-2-review")[0]["prompt"]
+    assert "The ticket gate `make lint test` passed at this commit" in review
+    assert "Run a test only to confirm a problem that you suspect." in review
+
+
 def test_the_run_writes_the_board_that_loop_watch_shows(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
     world.jira.add("DEMO-3", "Add the second part", parent=EPIC, blockers=["DEMO-2"])
