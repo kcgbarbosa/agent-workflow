@@ -68,7 +68,6 @@ IN_A_STEP = [
     pytest.param("claude:DEMO-2-ui", 1, id="ui-review"),
     pytest.param("make:check", 1, id="land-merge-gate"),
     pytest.param(f"pre-push:{EPIC_BRANCH}", 1, id="land-after-merge-before-push"),
-    pytest.param("make:check", 3, id="finish-merge-gate"),
     pytest.param(f"claude:{EPIC}-pr", 1, id="finish-pr-body"),
 ]
 AFTER_A_SIDE_EFFECT = [

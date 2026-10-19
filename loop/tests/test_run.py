@@ -953,16 +953,36 @@ def test_an_agent_writes_the_epic_pr_body_with_the_pr_skill(world: World) -> Non
             f"{EPIC}-pr": [{"pr_body": body}],
         }
     )
-    (world.fakes / "merge-gate-fails-after").write_text("1")
 
     assert world.run() == 0
 
     write = world.calls(f"{EPIC}-pr")[-1]
     assert "| DEMO-2 | Landed |" in write["prompt"]
-    assert "finish-merge-gate.log" in write["prompt"] and "flaky" in write["prompt"]
+    assert "DEMO-2/merge-gate-1.log" in write["prompt"] and "flaky" in write["prompt"]
     create = world.records("gh")[-1]
-    assert create["body"].startswith("**Failing gate:** `make check`")
     assert create["body"].endswith(body)
+
+
+def test_the_finish_runs_no_second_merge_gate_at_the_commit_whose_gate_passed(world: World) -> None:
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+
+    assert world.run() == 0
+
+    assert [record["targets"] for record in world.records("make")].count(["check"]) == 1
+    (skipped,) = [line for line in world.decisions() if line["step"] == "finish"]
+    assert skipped["result"] == "gate-passed" and skipped["detail"].endswith("DEMO-2/merge-gate-1.log")
+    assert not world.prs()[0]["draft"]
+
+
+def land_then_fix_the_base(world: World) -> None:
+    """Lands DEMO-2 on an Epic stacked on a base branch, then pushes a fix to the base, so that the next
+    finish runs its merge gate on a new commit."""
+    world.push_branch("feat/DEMO-0-before", {"before.txt": "before"})
+    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.plan({"DEMO-2": [{"write": {"a.txt": "a"}}]})
+    assert world.run(base="feat/DEMO-0-before") == 0
+    world.push_branch("feat/DEMO-0-before", {"before.txt": "fixed"}, start="origin/feat/DEMO-0-before")
 
 
 def push_branch(world: World, branch: str, name: str) -> None:
@@ -1033,20 +1053,14 @@ def test_with_name_landed_keys_only_the_epic_pr_names_no_key_that_did_not_land(w
 
 
 def test_the_epic_pr_is_a_draft_when_a_gate_still_fails(world: World) -> None:
-    world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
-    world.plan(
-        {
-            "DEMO-2": [{"write": {"a.txt": "a"}}],
-        }
-    )
-    (world.fakes / "merge-gate-fails-after").write_text("1")
+    land_then_fix_the_base(world)
+    (world.fakes / "merge-gate-fails").write_text("")
 
-    assert world.run() == 0
+    assert world.run(base="feat/DEMO-0-before") == 0
 
-    create = world.records("gh")[-1]
-    assert "--draft" in create["args"]
-    assert create["body"].startswith("**Failing gate:** `make check`")
-    assert world.jira.notifications == [f"{EPIC} pr-draft"]
+    (pr,) = world.prs()
+    assert pr["draft"] and pr["body"].startswith("**Failing gate:** `make check`")
+    assert world.jira.notifications[-1] == f"{EPIC} pr-draft"
 
 
 DEMO = '\n[demo]\ncommand = ["make", "demo", "branch={branch}"]\nurl = "https://demo.example.ts.net"\n'
@@ -1202,12 +1216,13 @@ def test_a_merge_that_fails_its_gate_never_reaches_the_frontier(world: World) ->
 
 def test_an_open_epic_pr_gets_the_new_body_and_draft_state(world: World) -> None:
     world.jira.add("DEMO-2", "Add the first part", parent=EPIC)
+    world.jira.add("DEMO-3", "Fail every gate", parent=EPIC)
     world.plan(
         {
             "DEMO-2": [{"write": {"a.txt": "a"}}],
+            "DEMO-3": [{"write": {"TICKET_FAIL": "x"}}],
         }
     )
-    (world.fakes / "merge-gate-fails-after").write_text("1")
     url = "https://github.com/kcgbarbosa/demo/pull/98"
     opened = {"url": url, "head": f"feat/{EPIC}-the-loop", "base": "main", "title": "", "body": "Old."}
     (world.fakes / "prs.json").write_text(json.dumps([{**opened, "draft": False, "state": "open"}]))
@@ -1216,8 +1231,8 @@ def test_an_open_epic_pr_gets_the_new_body_and_draft_state(world: World) -> None
 
     assert world.gh("pr", "create") == []
     (pr,) = world.prs()
-    assert pr["url"] == url and pr["draft"] and pr["body"].startswith("**Failing gate:**")
-    assert world.jira.notifications == [f"{EPIC} pr-draft"]
+    assert pr["url"] == url and pr["draft"] and pr["body"] != "Old."
+    assert world.jira.notifications[-1] == f"{EPIC} pr-draft"
 
 
 def test_a_rerun_of_a_finished_epic_builds_only_the_new_ticket_and_edits_the_open_pr(world: World) -> None:
