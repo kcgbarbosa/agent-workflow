@@ -26,6 +26,7 @@ from .prompts import (
     AGENT_SCHEMA,
     CODE_REVIEW_AGAIN_PROMPT,
     CODE_REVIEW_PROMPT,
+    CODE_REVIEW_TESTS,
     DECISIONS_COMMENT,
     DISPATCH,
     EARLIER_FINDINGS,
@@ -583,6 +584,11 @@ class EpicRun:
             last=self.rounds(key, "code-review", "findings") > MAX_REVIEW_ROUNDS,
         )
 
+    def review_tests(self) -> str:
+        return CODE_REVIEW_TESTS.format(
+            gate=shlex.join(self.config.ticket_gate), merge=shlex.join(self.config.merge_gate)
+        )
+
     def review_code(self, run: TicketRun, head: str) -> dict[str, Any] | None:
         """Runs the code review and logs its result, which it returns when it has findings. A review after an
         earlier one looks only at the commits since it, with the earlier findings."""
@@ -590,12 +596,15 @@ class EpicRun:
         earlier = self.last_review(key)
         found: list[str] = []
         if earlier is None:
-            prompt = CODE_REVIEW_PROMPT.format(base=self.epic_branch, ticket=ticket)
+            tests = self.review_tests()
+            prompt = CODE_REVIEW_PROMPT.format(base=self.epic_branch, ticket=ticket, tests=tests)
         else:
             found = [str(item) for item in earlier.get("findings", [])]
             listed = "\n".join(f"{n}. {finding}" for n, finding in enumerate(found, 1))
             more = EARLIER_FINDINGS.format(findings=listed) if found else ""
-            prompt = CODE_REVIEW_AGAIN_PROMPT.format(since=earlier["commit"], ticket=ticket, earlier=more)
+            prompt = CODE_REVIEW_AGAIN_PROMPT.format(
+                since=earlier["commit"], ticket=ticket, earlier=more, tests=self.review_tests()
+            )
         review = self.review_agent(run, prompt, f"{key}-review")
         if not review.findings:
             self.log(key, "code-review", "pass", commit=head)
@@ -1273,13 +1282,15 @@ class EpicRun:
             "Do not push, and do not open a pull request.\n"
             f"- The run folder is `{run.run_dir}`."
             + ("\n" if reviews else " A UI review saves its screenshots there.\n")
-            + f"- The loop checks this work with `{shlex.join(gate)}`. Make it pass before you return done.\n"
+            + f"- After you return done, the loop runs `{shlex.join(gate)}` and sends you any failure. "
+            f"At landing, the merge gate `{shlex.join(self.config.merge_gate)}` runs every test on the Epic "
+            "branch. Run the tests that cover your change.\n"
         )
         if reviews:
             text += (
                 "- When the gate passes, the loop runs the code review in its own session and sends you what "
                 "it finds. For a UI change, a UI review runs after it, and what it finds stays open on the "
-                "ticket for KC. Return done when the work is committed and the gate passes.\n"
+                "ticket for KC. Return done when the work is committed and the tests that cover it pass.\n"
             )
         if self.config.agent_hint:
             text += f"- {self.config.agent_hint}\n"
