@@ -59,7 +59,7 @@ Read the space through the Atlassian connector to check that the parent page exi
 **Section D: Testing.** Ask for:
 
 - The acceptance folder, its command for one ticket, and its command that lists the titles of one ticket's tests. Recommend the ones exploration found. With no suite yet, recommend Playwright on the real stack, and say that the first UI ticket builds it.
-- The UI review skill. Recommend `.claude/skills/ui-review/`.
+- The UI review skill, and its UI review run: the command that runs one ticket's tests and saves a screenshot of each step in a folder it names. Recommend `.claude/skills/ui-review/` and `make ui-review ticket=<key> run=<folder>`. Only the UI review run saves screenshots, because nobody looks at those of another run. The command for one ticket, the merge gate, and a check run save none.
 - The stubbed and unit test folders, if any.
 
 A repo with no screen and no stack writes "No acceptance suite" in `docs/agents/testing.md`, and each skill then skips the acceptance steps.

@@ -6,16 +6,17 @@ How a ticket proves what the user sees. `to-spec`, `to-tickets`, `tdd`, `impleme
 
 Each "What the user sees" line of a ticket is one acceptance test.
 
-| Rule          | Value                                                       |
-| ------------- | ----------------------------------------------------------- |
-| Folder        | `<acceptance folder>`                                       |
-| Title         | The line, word for word                                     |
-| Tag           | The ticket key                                              |
-| Stack         | The real stack: <what is real>. No API is stubbed           |
-| Data          | The seed. A line the seed cannot show changes the seed      |
-| Run a ticket  | `<acceptance command>`                                      |
-| List a ticket | `<list command>`, one title per line                        |
-| Proof         | A screenshot of each step, which `<UI review skill>` checks |
+| Rule          | Value                                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------ |
+| Folder        | `<acceptance folder>`                                                                            |
+| Title         | The line, word for word                                                                          |
+| Tag           | The ticket key                                                                                   |
+| Stack         | The real stack: <what is real>. No API is stubbed                                                |
+| Data          | The seed. A line the seed cannot show changes the seed                                           |
+| Run a ticket  | `<acceptance command>`. It saves no screenshot                                                   |
+| UI review run | `<UI review run command>`: the same tests, with a screenshot of each step in the folder it names |
+| List a ticket | `<list command>`, one title per line                                                             |
+| Proof         | The screenshots of the UI review run, which `<UI review skill>` checks                           |
 
 ## Other tests
 

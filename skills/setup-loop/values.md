@@ -153,9 +153,9 @@ With `parallel = 2`, the highest slot is 3, so a port moves by at most 30. The b
 **Choose.**
 
 - `path` is the one folder prefix that holds the screens. Choose the narrowest folder that holds all of them, because backend code under the prefix starts a review for nothing. Test files never count.
-- The review is a skill of the repo, at `.claude/skills/ui-review/` by default. It runs the ticket's acceptance tests on the real stack with the slot's ports: one test for each line of what the user sees, which taps through the flow as each role and saves a screenshot of each step in `$LOOP_RUN_DIR`. A screenshot of a page as it loads proves nothing about a tap, a search, or a jump, so the review does not take one. It returns each fault with its screenshot. It changes no file. A missing secret, bucket, or seeded file blocks the review, and a step that shows an error screen fails it.
+- The review is a skill of the repo, at `.claude/skills/ui-review/` by default. It runs the ticket's acceptance tests on the real stack with the slot's ports: one test for each line of what the user sees, which taps through the flow as each role. The skill runs the UI review run that `docs/agents/testing.md` names, with the screenshot folder that the loop gives in its prompt, and reads every command from that file. A screenshot of a page as it loads proves nothing about a tap, a search, or a jump, so the review does not take one. It returns each fault with its screenshot. It changes no file. A missing secret, bucket, or seeded file blocks the review, and a step that shows an error screen fails it.
 - Check at the narrowest supported width, because a layout that fits there usually fits wider. Add a desktop width only when the layout differs. Use Chromium, and add WebKit when users reach the product on Safari or iOS, because WebKit shows faults Chromium hides. Check each language the product ships, because a longer string breaks a layout and a missing key shows. Check as each role that the diff affects, because roles see different screens.
-- Take the screenshots and run the checks that need no eyes with one script, such as `make ui-review`. The checks are horizontal overflow (`scrollWidth > clientWidth`), console errors, failed requests, and untranslated keys.
+- The UI review run takes the screenshots and runs the checks that need no eyes, as one script. When it is given no folder and `LOOP_RUN_DIR` is set, its folder is `$LOOP_RUN_DIR/screenshots`, the one the loop attaches to the ticket, so a review that leaves out the folder still saves its screenshots there. Outside the loop, it stops and asks for the folder. The checks are horizontal overflow (`scrollWidth > clientWidth`), console errors, failed requests, and untranslated keys.
 - A script costs no context on a turn. A Playwright MCP server in `.mcp.json` adds its tool list to every turn (Connectors), so add one only for a flow the script cannot cover.
 - Install the browsers on each host, for example with `npx playwright install --with-deps chromium webkit`.
 
@@ -176,7 +176,8 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 **Check.**
 
 - From a cold shell with no browser profile, the sign-in script writes a session file for each role, and a page that needs a role loads as that role.
-- Run the review by hand on a branch with a small UI change. The run folder holds screenshots for every role, browser, and language, and the checks print their findings.
+- Run the review by hand on a branch with a small UI change. The screenshot folder holds a screenshot of each step, and the checks print their findings.
+- Run the command for one ticket. It saves no screenshot.
 - Search the run folder for the session files. None is there.
 
 ## Agent
