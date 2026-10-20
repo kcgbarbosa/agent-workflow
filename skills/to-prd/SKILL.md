@@ -14,7 +14,7 @@ Do NOT interview the user. Synthesize from the sources below, show the draft, an
 
 ### 1. Find the sources
 
-Read `docs/agents/issue-tracker.md`. It names the Epic rule, the paths of the metrics file and the personas file, and the Confluence space that archives specs. When it names no path, use `docs/product/metrics.md` and `docs/product/personas.md`. `/setup-repo` writes it. If it is missing, tell the user to run `/setup-repo`.
+Read `docs/agents/issue-tracker.md`. It names the Epic rule, and the paths of the metrics file and the personas file. When it names no path, use `docs/product/metrics.md` and `docs/product/personas.md`. `/setup-repo` writes it. If it is missing, tell the user to run `/setup-repo`.
 
 Read `docs/agents/domain.md` for the spec folder. Then collect:
 
@@ -64,7 +64,7 @@ Owner: <name>. Target: <sprint or date>.
 
 **Dependencies and rollout.** One or two lines. Write the rollout only for a feature that ships after go-live.
 
-**Spec.** A link to the spec file on the default branch, built from the git remote. When the Epic has merged and the spec is archived, link the Confluence page that `docs/agents/issue-tracker.md` names.
+**Spec.** A link to the spec file on the default branch, built from the git remote. When the spec is no longer on the default branch, link it at the Epic's merge commit: `<remote>/blob/<sha>/<path>`.
 
 </prd-template>
 

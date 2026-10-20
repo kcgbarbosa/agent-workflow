@@ -16,10 +16,9 @@ The Epic is the PRD. `/to-prd` writes the whole description from the spec, the m
 The PRD owner shown on the PRD is `<PRD owner>`.
 
 The brief is not a ticket. It lives at `README.md`.
-The spec is the source of truth for the build, the tests and the tickets. A ticket links the spec and cites story IDs. It does not copy the spec.
+The spec is the source of truth for the build, the tests and the tickets. A ticket names the spec by its repo path, as text with no link, and cites story IDs. It does not copy the spec. Only the Epic links the spec.
 
-When the Epic merges, the owner moves the spec to a child of the Confluence page `<Specs archive page title>`, space `<Confluence space>`. The Epic keeps the PRD. Then `/to-prd` runs again so that the Spec link names the Confluence page, and each ticket links that page and no repo path that the move removed.
-Open a Confluence page only from a link in an issue. The current decisions are in the repo.
+When the Epic merges, a pull request deletes the spec. The owner then changes the Spec line of the Epic to link the spec at the Epic's merge commit, which git keeps. That line is the one hand edit a PRD takes, and no ticket changes.
 
 ## The board
 

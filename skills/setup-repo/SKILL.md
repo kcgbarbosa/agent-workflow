@@ -8,12 +8,12 @@ disable-model-invocation: true
 
 Scaffold the per-repo configuration that `grill-with-docs`, `to-spec`, `to-prd`, `to-tickets` and `implement` assume:
 
-- **Issue tracker**: the Jira project, the key format, the board fields, the rule that the Epic is the PRD, the paths of the metrics file and the personas file, and the Confluence space for archived specs
+- **Issue tracker**: the Jira project, the key format, the board fields, the rule that the Epic is the PRD, and the paths of the metrics file and the personas file
 - **Domain docs**: where `GLOSSARY.md`, the ADRs, the specs, the README Users table, the metrics file and the personas file live
 - **Testing**: the acceptance suite that proves each "What the user sees" line on the real stack, and what may be stubbed
 - **Workflow**: the order of the work for one feature
 
-This is a prompt-driven skill, not a deterministic script. Explore, present what you found, confirm with the user, then write. It reads Jira and Confluence at most, and writes neither.
+This is a prompt-driven skill, not a deterministic script. Explore, present what you found, confirm with the user, then write. It reads Jira at most, and writes nothing in it.
 
 ## Process
 
@@ -45,14 +45,11 @@ Lead each section with the recommended answer so the user can accept it in a wor
 - The fields the owner sets by hand on a ticket. Recommend priority and sprint. Status is always `To Do`, `In Progress`, `In Review`, `Done`.
 - The name of the PRD owner, as the PRD should show it. This is the one real name `/to-prd` writes.
 
-**Section B: Metrics, personas and the spec archive.** Ask for:
+**Section B: Metrics and personas.** Ask for:
 
 - The paths of the metrics file and the personas file, in one question. Recommend `docs/product/metrics.md` and `docs/product/personas.md`. The owner writes the metrics file. It holds the baselines and targets that every PRD quotes. The personas file holds one fictional person per Role, drafted by an agent and approved by the owner.
-- The Confluence space that archives specs. Recommend a space of its own for the project.
-- The title of the parent page that archives specs. Recommend `Specs`.
 
 Check that the two files exist in the repo. Report a file that is missing. Do not create it.
-Read the space through the Atlassian connector to check that the parent page exists. Report it if it is missing. Do not create it.
 
 **Section C: Domain docs.** The layout is single-context: one `GLOSSARY.md` and one `docs/adr/` at the repo root, and specs in `docs/product/specs/`. Write it without asking. If exploration found monorepo signals, tell the user that this skill writes the single-context layout only, and ask whether to continue.
 
@@ -110,6 +107,6 @@ When a labels file from the retired setup skill exists in `docs/agents/`, tell t
 
 ### 5. Done
 
-Tell the user which files you wrote. Say that they can edit `docs/agents/*.md` directly, and that this skill needs to run again only to change the Jira project, the paths of the metrics and personas files, the Confluence space, or the acceptance suite.
+Tell the user which files you wrote. Say that they can edit `docs/agents/*.md` directly, and that this skill needs to run again only to change the Jira project, the paths of the metrics and personas files, or the acceptance suite.
 
 End by pointing at `/setup-loop`: run it to let the loop build an Epic unattended. Skip it for a repo that builds with `implement` only.
