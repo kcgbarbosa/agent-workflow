@@ -2,7 +2,8 @@
 
 It reads only what the run writes to the state folder: `decisions.jsonl`, `board.json`, the agent logs, the
 gate logs, and the screenshots, and asks systemd which runs are active. Only Start and Stop change anything,
-through the functions that `loop start` and `loop stop` call.
+through the functions that `loop start` and `loop stop` call, and Archive spec, which changes git, GitHub,
+and the Epic in Jira after the Epic PR merges.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import parse_qs, unquote, urlparse, urlsplit
 
-from . import process, report, units
+from . import archive, process, report, units
 from .config import SHOTS_DIR, WATCH_PORT, Config, ConfigError, stored_secrets
 from .forecast import BacklogError, fetch, is_open, jira_client, project_keys
 from .jira import JiraError
@@ -127,6 +128,8 @@ def host_view(state_dir: Path) -> list[dict[str, Any]]:
                     "progress": view["progress"],
                     "stuck": view["stats"]["stuck"],
                     "working": working,
+                    # The page offers Archive spec for an Epic whose run opened its PR.
+                    "pr_url": view["pr_url"],
                 }
             )
         runs.sort(key=lambda run: not run["running"])
@@ -695,7 +698,8 @@ class Forecast(Protocol):
 
 
 class Watch:
-    """`config` is the project whose `loop.toml` started `loop watch`. Start and Stop act on it only."""
+    """`config` is the project whose `loop.toml` started `loop watch`. Start, Stop, and Archive spec act on
+    it only."""
 
     def __init__(
         self, state_dir: Path, forecast: Forecast | None = None, config: Config | None = None
@@ -762,21 +766,27 @@ class Watch:
         return {"epics": readiness(epics, config.state_dir, config.landed_status)}
 
     def post(self, url: str) -> tuple[HTTPStatus, str, bytes]:
-        """Start and Stop of a run, the only requests that change anything."""
-        parts = urlparse(url).path.strip("/").split("/")
-        if len(parts) != 3 or parts[1] not in ("start", "stop") or not KEY.fullmatch(parts[2]):
+        """Start and Stop of a run, and Archive spec of an Epic, the only requests that change anything."""
+        parsed = urlparse(url)
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) != 3 or parts[1] not in ("start", "stop", "archive") or not KEY.fullmatch(parts[2]):
             return self.missing()
         command, epic_key = parts[1], parts[2]
         if parts[0] != "api" or self.config is None:
             return self.missing()
+        project = parse_qs(parsed.query).get("project", [""])[0]
+        if project and project != self.config.name:
+            return self.refused(f"This page acts only on the runs of {self.config.name}.")
         try:
             if command == "start":
                 units.start_epic(self.config.repo, epic_key, None, new_code=False)
                 return self.json({"started": epic_key})
+            if command == "archive":
+                return self.json(archive.archive(self.config, epic_key))
             if units.stop_run(self.config.name, epic_key):
                 return self.json({"stopped": epic_key})
             return self.refused(f"No run of {epic_key} is active.")
-        except (units.UnitError, ConfigError) as error:
+        except (units.UnitError, ConfigError, archive.ArchiveError) as error:
             return self.refused(str(error))
 
     def json(self, data: Any) -> tuple[HTTPStatus, str, bytes]:

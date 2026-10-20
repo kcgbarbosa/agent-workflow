@@ -550,6 +550,7 @@ def test_the_home_page_lists_the_runs_of_each_project_with_the_running_one_first
         "progress": {"complete": 2, "total": 4},
         "stuck": 1,
         "working": [],
+        "pr_url": "",
     }
     # OTHER-1 changed last, and the running run still comes first.
     assert [run["key"] for run in home[1]["runs"]] == ["OTHER-2", "OTHER-1"]

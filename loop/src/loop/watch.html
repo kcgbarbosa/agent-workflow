@@ -291,6 +291,11 @@ dialog.start .actions { display: flex; justify-content: flex-end; }
 .list button:disabled { cursor: default; }
 .list button:disabled .what { color: var(--text-muted); }
 .list button:disabled:hover .what > div:first-child { text-decoration: none; }
+/* Archive spec sits under its home row, which is a button of its own. */
+.list .archive { display: grid; justify-items: start; gap: 6px; padding: 0 4px 12px; }
+.list .archive .btn { display: inline-flex; width: auto; min-height: 32px; padding: 0 14px; border: 0; }
+.list .archive .btn:disabled { color: var(--text-muted); cursor: default; }
+.list .archive a { color: var(--text-muted); overflow-wrap: anywhere; }
 
 /* --- Screenshot viewer --- */
 .viewer { position: fixed; inset: 0; z-index: 20; background: var(--ground); display: flex; flex-direction: column; }
@@ -376,7 +381,7 @@ const RUNS_SHOWN = 5;
 const ui = {
   project: null, epic: null, page: "", ticket: null, tab: null, agent: null, follow: true, version: null, drawn: null,
   projects: [], epics: [], view: null, usage: {}, feed: null, report: null, reportWrap: null, viewer: null,
-  forecast: null, forecastWrap: null, forecastOpen: false, home: [], homeOpen: new Set(), busy: null,
+  forecast: null, forecastWrap: null, forecastOpen: false, home: [], homeOpen: new Set(), busy: null, archive: {},
 };
 // How long a started run may take to write its first line, after its checks of the host.
 const START_WAIT_MS = 60000;
@@ -533,7 +538,7 @@ async function refreshHome() {
   let home;
   try { [home, ui.usage] = await Promise.all([getJson("/api/home"), getJson("/api/usage")]); } catch { return; }
   ui.home = home;
-  const drawn = JSON.stringify([home, ui.usage, ui.page, [...ui.homeOpen], ui.busy, Math.floor(Date.now() / AGE_MS)]);
+  const drawn = JSON.stringify([home, ui.usage, ui.page, [...ui.homeOpen], ui.busy, ui.archive, Math.floor(Date.now() / AGE_MS)]);
   if (drawn !== ui.drawn) { ui.drawn = drawn; renderHome(); }
 }
 
@@ -567,7 +572,8 @@ function projectPanel(p) {
     return h("li", {}, h("button", { onclick: () => go("", p.name, r.key) },
       h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, r.key), " ", r.summary),
         h("div", { class: "rowreason" }, facts.join(" · "))),
-      tile(STATUS[r.status] || [r.status, ""], true)));
+      tile(STATUS[r.status] || [r.status, ""], true)),
+      p.control && r.pr_url ? archiveControl(p.name, r.key) : "");
   });
   const toggle = () => { if (open) ui.homeOpen.delete(p.name); else ui.homeOpen.add(p.name); renderHome(); };
   return h("section", { class: "panel" },
@@ -711,6 +717,25 @@ function startRun(name, key) {
 function stopRun(key) {
   if (!confirm(`Stop the run of ${key}? Start goes on with the same tickets.`)) return;
   return busy("stop", () => post(`/api/stop/${key}`));
+}
+
+// --- Archive spec: once the Epic PR merges, a PR deletes the spec and the Epic links it at the merge commit ---
+function archiveControl(name, key) {
+  const answer = ui.archive[key];
+  return h("div", { class: "archive" },
+    h("button", { class: "btn", onclick: () => archiveSpec(name, key), disabled: answer === "busy" }, answer === "busy" ? "Archiving..." : "Archive spec"),
+    answer && answer !== "busy" ? h("div", { class: "rowreason" }, answer.text,
+      answer.url ? [" ", h("a", { href: answer.url, target: "_blank", rel: "noopener" }, answer.url)] : "") : "");
+}
+
+async function archiveSpec(name, key) {
+  ui.archive[key] = "busy";
+  renderHome();
+  try {
+    const data = await post(`/api/archive/${key}?project=${encodeURIComponent(name)}`);
+    ui.archive[key] = { text: data.message, url: data.url };
+  } catch (e) { ui.archive[key] = { text: e.message, url: "" }; }
+  renderHome();
 }
 
 // --- Overview: the figures ---

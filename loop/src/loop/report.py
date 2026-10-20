@@ -34,6 +34,7 @@ WINDOWS = {"five_hour": "5-hour", "seven_day": "Weekly"}
 KEY = re.compile(r"[A-Z][A-Z0-9]*-\d+")
 DECISIONS = "decisions.jsonl"
 LOOP_SUFFIX = "-loop"
+ARCHIVE = "archive"
 
 
 def read_lines(path: Path) -> list[dict[str, Any]]:
@@ -50,6 +51,34 @@ def read_lines(path: Path) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             lines.append(item)
     return lines
+
+
+def write_line(
+    path: Path,
+    epic: str,
+    ticket: str,
+    step: str,
+    result: str,
+    commit: str | None = None,
+    session: str | None = None,
+    detail: str = "",
+    **fields: Any,
+) -> dict[str, Any]:
+    """Appends one line to the log, and returns it. The run and the page's Archive spec button write it."""
+    line: dict[str, Any] = {
+        "time": datetime.now(UTC).isoformat(timespec="seconds"),
+        "epic": epic,
+        "ticket": ticket,
+        "step": step,
+        "result": result,
+        "commit": commit,
+        "session": session,
+        "detail": detail,
+        **fields,
+    }
+    with path.open("a") as file:
+        file.write(json.dumps(line) + "\n")
+    return line
 
 
 def projects(state_dir: Path) -> dict[str, Path]:
@@ -164,6 +193,8 @@ def _readings(line: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def split_runs(epic: str, lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     """The lines of each run of the Epic, the oldest first. Lines before the first start belong to no run."""
+    # An archive line comes after the Epic PR merges, so it is no part of a run's time.
+    lines = [line for line in lines if line.get("step") != ARCHIVE]
     starts = [i for i, line in enumerate(lines) if line.get("ticket") == epic and line.get("step") == "start"]
     ends = [*starts[1:], len(lines)]
     return [lines[start:end] for start, end in zip(starts, ends, strict=True)]

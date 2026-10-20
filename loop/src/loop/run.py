@@ -41,7 +41,7 @@ from .prompts import (
     USAGE_RESUME_PROMPT,
 )
 from .repo import git, out
-from .report import read_lines
+from .report import read_lines, write_line
 from .steps import UI_PASSED, next_step
 from .stream import (
     after_status,
@@ -1479,25 +1479,12 @@ class EpicRun:
         plan: dict[str, Any] | None = None,
         **fields: Any,
     ) -> None:
-        line: dict[str, Any] = {
-            "time": datetime.now(UTC).isoformat(timespec="seconds"),
-            "epic": self.epic_key,
-            "ticket": ticket,
-            "step": step,
-            "result": result,
-            "commit": commit,
-            "session": session,
-            "detail": detail,
-        }
-        if usage is not None:
-            line["usage"] = usage
-        if plan is not None:
-            line["plan"] = plan
-        if setup is not None:
-            line["setup"] = setup
-        line.update(fields)
-        with self._log_lock, self.log_path.open("a") as file:
-            file.write(json.dumps(line) + "\n")
+        given = {"usage": usage, "plan": plan, "setup": setup}
+        extra = {name: value for name, value in given.items() if value is not None}
+        with self._log_lock:
+            line = write_line(
+                self.log_path, self.epic_key, ticket, step, result, commit, session, detail, **extra, **fields
+            )
         print(f"{line['time']} {ticket} {step} {result} {detail}".rstrip(), flush=True)
 
 

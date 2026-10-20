@@ -18,7 +18,7 @@ The PRD owner shown on the PRD is `<PRD owner>`.
 The brief is not a ticket. It lives at `README.md`.
 The spec is the source of truth for the build, the tests and the tickets. A ticket names the spec by its repo path, as text with no link, and cites story IDs. It does not copy the spec. Only the Epic links the spec.
 
-When the Epic merges, a pull request deletes the spec. The owner then changes the Spec line of the Epic to link the spec at the Epic's merge commit, which git keeps. That line is the one hand edit a PRD takes, and no ticket changes.
+When the Epic merges, a pull request deletes the spec. The owner then changes the Spec line of the Epic to link the spec at the Epic's merge commit, which git keeps. That line is the one hand edit a PRD takes, and no ticket changes. With the loop, the Archive spec button on the `loop watch` page opens that pull request and changes the Spec line. The Logs section of `~/.claude/skills/setup-loop/loop.md` says how.
 
 ## The board
 

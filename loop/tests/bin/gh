@@ -2,7 +2,9 @@
 """A fake GitHub CLI for the loop tests. It records each call, and keeps each PR it creates.
 
 The PRs live in FAKE_CLAUDE_DIR/prs.json, so `gh pr list --head <branch>` finds the open PR of a branch, and
-`gh pr edit` and `gh pr ready` change it. After its change, a call reaches the kill point `gh:<command>`.
+`gh pr edit` and `gh pr ready` change it. A test merges a PR in the file: its `state` is `merged`, and its
+`merge_commit` names the commit. `--state all` lists a PR in any state, and `--json` with no `--jq` prints the
+PRs as GitHub does. After its change, a call reaches the kill point `gh:<command>`.
 """
 
 import json
@@ -29,8 +31,17 @@ def value(flag: str) -> str:
 
 if args[:2] == ["pr", "list"]:
     state = value("--state") if "--state" in args else "open"
-    for pr in prs:
-        if pr["head"] == value("--head") and pr["state"] == state:
+    found = [pr for pr in prs if pr["head"] == value("--head") and state in (pr["state"], "all")]
+    if "--json" in args and "--jq" not in args:
+        github = {
+            "url": lambda pr: pr["url"],
+            "state": lambda pr: pr["state"].upper(),
+            "mergeCommit": lambda pr: {"oid": pr["merge_commit"]} if pr.get("merge_commit") else None,
+        }
+        fields = value("--json").split(",")
+        print(json.dumps([{name: github[name](pr) for name in fields} for pr in found]))
+    else:
+        for pr in found:
             print(pr["url"])
 elif args[:2] == ["pr", "create"]:
     url = f"https://github.com/kcgbarbosa/demo/pull/{99 + len(prs)}"

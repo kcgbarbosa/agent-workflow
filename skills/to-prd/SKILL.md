@@ -64,7 +64,7 @@ Owner: <name>. Target: <sprint or date>.
 
 **Dependencies and rollout.** One or two lines. Write the rollout only for a feature that ships after go-live.
 
-**Spec.** A link to the spec file on the default branch, built from the git remote. When the spec is no longer on the default branch, link it at the Epic's merge commit: `<remote>/blob/<sha>/<path>`.
+**Spec.** A link to the spec file on the default branch, built from the git remote. When the spec is no longer on the default branch, link it at the Epic's merge commit: `<remote>/blob/<sha>/<path>`. With the loop, the Archive spec button on the `loop watch` page deletes the spec in a pull request and makes this change: see Logs in [loop.md](../setup-loop/loop.md).
 
 </prd-template>
 
