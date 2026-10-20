@@ -24,7 +24,7 @@ Write it in one file only.
 | The personas                                                 | `<Personas file path>`                     |
 
 The PRD is the description of the Jira Epic. It is not a file in this repo. `docs/agents/issue-tracker.md` gives how it is written.
-When the Epic merges, the owner moves the spec to Confluence. `docs/agents/issue-tracker.md` gives where it goes and how Jira links to it. The tests hold its acceptance criteria.
+When the Epic merges, a pull request deletes the spec. `docs/agents/issue-tracker.md` gives how the Epic links it after that. The tests hold its acceptance criteria.
 
 ## Keep documents accurate
 

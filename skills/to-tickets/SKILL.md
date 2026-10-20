@@ -80,7 +80,7 @@ Title: a plain outcome, for example "Answer a question on the Product page"
 
 **Technical checks.** Schema, routes, events, tests. For the agent. Name a stubbed test only for a state that the real stack cannot show.
 
-**Spec.** A link, and the sections used.
+**Spec.** The spec's repo path as text, not a link, and the sections used. The Epic holds the one link to the spec.
 
 **ADRs.** The files this work has to obey.
 
