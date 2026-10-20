@@ -152,7 +152,7 @@ def test_the_plan_meter_still_shows_for_a_running_run(world: World) -> None:
 
 # The fields the page reads, for each view.
 HOME = {"name", "runs", "control"}
-HOME_RUN = {"key", "summary", "updated", "running", "status", "progress", "stuck", "working"}
+HOME_RUN = {"key", "summary", "updated", "running", "status", "progress", "stuck", "working", "pr_url"}
 EPIC_VIEW = {
     "key", "summary", "branch", "status", "resumes", "progress", "queue", "state", "stop_reason", "pr_url",
     "started", "updated", "tickets", "stats", "plan", "events", "epic_files", "epic_agents",

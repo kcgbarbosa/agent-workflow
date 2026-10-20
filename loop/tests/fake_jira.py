@@ -38,6 +38,8 @@ class Issue:
     statuses: list[str] = field(default_factory=list)
     # The description: a paragraph for each text, and a bullet list for each run of "- " texts.
     body: list[str] = field(default_factory=list)
+    # The description as Jira keeps it, which a PUT of the description sets. It stands in for `body`.
+    description: dict[str, Any] | None = None
 
 
 class FakeJira:
@@ -74,7 +76,10 @@ class FakeJira:
             }
             for key in issue.blockers
         ]
-        description = {"type": "doc", "content": _content(issue.body or [f"Build {issue.summary}."])}
+        description = issue.description or {
+            "type": "doc",
+            "content": _content(issue.body or [f"Build {issue.summary}."]),
+        }
         return {
             "key": issue.key,
             "fields": {
@@ -227,6 +232,10 @@ class FakeJira:
                     if match and FLAGGED in body["fields"]:
                         fake.issues[match[1]].flagged = bool(body["fields"][FLAGGED])
                         reached(f"jira:PUT {match[1]} flag")
+                        return self._send(None, 204)
+                    if match and "description" in body["fields"]:
+                        fake.issues[match[1]].description = body["fields"]["description"]
+                        reached(f"jira:PUT {match[1]} description")
                         return self._send(None, 204)
                 self._send({"errorMessages": ["not found"]}, 404)
 

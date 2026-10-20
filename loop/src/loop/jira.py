@@ -108,6 +108,16 @@ class Jira:
         body = {"body": {"type": "doc", "version": 1, "content": paragraphs}}
         self._request("POST", f"/rest/api/3/issue/{key}/comment", body)
 
+    def replace_in_description(self, key: str, old: str, new: str) -> bool:
+        """Replaces the text in the description, in its text and its link targets. False when it has none."""
+        data = self._request("GET", f"/rest/api/3/issue/{key}?fields=description")
+        raw = json.dumps(data["fields"].get("description"))
+        if old not in raw:
+            return False
+        body = {"fields": {"description": json.loads(raw.replace(old, new))}}
+        self._request("PUT", f"/rest/api/3/issue/{key}", body)
+        return True
+
     def attach(self, key: str, files: list[Path]) -> None:
         for path in files:
             boundary = uuid.uuid4().hex
