@@ -1,26 +1,26 @@
 name: repo
 
+# Not on push to main: the pull request already ran this check, and each run bills minutes.
 on:
   pull_request:
-  push:
-    branches: [main]
+
+# A newer push to a PR cancels its older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: shellcheck install.sh .github/scripts/*.sh
-      - run: uv run --no-project --with pytest pytest tests
-
-  co-authors:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
+      # The whole history, so the co-authors step can list the pull request commits.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - run: shellcheck install.sh .github/scripts/*.sh
+      - run: uv run --no-project --with pytest pytest tests
+      # A step, not its own job: a 10-second job still bills a whole minute.
       # The body and SHAs go in through env, so a crafted body cannot inject shell code.
       - run: .github/scripts/check-co-authors.sh
         env:

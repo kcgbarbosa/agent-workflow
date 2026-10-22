@@ -5,6 +5,11 @@ on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
 
+# A newer edit or push to a PR cancels its older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   pr-text:
     runs-on: ubuntu-latest

@@ -1,11 +1,14 @@
 name: loop
 
+# Not on push to main: the pull request already ran this check, and each run bills minutes.
 on:
   pull_request:
     paths: ["loop/**", "agents/**", "skills/setup-loop/loop.md", ".github/workflows/loop.yml"]
-  push:
-    branches: [main]
-    paths: ["loop/**", "agents/**", "skills/setup-loop/loop.md", ".github/workflows/loop.yml"]
+
+# A newer push to a PR cancels its older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   check:
