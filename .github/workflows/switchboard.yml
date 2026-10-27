@@ -1,0 +1,24 @@
+name: switchboard
+
+# Not on push to main: the pull request already ran this check, and each run bills minutes.
+on:
+  pull_request:
+    paths: ["switchboard/**", ".github/workflows/switchboard.yml"]
+
+# A newer push to a PR cancels its older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: switchboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run ruff check . && uv run ruff format --check . && uv run mypy
+      - run: uv run pytest

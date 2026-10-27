@@ -6,6 +6,7 @@ Skills and global `AGENTS.md`. `~/.claude` links into a clone of this repo.
 skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
 agents/<name>.md a subagent tier on a cheaper model. The loop gives its agents the same files
 loop/            the loop command, which builds an Epic unattended. Its design is skills/setup-loop/loop.md
+switchboard/     a phone line to the Claude Code sessions on the T14, for the car. Its README is the setup
 config/          the shared Claude Code files settings.json, statusline.sh, keybindings.json and notify.sh. install.sh links them into ~/.claude
 docs/            project-skills.md, the registry of skills that live in project repos
 AGENTS.md        linked to ~/.claude/CLAUDE.md, the name Claude Code reads
