@@ -31,7 +31,8 @@ def command(model: str | None) -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="switchboard", description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8790)
+    # The Loop watch page has 8790, and the tailnet serves it on 8443, so the switchboard keeps clear of both.
+    parser.add_argument("--port", type=int, default=8796)
     parser.add_argument("--cwd", type=Path, default=Path.home() / "dev" / "agent-workflow")
     state = Path.home() / ".local" / "state" / "switchboard" / "session"
     parser.add_argument("--state", type=Path, default=state)
