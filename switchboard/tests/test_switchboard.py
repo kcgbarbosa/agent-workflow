@@ -80,3 +80,15 @@ def test_a_request_without_the_token_is_refused(url: str) -> None:
     with pytest.raises(urllib.error.HTTPError) as refused:
         post(url, ask("hi"), token="wrong")
     assert refused.value.code == 401
+
+
+def test_the_status_for_the_start_page_needs_the_token(url: str) -> None:
+    status = url.replace("/v1/chat/completions", "/api/status")
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        urllib.request.urlopen(status, timeout=5)
+    assert refused.value.code == 401
+    post(url, ask("hi"))
+    request = urllib.request.Request(status, headers={"Authorization": f"Bearer {TOKEN}"})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        body = json.load(response)
+    assert body["session"] is True and body["last_call"] and body["waiting"] == 0

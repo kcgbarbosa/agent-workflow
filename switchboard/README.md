@@ -18,6 +18,8 @@ iPhone (CarPlay) -> Twilio number -> ElevenLabs agent -> Tailscale Funnel :10000
 
 `switchboard.service` in the machines repo runs it on the T14 from `~/dev/agent-workflow/switchboard`, and its `80-switchboard` script puts it on Tailscale Funnel at `https://t14.tail4fca58.ts.net:10000`. The token is `SWITCHBOARD_TOKEN` in `~/.config/switchboard/env`, and the same value is the API key secret in ElevenLabs.
 
+The start page's Switchboard card reads `/api/status` with the same token: whether the session runs, when KC last talked, and how many replies wait. `/health` answers without the token and says nothing more.
+
 Run `uv run pytest` here. The tests use a stand-in `claude` in `tests/bin`.
 
 ## Set up the phone side

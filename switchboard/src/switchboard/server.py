@@ -52,9 +52,15 @@ def server(session: Session, token: str, host: str, port: int) -> ThreadingHTTPS
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            # A health check for the start page and for curl. It says nothing about the session.
+            # A health check for curl that says nothing about the session.
             if self.path == "/health":
                 self.reply(200, {"ok": True})
+            elif self.path == "/api/status":
+                # Funnel makes every path public, so the status needs the token like a call does.
+                if self.authorized():
+                    self.reply(200, session.status())
+                else:
+                    self.reply(401, {"error": "unauthorized"})
             else:
                 self.reply(404, {"error": "not found"})
 

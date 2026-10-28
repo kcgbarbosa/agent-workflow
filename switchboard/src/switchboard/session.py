@@ -37,6 +37,8 @@ class Session:
         self.listeners: dict[int, queue.Queue[str | None]] = {}
         # What the session said with nobody asking: a reply from another session, or the end of a long turn.
         self.pending: list[str] = []
+        # When KC last said something, for the start page.
+        self.last_call: float | None = None
 
     def start(self) -> None:
         command = list(self.command)
@@ -50,6 +52,11 @@ class Session:
 
     def alive(self) -> bool:
         return self.process is not None and self.process.poll() is None
+
+    def status(self) -> dict[str, Any]:
+        """What the start page shows: whether the session runs, when KC last talked, and what waits."""
+        with self.lock:
+            return {"session": self.alive(), "last_call": self.last_call, "waiting": len(self.pending)}
 
     def stop(self) -> None:
         if self.process:
@@ -110,6 +117,7 @@ class Session:
             if not self.alive():
                 self.start()
             ask = next(self.ids)
+            self.last_call = time.time()
             listener: queue.Queue[str | None] = queue.Queue()
             # A newer ask means KC moved on, so an older one that is still waiting stops listening.
             self.listeners = {ask: listener}
