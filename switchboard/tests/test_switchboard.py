@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from switchboard.server import server
-from switchboard.session import FILLER, Session
+from switchboard.session import FILLER, STILL, Session
 
 FAKE = Path(__file__).parent / "bin" / "claude"
 TOKEN = "t" * 32
@@ -92,3 +92,28 @@ def test_the_status_for_the_start_page_needs_the_token(url: str) -> None:
     with urllib.request.urlopen(request, timeout=5) as response:
         body = json.load(response)
     assert body["session"] is True and body["last_call"] and body["waiting"] == 0
+
+
+def test_a_retry_of_the_same_words_joins_the_ask_instead_of_starting_a_second_turn(
+    url: str, tmp_path: Path
+) -> None:
+    # ElevenLabs sends the same request again when the first is slow, sometimes two at once.
+    answers: list[str] = []
+    threads = [
+        threading.Thread(target=lambda: answers.append(said(post(url, ask("slow status"))))) for _ in range(3)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert (tmp_path / "received.log").read_text().splitlines() == ["[voice:1] slow status"]
+    assert all(answer.endswith("echo slow status") for answer in answers)
+
+
+def test_a_long_turn_keeps_saying_it_is_still_working(tmp_path: Path) -> None:
+    session = Session([sys.executable, str(FAKE)], tmp_path, tmp_path / "session")
+    try:
+        said_ = list(session.ask("slow one", first=0.2, every=0.6))
+        assert said_[0] == FILLER and STILL in said_ and said_[-1] == "**echo** slow one"
+    finally:
+        session.stop()

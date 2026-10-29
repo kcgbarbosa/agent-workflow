@@ -101,15 +101,19 @@ def server(session: Session, token: str, host: str, port: int) -> ThreadingHTTPS
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
-            self.wfile.write(chunk(answer_id, {"role": "assistant", "content": ""}))
-            for piece in pieces:
-                if piece:
-                    # A space between pieces, so two text blocks do not run together when spoken.
-                    self.wfile.write(chunk(answer_id, {"content": piece + " "}))
-                    self.wfile.flush()
-            self.wfile.write(chunk(answer_id, {}, "stop"))
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
+            try:
+                self.wfile.write(chunk(answer_id, {"role": "assistant", "content": ""}))
+                for piece in pieces:
+                    if piece:
+                        # A space between pieces, so two text blocks do not run together when spoken.
+                        self.wfile.write(chunk(answer_id, {"content": piece + " "}))
+                        self.wfile.flush()
+                self.wfile.write(chunk(answer_id, {}, "stop"))
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            except BrokenPipeError, ConnectionResetError:
+                # ElevenLabs hung up on this request, usually to retry it. The retry joins the same ask.
+                pass
 
         def reply(self, status: int, payload: dict[str, Any]) -> None:
             data = json.dumps(payload).encode()
