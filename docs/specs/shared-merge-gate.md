@@ -111,6 +111,7 @@ US-59. As KC, I want the gate to run on a self-hosted runner on the T14 when a r
 - Docs-only is decided by the changed paths against the base: only `*.md` and `docs/`. Then `check` runs the repo's format and docs checks only, and `review` and `judge` are skipped and report success.
 - The `judge` job runs only when the `check` job uploaded a screenshot diff artifact. A repo produces that artifact from its own browser tests, with Playwright's screenshot comparison, at a tolerance set in the repo. The gate reads the diff folder convention and nothing else about the tests.
 - Auto-merge is GitHub's own. The loop enables it on each pull request it opens. A person enables it on their own. A `hold` label is a required check that fails while the label is on.
+- Auto-merge is on in every repo that adopts the gate, with no required approvals. A merge to main is not a release. A repo that serves users ships to production by a tag that KC pushes, and one tag can carry many merged pull requests. The Pitchridge spec sets up its staging and its tags.
 - Branch protection is written by `setup-repo` through the GitHub API: required checks `gate / check`, `gate / review`, `gate / judge`, and `hold`; no required approvals; squash only; auto-merge on; delete branch on merge; no force push.
 
 ### The review
@@ -189,5 +190,4 @@ The gate, the review, the judge, auto-merge, and `setup-repo` have no tests of t
 
 - The current loop builds this spec, in agent-workflow, where the check is `uv run pytest`. Its last ticket is the rewrite. The new loop builds the Pitchridge spec and the tooling spec.
 - Human steps: the repo secret for the review token, and the first `setup-repo` run that writes branch protection, which needs an admin token.
-- Open decision for the grill: required approvals at zero.
 - Numbers behind this spec, from the Pitchridge logs of October 14 to 28: the loop's code reviews cost a median of $1.22 at list price; the UI review on PITCH-176 reported every test failing and the ticket landed; the merge gate ran about 20 minutes per ticket; 152 of 320 CI minutes were the repeat run on main.
