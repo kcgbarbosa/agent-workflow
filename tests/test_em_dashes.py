@@ -1,4 +1,4 @@
-"""No tracked text holds an em dash. AGENTS.md bans them."""
+"""No tracked text holds an em dash. The global instructions, config/CLAUDE.md, ban them."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def em_dash_lines(path: Path, repo: Path) -> list[int]:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         return []
-    if path == repo / "AGENTS.md":
+    if path == repo / "config" / "CLAUDE.md":
         text = text.replace(RULE, "", 1)
     return [number for number, line in enumerate(text.splitlines(), 1) if EM_DASH in line]
 
@@ -32,6 +32,6 @@ def test_no_em_dashes(repo: Path, tracked: list[Path]) -> None:
     assert not failures, "Em dashes, rewrite with commas, periods, or a new sentence:\n" + "\n".join(failures)
 
 
-def test_rule_is_still_in_agents_md(repo: Path) -> None:
-    # If the rule is reworded, the allowance above no longer matches it and the check fails on AGENTS.md.
-    assert RULE in (repo / "AGENTS.md").read_text(encoding="utf-8")
+def test_rule_is_still_in_the_global_instructions(repo: Path) -> None:
+    # If the rule is reworded, the allowance above no longer matches it and the check fails on config/CLAUDE.md.
+    assert RULE in (repo / "config" / "CLAUDE.md").read_text(encoding="utf-8")

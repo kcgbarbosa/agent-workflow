@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Links each skill and subagent tier in this repo, the shared files in config/, and AGENTS.md as CLAUDE.md, into ~/.claude, and installs the loop command.
+# Links each skill and subagent tier in this repo, the shared files in config/, and config/CLAUDE.md, into ~/.claude, and installs the loop command.
 # Safe to run again.
 set -euo pipefail
 
@@ -65,7 +65,7 @@ done
 if [ -e "$dest/CLAUDE.md" ] && [ ! -L "$dest/CLAUDE.md" ]; then
   echo "agent-workflow: skipped CLAUDE.md, $dest/CLAUDE.md is a real file. Remove it, then run this again" >&2
 else
-  ln -sfn "$repo/AGENTS.md" "$dest/CLAUDE.md"
+  ln -sfn "$repo/config/CLAUDE.md" "$dest/CLAUDE.md"
 fi
 
 # User-scope MCP servers live in ~/.claude.json, which no repo can track. Each one signs in with OAuth on first use.
