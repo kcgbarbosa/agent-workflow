@@ -3,9 +3,6 @@
     "defaultMode": "auto"
   },
   "model": "opus",
-  "worktree": {
-    "baseRef": "head"
-  },
   "hooks": {
     "Notification": [
       {
@@ -19,11 +16,18 @@
       }
     ]
   },
+  "worktree": {
+    "baseRef": "head"
+  },
   "enableArtifact": true,
   "workflowKeywordTriggerEnabled": false,
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh"
+  },
+  "enabledPlugins": {
+    "claude-security@claude-plugins-official": true,
+    "sentry@claude-plugins-official": true
   },
   "outputStyle": "Concise",
   "effortLevel": "high",
