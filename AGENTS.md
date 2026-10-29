@@ -24,3 +24,8 @@ No acceptance suite. See `docs/agents/testing.md`.
 ### Workflow
 
 grill-with-docs → to-spec → to-tickets → implement, or the loop. See `docs/agents/workflow.md`.
+
+### Loop
+
+The loop builds an Epic of this repo. See `docs/agents/loop.md`.
+When a run fails, a wrong value is fixed in `loop.toml` or `docs/agents/loop.md`. Anything else is a loop bug, fixed in `loop/` and `skills/setup-loop/loop.md` in one pull request.
