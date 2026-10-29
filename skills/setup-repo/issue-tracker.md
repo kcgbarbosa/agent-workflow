@@ -4,21 +4,28 @@ Tickets live in Jira, project `<KEY>`. They are not files in this repo.
 
 ## Documents
 
-| Document | Where it lives                                 | Written by                     |
-| -------- | ---------------------------------------------- | ------------------------------ |
-| PRD      | The description of the Jira Epic               | `/to-prd`                      |
-| Spec     | `docs/product/specs/<feature>.md` in this repo | `/to-spec`                     |
-| Ticket   | A Jira Task under the Epic                     | `/to-tickets`                  |
-| Metrics  | `<Metrics file path>` in this repo             | The owner                      |
-| Personas | `<Personas file path>` in this repo            | The owner, drafted by an agent |
+| Document | Where it lives                            | Written by    |
+| -------- | ----------------------------------------- | ------------- |
+| Epic     | A Jira Epic, one for each feature         | `/to-spec`    |
+| Spec     | `<spec folder>/<feature>.md` in this repo | `/to-spec`    |
+| Ticket   | A Jira Task under the Epic                | `/to-tickets` |
 
-The Epic is the PRD. `/to-prd` writes the whole description from the spec, the metrics file, the personas file and the README Users table. A re-run overwrites it. Nobody edits it by hand. A change to the PRD goes into the spec or the metrics file, and `/to-prd` runs again.
-The PRD owner shown on the PRD is `<PRD owner>`.
+`/to-spec` creates the Epic when the spec names none. The Epic's description is one line, `Spec: <link>`, which links the spec on the default branch.
 
 The brief is not a ticket. It lives at `README.md`.
 The spec is the source of truth for the build, the tests and the tickets. A ticket names the spec by its repo path, as text with no link, and cites story IDs. It does not copy the spec. Only the Epic links the spec.
 
-When the Epic merges, a pull request deletes the spec. The owner then changes the Spec line of the Epic to link the spec at the Epic's merge commit, which git keeps. That line is the one hand edit a PRD takes, and no ticket changes. With the loop, the Archive spec button on the `loop watch` page opens that pull request and changes the Spec line. The Logs section of `~/.claude/skills/setup-loop/loop.md` says how.
+When the Epic merges, a pull request deletes the spec. The owner then changes the Spec line of the Epic to link the spec at the Epic's merge commit, which git keeps. That line is the one hand edit the Epic takes, and no ticket changes. With the loop, the Archive spec button on the `loop watch` page opens that pull request and changes the Spec line. The Logs section of `~/.claude/skills/setup-loop/loop.md` says how.
+
+## The PRD
+
+The Epic is the PRD. `/to-prd` replaces the description that `/to-spec` wrote with the whole PRD, from the spec, the metrics file, the personas file and the README Users table. The PRD ends with the Spec line. A re-run overwrites it. Nobody edits it by hand. A change to the PRD goes into the spec or the metrics file, and `/to-prd` runs again.
+The PRD owner shown on the PRD is `<PRD owner>`.
+
+| File     | Path                                | Written by                     |
+| -------- | ----------------------------------- | ------------------------------ |
+| Metrics  | `<Metrics file path>` in this repo  | The owner                      |
+| Personas | `<Personas file path>` in this repo | The owner, drafted by an agent |
 
 ## The board
 
@@ -40,7 +47,7 @@ The owner sets priority and the other hand-set fields. A skill that creates an i
 - **Stories.** The spec's story group and the story IDs this ticket delivers.
 - **What the user sees.** Plain checks, one line each. Acceptance uses these.
 - **Technical checks.** Schema, routes, events, tests. For the agent.
-- **Spec.** A link, and the sections used.
+- **Spec.** The spec's repo path as text, and the sections used.
 - **ADRs.** The files this work has to obey.
 - **Not in this ticket.** What a reader might assume is included and is not.
 
@@ -59,7 +66,7 @@ Tickets carry no readiness labels. Apply none.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a Jira issue with the fields and the body above. `/to-prd` replaces the description of the Epic. `/to-tickets` creates the Tasks under it.
+Create a Jira issue with the fields and the body above. `/to-spec` creates the Epic, and `/to-tickets` creates the Tasks under it.
 
 ## When a skill says "fetch the relevant ticket"
 

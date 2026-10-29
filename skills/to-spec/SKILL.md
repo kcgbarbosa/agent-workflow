@@ -1,14 +1,14 @@
 ---
 name: to-spec
-description: "Turn the current conversation into a spec file in the project repo: no interview, just synthesis of what you've already discussed."
+description: "Turn the current conversation into a spec file in the project repo, and create the feature's Jira Epic: no interview, just synthesis of what you've already discussed."
 disable-model-invocation: true
 ---
 
 This skill takes the current conversation context and codebase understanding and writes a **spec**: the agent-facing requirements of one feature. The spec is the source of truth for the build, the tests and the tickets. Do NOT interview the user; just synthesize what you already know.
 
-The spec is a file in the project repo. Read `docs/agents/domain.md` for its folder; the default is `docs/product/specs/<feature>.md`. Read `docs/agents/issue-tracker.md` for the Epic, and `docs/agents/testing.md` for the acceptance suite. If one of these files is missing, tell the user to run `/setup-repo`.
+The spec is a file in the project repo. Read `docs/agents/domain.md` for its folder; the default is `docs/product/specs/<feature>.md`. Read `docs/agents/issue-tracker.md` for the Jira project and the Epic, and `docs/agents/testing.md` for the acceptance suite. If one of these files is missing, tell the user to run `/setup-repo`.
 
-The spec is not the PRD. `/to-prd` writes the PRD into the Epic description, and `/to-tickets` writes the tickets. This skill publishes nothing to the issue tracker.
+This skill creates the Epic and writes the Spec line of its description. It publishes nothing else to the issue tracker: `/to-tickets` writes the tickets.
 
 ## Process
 
@@ -18,9 +18,11 @@ The spec is not the PRD. `/to-prd` writes the PRD into the Epic description, and
 
 Check with the user that these seams match their expectations.
 
-3. Write the spec to its file using the template below. When the file exists, update it in place. Take the Epic link from the user or the conversation; when there is none, write `Epic: none yet` and say so in your reply.
+3. Write the spec to its file using the template below. When the file exists, update it in place.
 
-4. Tell the user the path of the file. The next steps are `/to-prd`, then `/to-tickets`.
+4. Find the Epic: from the user, the conversation, or the spec's Epic line. When there is none, create a Jira Epic in the project of `docs/agents/issue-tracker.md`, through the Atlassian connector. Its title is the feature name, and its description is one line, `Spec: <link>`, which links the spec file on the default branch, built from the git remote. When the Epic exists and its description links no spec, add that line. Write the Epic link into the spec's Epic line.
+
+5. Tell the user the path of the file and the Epic link. The next step is `/to-tickets`. When `docs/agents/issue-tracker.md` says "The Epic is the PRD.", `/to-prd` comes first.
 
 <spec-template>
 

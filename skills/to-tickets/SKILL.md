@@ -14,7 +14,7 @@ The tickets are Jira Tasks under the feature's Epic. Read `docs/agents/issue-tra
 
 ### 1. Gather context
 
-Work from the spec, the file `/to-spec` wrote. If the user passes a spec path or an Epic key, use it. Otherwise find the spec in the conversation. Read the whole spec, and read the Epic and its comments through the Atlassian connector. The Epic holds the PRD, so do not edit it.
+Work from the spec, the file `/to-spec` wrote. If the user passes a spec path or an Epic key, use it. Otherwise find the spec in the conversation. Read the whole spec. The spec's Epic line names the Epic, which `/to-spec` created. When it names none, tell the user to run `/to-spec` again, which creates it. Read the Epic and its comments through the Atlassian connector.
 
 ### 2. Explore the codebase (optional)
 
