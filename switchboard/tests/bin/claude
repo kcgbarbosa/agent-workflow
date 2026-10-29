@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """A stand-in for `claude -p` in stream-json mode. It echoes each message back as the answer.
 
-A message with "slow" waits two seconds before it answers. A message with "inbound" first plays a turn that a
+A message with "slow" waits two seconds before it answers. Each message it reads goes on a line of
+received.log in the folder it runs in, so a test can count them. A message with "inbound" first plays a turn that a
 message from another session woke, the way the real session does when a reply arrives while it is idle.
 """
 
@@ -23,6 +24,8 @@ def turn(user: str, answer: str) -> None:
 emit({"type": "system", "subtype": "init", "session_id": "fake-session"})
 for line in sys.stdin:
     content = json.loads(line)["message"]["content"]
+    with open("received.log", "a") as log:
+        log.write(content + "\n")
     if "inbound" in content:
         turn("Another Claude session sent a message: done", "PITCH-16 says the tests pass.")
     if "slow" in content:
