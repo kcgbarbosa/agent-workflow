@@ -34,7 +34,7 @@ US-10. As KC, I want a model that did not write the code to review each pull req
 US-11. As KC, I want the review to post its findings as a pull request review, with each finding at its line, so that the finding is where the agent and I read code.
 US-12. As KC, I want a review with a blocking finding to fail its check, so that auto-merge waits until the agent resolves it.
 US-13. As KC, I want the review to skip paths I name, such as docs and lockfiles, so that a dependency bump or a doc fix costs no model run.
-US-14. As KC, I want the review to run on the model and effort that `loop.toml` names, with a cheap default, so that one review costs about a dollar and not a window.
+US-14. As KC, I want the review to run on the model and effort that `loop.toml` names, with a strong default, so that the second opinion is never weaker than the model that wrote the code.
 US-15. As KC, I want the review to bill the account I name in the repo's secrets, so that it can run on API billing apart from my own windows.
 US-16. As KC, I want the review to read the repo's `AGENTS.md`, the ticket, and the spec the pull request names, so that it checks the work against what was asked and the repo's standards, not against taste.
 US-17. As KC, I want a second review on a later push to look only at what changed since the last review, so that a fix does not pay for a full review again.
@@ -48,7 +48,7 @@ US-21. As KC, I want the blocking list to be a short list of words in `loop.toml
 US-22. As KC, I want a blocking verdict to fail the judge check and a minor verdict to become a checklist comment on the pull request, so that small things never stop a merge and never get lost.
 US-23. As KC, I want the judge to have no tools and one turn per step, so that it cannot loop, fix, or spend more than cents.
 US-24. As KC, I want a pull request that changed no screenshot to skip the judge, so that a backend change costs no judge run.
-US-25. As KC, I want the new screenshots of a merged pull request to become the baselines, so that the next pull request compares with what main shows.
+US-25. As KC, I want a pull request that changes a screen to commit its new screenshots as the baselines, so that I see the change in the diff and the next pull request compares with what main shows.
 
 ### Auto-merge (Must)
 
@@ -104,6 +104,7 @@ US-59. As KC, I want the gate to run on a self-hosted runner on the T14 when a r
 ### The gate
 
 - One reusable workflow named `gate` in agent-workflow, called with `workflow_call`. agent-workflow is public, so any repo of the account can call it.
+- The gate runs on GitHub-hosted runners. A private repo bills its own minutes.
 - Inputs: the check command, default `make check`; the review skip paths; the review model and effort; a flag for docs-only detection. Secrets: the token the review and the judge bill.
 - Jobs, in order: `check`, `review`, `judge`. Each is a job of its own so each is a required status of its own. `review` and `judge` run after `check` passes, so a broken build never pays for a model.
 - The `check` job installs the toolchain from the repo's `mise` file when one exists, then runs the check command. The repo's check command starts whatever stack it needs. Docker is on every runner. No service containers in the gate, so one workflow serves a repo with Postgres and a repo with nothing.
@@ -117,14 +118,14 @@ US-59. As KC, I want the gate to run on a self-hosted runner on the T14 when a r
 - A composite action in agent-workflow. It runs Claude Code in the runner with the repo's `code-review` skill, reads the pull request, the ticket text the loop attached, the spec the body names, and `AGENTS.md`.
 - Output is one JSON list of findings, each with a path, a line, a severity of blocking or minor, and one sentence. The action posts them as one pull request review, requests changes on any blocking finding, and fails the job on blocking.
 - A later push runs the review on the diff since the last reviewed commit only, with the earlier findings as context.
-- Default model Sonnet 5.5 at medium effort. `loop.toml [review]` overrides it. The token comes from the repo secret the action names, so a repo can bill the API.
+- Default model Opus 5.5 at high effort. `loop.toml [review]` overrides it. The token comes from the repo secret the action names, so a repo can bill the API.
 
 ### The judge
 
 - A composite action. Input is the diff artifact: for each changed step, the baseline, the new image, the diff image, and the step's ticket line, which the repo's test writes beside the screenshot.
 - One model call per changed step, no tools, a fixed JSON answer: verdict, sentence. The prompt holds the blocking list from `loop.toml [ui] blocking` and says that anything not on the list is minor or fine.
 - Blocking fails the job and comments the step, the sentence, and the two images. Minor collects into one checklist comment. Fine says nothing.
-- On merge, the repo's new screenshots replace the baselines in a follow-up commit by the gate, or the repo commits baselines in the pull request. The repo chooses in its `loop.toml`.
+- The pull request commits its new screenshots as the baselines. The gate never writes to main.
 
 ### The loop
 
@@ -188,5 +189,5 @@ The gate, the review, the judge, auto-merge, and `setup-repo` have no tests of t
 
 - The current loop builds this spec, in agent-workflow, where the check is `uv run pytest`. Its last ticket is the rewrite. The new loop builds the Pitchridge spec and the tooling spec.
 - Human steps: the repo secret for the review token, and the first `setup-repo` run that writes branch protection, which needs an admin token.
-- Open decisions for the grill: hosted runners for every repo at first, or the T14 as a self-hosted runner from day one; the review's default model and effort; whether baselines live in the pull request or in a follow-up commit; required approvals at zero.
+- Open decision for the grill: required approvals at zero.
 - Numbers behind this spec, from the Pitchridge logs of October 14 to 28: the loop's code reviews cost a median of $1.22 at list price; the UI review on PITCH-176 reported every test failing and the ticket landed; the merge gate ran about 20 minutes per ticket; 152 of 320 CI minutes were the repeat run on main.
