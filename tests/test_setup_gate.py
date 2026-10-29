@@ -72,10 +72,11 @@ def test_write_puts_a_repo_on_the_shared_gate(python_repo: Path, env: dict[str, 
 
     caller = (python_repo / ".github" / "workflows" / "pull-request.yml").read_text()
     assert SHARED_GATE in caller
-    assert len(caller.splitlines()) <= 12
+    assert "CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" in caller
+    assert len(caller.splitlines()) <= 18
     assert "hold" in (python_repo / ".github" / "workflows" / "hold.yml").read_text()
     assert (python_repo / "mise.toml").read_text() == '[tools]\nnode = "22.4.0"\nuv = "0.9.1"\n'
-    assert "# [review]" in (python_repo / "loop.toml").read_text()
+    assert "[review]\nenabled = true\n" in (python_repo / "loop.toml").read_text()
 
 
 def test_write_keeps_a_mise_file_and_a_loop_toml(python_repo: Path, env: dict[str, str]) -> None:
@@ -87,7 +88,15 @@ def test_write_keeps_a_mise_file_and_a_loop_toml(python_repo: Path, env: dict[st
     assert not (python_repo / "mise.toml").exists()
     loop_toml = (python_repo / "loop.toml").read_text()
     assert loop_toml.startswith('name = "app"\n')
-    assert "# [review]" in loop_toml
+    assert "[review]\nenabled = true\n" in loop_toml
+
+
+def test_write_keeps_the_review_answer_in_loop_toml(python_repo: Path, env: dict[str, str]) -> None:
+    (python_repo / "loop.toml").write_text('name = "app"\n\n[review]\nenabled = false\n')
+
+    gate(python_repo, env, "write")
+
+    assert (python_repo / "loop.toml").read_text() == 'name = "app"\n\n[review]\nenabled = false\n'
 
 
 def test_a_second_write_changes_nothing(python_repo: Path, env: dict[str, str]) -> None:
@@ -133,6 +142,11 @@ def test_protect_requires_the_gate_and_allows_squash_only(python_repo: Path, env
     ]  # fmt: skip
     put = log.split("gh api -X PUT repos/{owner}/{repo}/branches/main/protection --input -\n")[1]
     protection = json.loads(put)
-    assert [check["context"] for check in protection["required_status_checks"]["checks"]] == ["gate / check", "hold"]
+    assert [check["context"] for check in protection["required_status_checks"]["checks"]] == [
+        "gate / check",
+        "gate / review",
+        "gate / judge",
+        "hold",
+    ]
     assert protection["required_pull_request_reviews"]["required_approving_review_count"] == 0
     assert protection["allow_force_pushes"] is False

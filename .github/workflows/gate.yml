@@ -1,10 +1,14 @@
 name: gate
 
 # The shared merge gate. A repo calls it from the pull-request workflow that setup-repo writes, so every repo runs the same checks.
-# The repo's own `make check` decides what green means.
+# The repo's own `make check` decides what green means. The review and the judge run after it, so a broken build never pays for a model.
 on:
   workflow_call:
     inputs:
+      runner:
+        description: The runner label of every job.
+        type: string
+        default: ubuntu-latest
       check:
         description: The command that runs everything the repo needs green.
         type: string
@@ -17,12 +21,31 @@ on:
         description: Run the docs command when the pull request changes only `*.md` files and `docs/`.
         type: boolean
         default: true
+      review-model:
+        description: The review's model. loop.toml [review] overrides it.
+        type: string
+        default: claude-opus-5-5
+      review-effort:
+        description: The review's effort. loop.toml [review] overrides it.
+        type: string
+        default: high
+      review-skip:
+        description: Path globs the review skips, split on whitespace. loop.toml [review] `skip` overrides them.
+        type: string
+        default: "*.md docs/* *.lock package-lock.json pnpm-lock.yaml yarn.lock"
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: The Claude Code token the review and the judge bill.
+        required: false
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
+    outputs:
+      docs-only: ${{ steps.paths.outputs.docs-only }}
+      screenshots: ${{ steps.screenshots.outputs.screenshots }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -44,3 +67,66 @@ jobs:
       - run: bash -c "$COMMAND"
         env:
           COMMAND: ${{ steps.paths.outputs.docs-only == 'true' && inputs.docs-check || inputs.check }}
+      # actions/judge/action.yml gives the folder that the repo's browser tests write.
+      - id: screenshots
+        run: |
+          if compgen -G 'screenshot-diff/*/new.png' > /dev/null; then
+            echo "screenshots=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.screenshots.outputs.screenshots == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: screenshot-diff
+          path: screenshot-diff/
+
+  # A docs-only pull request skips the review, and a skipped job reports success.
+  review:
+    needs: check
+    if: needs.check.outputs.docs-only != 'true'
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      # The gate's own commit, so the actions match the workflow that calls them.
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .gate
+      - uses: ./.gate/actions/review
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          model: ${{ inputs.review-model }}
+          effort: ${{ inputs.review-effort }}
+          skip: ${{ inputs.review-skip }}
+
+  # Runs only when the check uploaded a screenshot diff, and a skipped job reports success.
+  judge:
+    needs: check
+    if: needs.check.outputs.screenshots == 'true'
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # The base, for its loop.toml, so a pull request cannot change what blocks it.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: screenshot-diff
+          path: screenshot-diff
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .gate
+      - uses: ./.gate/actions/judge
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

@@ -190,6 +190,16 @@ def test_a_config_mistake_refuses_the_file(tmp_path: Path, edit: Callable[[str],
         config.load(tmp_path)
 
 
+def test_the_gate_settings_load_and_are_type_checked(tmp_path: Path) -> None:
+    review = '\n[review]\nenabled = false\nmodel = "claude-opus-5-5"\neffort = "high"\nskip = ["*.md"]\n'
+    write_config(tmp_path, extra=review, ui_extra='blocking = ["text cut off"]\n')
+    config.load(tmp_path)
+
+    write_config(tmp_path, extra='\n[review]\nenabled = "no"\n')
+    with pytest.raises(config.ConfigError, match="review.enabled has the wrong type"):
+        config.load(tmp_path)
+
+
 def test_a_missing_config_names_the_skill_that_writes_it(tmp_path: Path) -> None:
     with pytest.raises(config.ConfigError, match="setup-loop"):
         config.load(tmp_path)

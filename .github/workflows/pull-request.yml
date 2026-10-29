@@ -9,3 +9,9 @@ concurrency:
 jobs:
   gate:
     uses: ./.github/workflows/gate.yml
+    # The review and the judge comment on the pull request, and bill the Claude plan of the token.
+    permissions:
+      contents: read
+      pull-requests: write
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

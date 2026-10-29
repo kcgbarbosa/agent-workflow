@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # setup-repo's gate step. Run it at the root of the repo that goes on the shared gate.
-#   gate.sh write    writes the caller and hold workflows, a mise file when there is none, and the loop.toml placeholders.
+#   gate.sh write    writes the caller and hold workflows, a mise file when there is none, and the gate's loop.toml settings.
 #   gate.sh protect  sets squash-only auto-merge, the hold label, and the branch protection through gh api. It needs an admin token.
 # A second run of either step changes nothing.
 set -euo pipefail
@@ -41,7 +41,7 @@ write() {
   fi
   cp "$templates/hold.yml" .github/workflows/hold.yml
   has_mise_file || write_mise_file
-  if ! grep -qs '^# \[review\]' loop.toml; then
+  if ! grep -qsE '^(# )?\[review\]' loop.toml; then
     if [ -s loop.toml ]; then echo >> loop.toml; fi
     cat "$templates/loop.toml" >> loop.toml
   fi
@@ -58,7 +58,7 @@ protect() {
   # No approvals, but a pull request is required, so nothing reaches the default branch another way.
   gh api -X PUT "repos/{owner}/{repo}/branches/$branch/protection" --input - > /dev/null <<'JSON'
 {
-  "required_status_checks": {"strict": false, "checks": [{"context": "gate / check"}, {"context": "hold"}]},
+  "required_status_checks": {"strict": false, "checks": [{"context": "gate / check"}, {"context": "gate / review"}, {"context": "gate / judge"}, {"context": "hold"}]},
   "enforce_admins": true,
   "required_pull_request_reviews": {"required_approving_review_count": 0},
   "restrictions": null,

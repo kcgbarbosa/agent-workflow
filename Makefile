@@ -3,12 +3,12 @@
 
 check: root loop switchboard shellcheck
 
-# The root tests check the docs and the skills. The loop docs test checks loop.md against the loop.toml keys.
+# The root tests check the docs, the skills, and the gate scripts, which run on the runner's Python 3.12. The loop docs test checks loop.md against the loop.toml keys.
 check-docs: root
 	cd loop && uv run pytest tests/test_docs.py
 
 root:
-	uv run --no-project --with pytest pytest tests
+	uv run --no-project --python 3.12 --with pytest pytest tests
 
 # `uv lock --check` fails on a stale lock, which `uv run` would rewrite.
 loop switchboard:
