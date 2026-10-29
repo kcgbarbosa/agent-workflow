@@ -1,6 +1,6 @@
 # agent-workflow
 
-Skills and global `AGENTS.md`. `~/.claude` links into a clone of this repo.
+Skills, the loop, and KC's global instructions. `~/.claude` links into a clone of this repo.
 
 ```
 skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
@@ -9,7 +9,8 @@ loop/            the loop command, which builds an Epic unattended. Its design i
 switchboard/     a phone line to the Claude Code sessions on the T14, for the car. Its README is the setup
 config/          the shared Claude Code files settings.json, statusline.sh, keybindings.json and notify.sh. install.sh links them into ~/.claude
 docs/            project-skills.md, the registry of skills that live in project repos
-AGENTS.md        linked to ~/.claude/CLAUDE.md, the name Claude Code reads
+config/CLAUDE.md the global instructions, linked to ~/.claude/CLAUDE.md, the name Claude Code reads
+AGENTS.md        this repo's own instructions
 install.sh       makes the links and installs the loop command. Safe to run again
 tests/           the repo-level checks that .github/workflows/repo.yml runs. Run them with uv run --no-project --with pytest pytest tests
 licenses/        upstream licenses. Keep
@@ -23,7 +24,7 @@ For the four files from `config/`, a real file at the target is moved to `<name>
 
 Clone to `~/dev/agent-workflow`, run `./install.sh`. On a machine that `chezmoi` manages, the order is: pull, run `./install.sh`, then `chezmoi apply`.
 
-- Change a skill or `AGENTS.md`: edit here, commit, push. Other computers `git pull`; the links make it live.
+- Change a skill or `config/CLAUDE.md`: edit here, commit, push. Other computers `git pull`; the links make it live.
 - Add or remove a skill or a tier: add or remove its folder or file, run `./install.sh` again.
 - Linux needs `notify-send` (package `libnotify-bin`) for notifications. Without it, the hook does nothing.
 - `config/settings.json` is public, and `~/.claude/settings.json` is a link to it. Never put a token in it. Claude Code can write to it through the link, for example when you choose "always allow", so check `git diff config/` before you commit.

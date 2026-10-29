@@ -83,7 +83,7 @@ def test_links_every_skill_tier_and_agents_md(run, home: Path, repo: Path, tmp_p
         link = claude / "agents" / tier.name
         assert link.is_symlink() and link.resolve() == tier.resolve(), tier.name
     assert (claude / "CLAUDE.md").is_symlink()
-    assert (claude / "CLAUDE.md").resolve() == (repo / "AGENTS.md").resolve()
+    assert (claude / "CLAUDE.md").resolve() == (repo / "config" / "CLAUDE.md").resolve()
     assert f"tool install --quiet --editable {repo}/loop" in (tmp_path / "uv.log").read_text()
 
 

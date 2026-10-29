@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Fails when a pull request names a ticket key. This repo has no tickets, and a merged pull request that names
-# a key moves that ticket, and the Epic around it, to Done through Jira Automation.
+# Fails when a pull request names a ticket key of another project. This repo's own project is AW, whose keys may appear.
+# A merged pull request that names a key of a project in .github/ticket-projects would move that ticket, and the
+# Epic around it, to Done through that project's Jira Automation.
 # Reads the title and body on stdin, and takes the commit range as its argument. The projects are listed in
 # .github/ticket-projects, one per line.
 set -uo pipefail
