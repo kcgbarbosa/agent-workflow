@@ -38,6 +38,8 @@ US-14. As KC, I want the review to run on the model and effort that `loop.toml` 
 US-15. As KC, I want the review to bill the account I name in the repo's secrets, so that it can run on API billing apart from my own windows.
 US-16. As KC, I want the review to read the repo's `AGENTS.md`, the ticket, and the spec the pull request names, so that it checks the work against what was asked and the repo's standards, not against taste.
 US-17. As KC, I want a second review on a later push to look only at what changed since the last review, so that a fix does not pay for a full review again.
+US-60. As KC, I want each review to end with the line `review api cost: $<amount>`, so that I see what every review cost.
+US-61. As KC, I want to turn the review off in a repo's `loop.toml`, and `setup-repo` to ask whether it is on, so that a small private repo spends nothing on reviews.
 
 ### The UI judge (Must)
 
@@ -119,6 +121,8 @@ US-59. As KC, I want the gate to run on a self-hosted runner on the T14 when a r
 - A composite action in agent-workflow. It runs Claude Code in the runner with the repo's `code-review` skill, reads the pull request, the ticket text the loop attached, the spec the body names, and `AGENTS.md`.
 - Output is one JSON list of findings, each with a path, a line, a severity of blocking or minor, and one sentence. The action posts them as one pull request review, requests changes on any blocking finding, and fails the job on blocking.
 - A later push runs the review on the diff since the last reviewed commit only, with the earlier findings as context.
+- `loop.toml [review] enabled` turns the job on or off. Off skips the job, and the job reports success. `setup-repo` asks, and recommends off for a small private repo.
+- The review ends with `review api cost: $<amount>`, the cost Claude Code reports for the run, to the cent.
 - Default model Opus 5.5 at high effort. `loop.toml [review]` overrides it. The token comes from the repo secret the action names, so a repo can bill the API.
 
 ### The judge
@@ -175,7 +179,7 @@ Prior art: `loop/tests/conftest.py` and `test_run.py`.
 | The scenario suite runs with no network                                                    | US-55               |
 | An old `loop.toml` loads with a warning per dropped key                                    | US-57               |
 
-The gate, the review, the judge, auto-merge, and `setup-repo` have no tests of their own. When agent-workflow adopts the gate, its first pull requests run each check on the real GitHub, and that is the proof for US-1 to US-29 and US-54. Review checks US-44 and the skill stories, US-49 to US-53.
+The gate, the review, the judge, auto-merge, and `setup-repo` have no tests of their own. When agent-workflow adopts the gate, its first pull requests run each check on the real GitHub, and that is the proof for US-1 to US-29, US-54, US-60, and US-61. Review checks US-44 and the skill stories, US-49 to US-53.
 
 ## Out of Scope
 
