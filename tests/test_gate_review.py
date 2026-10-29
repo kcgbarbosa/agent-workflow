@@ -128,3 +128,40 @@ def test_loop_toml_overrides_the_model_and_the_skip_paths(tmp_path: Path) -> Non
     assert pr.run(REVIEW, **INPUTS).returncode == 0
     argv = pr.claude_calls[0]["argv"]
     assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+
+
+def update_branch(pr: FakeGitHub, files: dict[str, str]) -> None:
+    """A new commit on main, merged into the pull request's branch, as GitHub's "Update branch" does."""
+    pr.git("checkout", "-q", "main")
+    pr.env["BASE_SHA"] = pr.commit(files)
+    pr.git("checkout", "-q", "feature")
+    pr.git("merge", "-q", "--no-edit", "main")
+
+
+def test_a_later_push_after_a_merge_of_main_reviews_only_the_pull_requests_commits(pr: FakeGitHub) -> None:
+    pr.reply(result(finding("a.py", 2, "blocking", "Two is wrong.")))
+    assert pr.run(REVIEW, **INPUTS).returncode == 1
+    update_branch(pr, {"b.py": "from main\n"})
+    pr.commit({"a.py": "one\n2\nthree\n"})
+    pr.reply(result())
+
+    run = pr.run(REVIEW, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    prompt = pr.claude_calls[1]["argv"][pr.claude_calls[1]["argv"].index("-p") + 1]
+    since = prompt.split("The fixed point is ")[1].split(",")[0]
+    assert f"`git diff {since} HEAD`, with two dots" in prompt
+    assert pr.git("diff", "--name-only", since, "HEAD") == "a.py"
+    assert pr.git("log", "--format=%s", "--no-merges", f"{since}..HEAD") == "change"
+
+
+def test_a_merge_of_main_does_not_count_against_the_skip_paths(pr: FakeGitHub) -> None:
+    pr.reply(result(finding("a.py", 2, "blocking", "Two is wrong.")))
+    assert pr.run(REVIEW, **INPUTS).returncode == 1
+    update_branch(pr, {"b.py": "from main\n"})
+    pr.commit({"README.md": "# app\nFixed.\n"})
+
+    run = pr.run(REVIEW, **INPUTS)
+
+    assert run.returncode == 1
+    assert len(pr.claude_calls) == 1

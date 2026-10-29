@@ -38,7 +38,8 @@ def prompt(line: str, blocking: list[str]) -> str:
         "You judge one changed screenshot of a pull request. You see the baseline, the new screenshot, and the diff.\n"
         f"The ticket line for this step: {line}\n"
         f"{rule} Fine means the change is what the ticket line asks for and looks right.\n"
-        'Answer with JSON only, in the shape {"verdict": "blocking" | "minor" | "fine", "sentence": "<one sentence>"}.'
+        'Answer with JSON only, in the shape {"verdict": "blocking" | "minor" | "fine", "sentence": "<one sentence>"}. '
+        'A blocking answer adds "fault": the item of the list that the change shows.'
     )
 
 
@@ -86,19 +87,26 @@ def image(repo: str, sha: str, path: str, alt: str) -> str:
     return f"![{alt}](https://github.com/{repo}/blob/{sha}/{path}?raw=true)"
 
 
-def comment(repo: str, number: str, body: str, marker: str | None = None) -> None:
-    """Posts a comment, or edits the earlier one that holds the marker."""
-    existing = None
-    if marker:
-        out = subprocess.run(
-            ["gh", "api", f"repos/{repo}/issues/{number}/comments", "--paginate", "--jq", ".[]"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        existing = next((c for c in map(json.loads, filter(str.strip, out.splitlines())) if marker in (c.get("body") or "")), None)
+def on_list(answer: dict, blocking: list[str]) -> bool:
+    """Only a fault the repo named can block, whatever the model says."""
+    fault = str(answer.get("fault", "")).strip().casefold()
+    return fault in (item.strip().casefold() for item in blocking)
+
+
+def comment(repo: str, number: str, marker: str, body: str | None, quiet: str) -> None:
+    """Keeps one comment per marker. With no body, it edits an earlier comment to `quiet` and posts nothing new."""
+    out = subprocess.run(
+        ["gh", "api", f"repos/{repo}/issues/{number}/comments", "--paginate", "--jq", ".[]"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    existing = next((c for c in map(json.loads, filter(str.strip, out.splitlines())) if marker in (c.get("body") or "")), None)
+    if body is None and existing is None:
+        return
+    text = f"{marker}\n{body if body is not None else quiet}"
     method, endpoint = ("PATCH", f"repos/{repo}/issues/comments/{existing['id']}") if existing else ("POST", f"repos/{repo}/issues/{number}/comments")
-    subprocess.run(["gh", "api", "-X", method, endpoint, "--input", "-"], input=json.dumps({"body": body}), text=True, check=True)
+    subprocess.run(["gh", "api", "-X", method, endpoint, "--input", "-"], input=json.dumps({"body": text}), text=True, check=True)
 
 
 def main() -> int:
@@ -115,19 +123,21 @@ def main() -> int:
     for step in steps:
         meta = json.loads((step / "step.json").read_text())
         answer = ask(step, meta["line"], blocking)
+        if answer["verdict"] == "blocking" and not on_list(answer, blocking):
+            answer = {"verdict": "minor", "sentence": f"{answer['sentence']} (Not on the blocking list.)"}
         found[answer["verdict"]].append((step.name, answer, meta["path"]))
         print(f"{step.name}: {answer['verdict']}, {answer['sentence']}")
 
-    if found["blocking"]:
-        sections = [
-            f"### {name}\n\n{answer['sentence']}\n\n| Before | After |\n| --- | --- |\n"
-            f"| {image(repo, base, path, 'before')} | {image(repo, head, path, 'after')} |"
-            for name, answer, path in found["blocking"]
-        ]
-        comment(repo, number, "\n\n".join([f"{BLOCKING_MARKER}\n**gate / judge** blocks at {head[:7]}.", *sections]))
-    if found["minor"]:
-        items = [f"- [ ] **{name}**: {answer['sentence']}" for name, answer, _ in found["minor"]]
-        comment(repo, number, "\n".join([f"{MINOR_MARKER}\n**gate / judge** minor changes to check, at {head[:7]}:\n", *items]), MINOR_MARKER)
+    sections = [
+        f"### {name}\n\n{answer['sentence']}\n\n| Before | After |\n| --- | --- |\n"
+        f"| {image(repo, base, path, 'before')} | {image(repo, head, path, 'after')} |"
+        for name, answer, path in found["blocking"]
+    ]
+    blocks = "\n\n".join([f"**gate / judge** blocks at {head[:7]}.", *sections]) if sections else None
+    comment(repo, number, BLOCKING_MARKER, blocks, f"**gate / judge**: nothing blocks at {head[:7]}.")
+    items = [f"- [ ] **{name}**: {answer['sentence']}" for name, answer, _ in found["minor"]]
+    minors = "\n".join([f"**gate / judge** minor changes to check, at {head[:7]}:\n", *items]) if items else None
+    comment(repo, number, MINOR_MARKER, minors, f"**gate / judge**: no minor changes at {head[:7]}.")
     return 1 if found["blocking"] else 0
 
 

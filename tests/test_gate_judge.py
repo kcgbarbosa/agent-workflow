@@ -12,8 +12,9 @@ JUDGE = Path(__file__).resolve().parents[1] / "actions" / "judge" / "judge.py"
 INPUTS = {"SCREENSHOTS": "screenshot-diff", "JUDGE_MODEL": "claude-opus-5-5", "JUDGE_EFFORT": "low"}
 
 
-def answer(verdict: str, sentence: str) -> str:
-    return json.dumps({"type": "result", "result": json.dumps({"verdict": verdict, "sentence": sentence})})
+def answer(verdict: str, sentence: str, fault: str | None = None) -> str:
+    reply = {"verdict": verdict, "sentence": sentence} | ({"fault": fault} if fault else {})
+    return json.dumps({"type": "result", "result": json.dumps(reply)})
 
 
 @pytest.fixture
@@ -42,7 +43,7 @@ def test_no_changed_screenshot_runs_no_model(pr: FakeGitHub) -> None:
 def test_a_blocking_verdict_fails_and_comments_the_step_the_sentence_and_both_images(pr: FakeGitHub) -> None:
     for name in ("1-home", "2-login", "3-list"):
         changed_step(pr, name)
-    pr.reply(answer("blocking", "The title is cut off."), answer("minor", "The button moved."), answer("fine", "As asked."))
+    pr.reply(answer("blocking", "The title is cut off.", "Text cut off"), answer("minor", "The button moved."), answer("fine", "As asked."))
 
     run = pr.run(JUDGE, **INPUTS)
 
@@ -63,16 +64,36 @@ def test_a_blocking_verdict_fails_and_comments_the_step_the_sentence_and_both_im
     assert "3-list" not in blocking["body"] + minor["body"]
 
 
-def test_minor_verdicts_stay_in_one_checklist_comment(pr: FakeGitHub) -> None:
+def test_each_verdict_keeps_one_comment_and_a_cleared_one_says_so(pr: FakeGitHub) -> None:
     changed_step(pr, "1-home")
-    pr.reply(answer("minor", "The button moved."))
-    assert pr.run(JUDGE, **INPUTS).returncode == 0
+    changed_step(pr, "2-login")
+    pr.reply(answer("blocking", "The title is cut off.", "text cut off"), answer("minor", "The button moved."))
+    assert pr.run(JUDGE, **INPUTS).returncode == 1
 
-    pr.reply(answer("minor", "The button moved left."))
-    assert pr.run(JUDGE, **INPUTS).returncode == 0
+    pr.reply(answer("blocking", "The title is still cut off.", "text cut off"), answer("minor", "The button moved left."))
+    assert pr.run(JUDGE, **INPUTS).returncode == 1
+    blocking, minor = pr.state["comments"]
+    assert "The title is still cut off." in blocking["body"]
+    assert "The button moved left." in minor["body"]
 
-    [comment] = pr.state["comments"]
-    assert "The button moved left." in comment["body"]
+    pr.reply(answer("fine", "As asked."), answer("fine", "As asked."))
+    assert pr.run(JUDGE, **INPUTS).returncode == 0
+    blocking, minor = pr.state["comments"]
+    assert "nothing blocks at" in blocking["body"]
+    assert "no minor changes at" in minor["body"]
+
+
+def test_a_fault_off_the_blocking_list_is_minor(pr: FakeGitHub) -> None:
+    changed_step(pr, "1-home")
+    changed_step(pr, "2-login")
+    pr.reply(answer("blocking", "The colour changed.", "wrong colour"), answer("blocking", "No fault named."))
+
+    run = pr.run(JUDGE, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    [minor] = pr.state["comments"]
+    assert "- [ ] **1-home**: The colour changed. (Not on the blocking list.)" in minor["body"]
+    assert "- [ ] **2-login**: No fault named." in minor["body"]
 
 
 def test_an_answer_out_of_shape_fails(pr: FakeGitHub) -> None:
