@@ -19,11 +19,9 @@ Write it in one file only.
 | A user, a constraint, a scope cut, or a go-live item         | `README.md`, in the Users table for a user |
 | A term the project has settled on                            | `GLOSSARY.md`                              |
 | How the agents work                                          | `AGENTS.md` and `docs/agents/`             |
-| The spec of a feature whose Epic is not merged               | `docs/product/specs/<feature>.md`          |
-| The baselines and targets                                    | `<Metrics file path>`                      |
-| The personas                                                 | `<Personas file path>`                     |
+| The spec of a feature whose Epic is not merged               | `<spec folder>/<feature>.md`               |
 
-The PRD is the description of the Jira Epic. It is not a file in this repo. `docs/agents/issue-tracker.md` gives how it is written.
+The Epic is not a file in this repo. `docs/agents/issue-tracker.md` gives what its description holds, and the metrics and personas files of a repo with a PRD.
 When the Epic merges, a pull request deletes the spec. `docs/agents/issue-tracker.md` gives how the Epic links it after that. The tests hold its acceptance criteria.
 
 ## Keep documents accurate

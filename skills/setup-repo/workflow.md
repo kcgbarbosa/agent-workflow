@@ -5,17 +5,17 @@ Each skill holds its own steps. Where a skill publishes something, `docs/agents/
 
 ## One cycle
 
-| #   | Step             | Skill                   | Output                                                                 | Where it lives                                   |
-| --- | ---------------- | ----------------------- | ---------------------------------------------------------------------- | ------------------------------------------------ |
-| 1   | Feature grill    | `grill-with-docs`       | ADRs and glossary terms                                                | `docs/adr/`, `GLOSSARY.md`                       |
-| 2   | Spec, then PRD   | `to-spec`, `to-prd`     | The spec, then the Epic description                                    | `docs/product/specs/<feature>.md`, the Jira Epic |
-| 3   | Tickets          | `to-tickets`            | Tasks with blocking links                                              | Jira, under the Epic                             |
-| 4   | Planning         | None                    | The hand-set fields on each ticket                                     | Jira                                             |
-| 5   | Build            | `implement` or the loop | Commits on a branch, with an acceptance test for each line             | Git                                              |
-| 6   | Review and merge | `code-review`           | A pull request, then one commit on the default branch                  | The git host                                     |
-| 7   | Acceptance       | None                    | The deployed result checked against each ticket's "What the user sees" | Jira                                             |
+| #   | Step             | Skill                               | Output                                                                 | Where it lives                              |
+| --- | ---------------- | ----------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------- |
+| 1   | Feature grill    | `grill-with-docs`                   | ADRs and glossary terms                                                | `docs/adr/`, `GLOSSARY.md`                  |
+| 2   | Spec             | `to-spec`, then `to-prd` with a PRD | The spec and the Epic, then the PRD in the Epic description            | `<spec folder>/<feature>.md`, the Jira Epic |
+| 3   | Tickets          | `to-tickets`                        | Tasks with blocking links                                              | Jira, under the Epic                        |
+| 4   | Planning         | None                                | The hand-set fields on each ticket                                     | Jira                                        |
+| 5   | Build            | `implement` or the loop             | Commits on a branch, with an acceptance test for each line             | Git                                         |
+| 6   | Review and merge | `code-review`                       | A pull request, then one commit on the default branch                  | The git host                                |
+| 7   | Acceptance       | None                                | The deployed result checked against each ticket's "What the user sees" | Jira                                        |
 
-The owner makes every decision in a grill, approves the PRD before `/to-prd` writes it, approves the tickets before they are published, and merges. The agent never merges into the default branch.
+The owner makes every decision in a grill, approves a PRD before `/to-prd` writes it, approves the tickets before they are published, and merges. The agent never merges into the default branch.
 
 Steps 1 to 3 share one context window. When it fills up, `/handoff` writes a summary and a new window continues from it.
 A small change skips steps 2 to 4 and goes from the grill to `implement`.

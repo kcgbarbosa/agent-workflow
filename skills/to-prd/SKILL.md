@@ -14,11 +14,11 @@ Do NOT interview the user. Synthesize from the sources below, show the draft, an
 
 ### 1. Find the sources
 
-Read `docs/agents/issue-tracker.md`. It names the Epic rule, and the paths of the metrics file and the personas file. When it names no path, use `docs/product/metrics.md` and `docs/product/personas.md`. `/setup-repo` writes it. If it is missing, tell the user to run `/setup-repo`.
+Read `docs/agents/issue-tracker.md`. `/setup-repo` writes it. If it is missing, tell the user to run `/setup-repo`. A repo has a PRD only when the file says "The Epic is the PRD." When it does not, stop: tell the user that this repo has no PRD, and that its Epic description is the Spec line `/to-spec` wrote. The file names the paths of the metrics file and the personas file. When it names no path, use `docs/product/metrics.md` and `docs/product/personas.md`.
 
 Read `docs/agents/domain.md` for the spec folder. Then collect:
 
-- The Epic key, from the user or the conversation. Read the Epic through the Atlassian connector: its current description, its sprint or due date.
+- The Epic key, from the user, the conversation, or the spec's Epic line. Read the Epic through the Atlassian connector: its current description, its sprint or due date.
 - The spec of the feature, the file `/to-spec` wrote.
 - The metrics file and the personas file in this repo.
 - The Users table in the project `README.md`.
