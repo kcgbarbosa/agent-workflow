@@ -1,0 +1,3 @@
+#!/bin/sh
+# Node 22.18 and later run TypeScript as it is, so the loop needs no build step.
+exec node --disable-warning=ExperimentalWarning "$(dirname "$(readlink -f "$0")")/../src/cli.ts" "$@"
