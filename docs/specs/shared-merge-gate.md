@@ -27,6 +27,7 @@ US-6. As KC, I want the gate to install the repo's pinned toolchain before the c
 US-7. As KC, I want the gate to run on pull requests only and never again on the push to main, so that a merge bills no second run.
 US-8. As KC, I want a new push to a pull request to cancel the older run, so that a stale run bills nothing.
 US-9. As KC, I want a docs-only pull request to skip the test job and the review and still pass the gate, so that a one-line doc fix merges in a minute.
+US-59. As KC, I want the gate to take the runner as an input, GitHub-hosted by default, so that a repo with a stack runs its checks on a self-hosted runner on the T14 and can switch to a hosted runner by hand when the T14 is down.
 
 ### The second-model review (Must)
 
@@ -99,7 +100,6 @@ US-57. As the maintainer, I want a `loop.toml` key the old loop knew and the new
 
 US-56. As the maintainer, I want the review and the judge to be tested with recorded pull requests and screenshots, so that a change to a prompt shows its effect before it ships. Later: the first real pull requests show more than recorded ones.
 US-58. As KC, I want a merge queue, so that two green pull requests that conflict never both land. Later, because squash on a small team seldom conflicts.
-US-59. As KC, I want the gate to run on a self-hosted runner on the T14 when a repo asks, so that a repo with a stack runs its browser tests with its secrets. Later: the Pitchridge spec decides and the gate takes a `runs-on` input then.
 
 ## Implementation Decisions
 
@@ -107,10 +107,10 @@ US-59. As KC, I want the gate to run on a self-hosted runner on the T14 when a r
 
 - One reusable workflow named `gate` in agent-workflow, called with `workflow_call`. agent-workflow is public, so any repo of the account can call it.
 - The gate runs on GitHub-hosted runners. A private repo bills its own minutes.
-- Inputs: the check command, default `make check`; the review skip paths; the review model and effort; a flag for docs-only detection. Secrets: the token the review and the judge bill.
+- Inputs: the check command, default `make check`; the docs-only command, default `make check-docs`; the runner label, default `ubuntu-latest`, which the `check`, `review`, and `judge` jobs all use; the review skip paths; the review model and effort; a flag for docs-only detection. Secrets: the token the review and the judge bill.
 - Jobs, in order: `check`, `review`, `judge`. Each is a job of its own so each is a required status of its own. `review` and `judge` run after `check` passes, so a broken build never pays for a model.
 - The `check` job installs the toolchain from the repo's `mise` file when one exists, then runs the check command. The repo's check command starts whatever stack it needs. Docker is on every runner. No service containers in the gate, so one workflow serves a repo with Postgres and a repo with nothing.
-- Docs-only is decided by the changed paths against the base: only `*.md` and `docs/`. Then `check` runs the repo's format and docs checks only, and `review` and `judge` are skipped and report success.
+- Docs-only is decided by the changed paths against the base: only `*.md` and `docs/`. Then `check` runs the docs-only command, and `review` and `judge` are skipped and report success.
 - The `judge` job runs only when the `check` job uploaded a screenshot diff artifact. A repo produces that artifact from its own browser tests, with Playwright's screenshot comparison, at a tolerance set in the repo. The gate reads the diff folder convention and nothing else about the tests.
 - Auto-merge is GitHub's own. The loop enables it on each pull request it opens. A person enables it on their own. A `hold` label is a required check that fails while the label is on.
 - Auto-merge is on in every repo that adopts the gate, with no required approvals. A merge to main is not a release. A repo that serves users ships to production by a tag that KC pushes, and one tag can carry many merged pull requests. The Pitchridge spec sets up its staging and its tags.
@@ -179,14 +179,13 @@ Prior art: `loop/tests/conftest.py` and `test_run.py`.
 | The scenario suite runs with no network                                                    | US-55               |
 | An old `loop.toml` loads with a warning per dropped key                                    | US-57               |
 
-The gate, the review, the judge, auto-merge, and `setup-repo` have no tests of their own. When agent-workflow adopts the gate, its first pull requests run each check on the real GitHub, and that is the proof for US-1 to US-29, US-54, US-60, and US-61. Review checks US-44 and the skill stories, US-49 to US-53.
+The gate, the review, the judge, auto-merge, and `setup-repo` have no tests of their own. When agent-workflow adopts the gate, its first pull requests run each check on the real GitHub, and that is the proof for US-1 to US-29, US-54, US-59, US-60, and US-61. Review checks US-44 and the skill stories, US-49 to US-53.
 
 ## Out of Scope
 
 - Pitchridge's own suites, the stubbed suite deletion, test speed, previews, staging, and releases. Technical. The Pitchridge spec picks them up.
 - The switchboard, the start page, machine-status, the secrets injector, and the toolchain pin outside the gate. Technical. The tooling spec picks them up.
 - A merge queue. Technical. US-58, none planned.
-- A self-hosted runner. Technical. US-59, the Pitchridge spec decides.
 - Feature candidate drafting. User-visible. Dropped by KC, none planned.
 - Any tracker other than Jira. Technical. None planned.
 
