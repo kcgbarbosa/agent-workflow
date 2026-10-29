@@ -1,6 +1,6 @@
 # Shared merge gate, and the loop as a PR runner
 
-Epic: none yet. Key persona: KC, the maintainer of every repo. ADRs: none in this repo. This file holds the requirements for one reusable gate that every repo calls, the two model checks that run inside it, auto-merge behind it, and the loop that pushes a pull request and waits for it, rewritten in TypeScript.
+Epic: [AW-1](https://kcgbarbosa.atlassian.net/browse/AW-1). Key persona: KC, the maintainer of every repo. ADRs: none in this repo. This file holds the requirements for one reusable gate that every repo calls, the two model checks that run inside it, auto-merge behind it, and the loop that pushes a pull request and waits for it, rewritten in TypeScript.
 
 ## Problem Statement
 
