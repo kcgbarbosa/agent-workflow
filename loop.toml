@@ -44,3 +44,11 @@ JIRA_EMAIL = { item = "pitchridge-jira", field = "username" }
 JIRA_API_TOKEN = { item = "pitchridge-jira", field = "password" }
 NTFY_TOPIC = { item = "pitchridge-ntfy-topic", field = "password" }
 CLAUDE_CODE_OAUTH_TOKEN = { item = "pitchridge-loop-claude-token", field = "password" }
+
+# The gate and the new loop read the keys below. Today's loop refuses a key it does not know,
+# so they stay comments until the new loop ships. `blocking` goes in the repo's [ui] table.
+# [review]
+# enabled = false
+#
+# [ui]
+# blocking = []

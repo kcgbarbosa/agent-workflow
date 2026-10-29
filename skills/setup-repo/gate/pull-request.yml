@@ -1,0 +1,11 @@
+# Puts this repo on the shared merge gate. setup-repo writes it from skills/setup-repo/gate/ in agent-workflow.
+name: pull-request
+# Pull requests only, so a merge to main runs no second gate.
+on: pull_request
+# A newer push to a pull request cancels its older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    uses: kcgbarbosa/agent-workflow/.github/workflows/gate.yml@main

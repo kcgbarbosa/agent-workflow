@@ -1,0 +1,46 @@
+name: gate
+
+# The shared merge gate. A repo calls it from the pull-request workflow that setup-repo writes, so every repo runs the same checks.
+# The repo's own `make check` decides what green means.
+on:
+  workflow_call:
+    inputs:
+      check:
+        description: The command that runs everything the repo needs green.
+        type: string
+        default: make check
+      docs-check:
+        description: The command that a docs-only pull request runs instead.
+        type: string
+        default: make check-docs
+      docs-only:
+        description: Run the docs command when the pull request changes only `*.md` files and `docs/`.
+        type: boolean
+        default: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # The checkout is the pull request merged into its base, so the first parent is the base.
+      - id: paths
+        if: inputs.docs-only
+        run: |
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          if [ -n "$changed" ] && ! grep -qvE '(\.md$|^docs/)' <<<"$changed"; then
+            echo "docs-only=true" >> "$GITHUB_OUTPUT"
+          fi
+      # The repo's pinned toolchain, so the runner uses the same versions as the T14.
+      - if: hashFiles('mise.toml', '.mise.toml', '.tool-versions', '.config/mise.toml') != ''
+        uses: jdx/mise-action@v5
+        env:
+          MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
+      # The command goes in through env, so it runs as the caller wrote it.
+      - run: bash -c "$COMMAND"
+        env:
+          COMMAND: ${{ steps.paths.outputs.docs-only == 'true' && inputs.docs-check || inputs.check }}

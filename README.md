@@ -12,7 +12,9 @@ docs/            project-skills.md, the registry of skills that live in project 
 config/CLAUDE.md the global instructions, linked to ~/.claude/CLAUDE.md, the name Claude Code reads
 AGENTS.md        this repo's own instructions
 install.sh       makes the links and installs the loop command. Safe to run again
-tests/           the repo-level checks that .github/workflows/repo.yml runs. Run them with uv run --no-project --with pytest pytest tests
+tests/           the repo-level checks. make check runs them with the loop, switchboard and shellcheck checks
+.github/         the shared merge gate, workflows/gate.yml, which every repo calls, and this repo's own call to it
+Makefile         make check, the gate's check for this repo
 licenses/        upstream licenses. Keep
 ```
 

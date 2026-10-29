@@ -1,0 +1,7 @@
+# The gate and the new loop read the keys below. Today's loop refuses a key it does not know,
+# so they stay comments until the new loop ships. `blocking` goes in the repo's [ui] table.
+# [review]
+# enabled = false
+#
+# [ui]
+# blocking = []
