@@ -228,14 +228,12 @@ The ported repo checks of agent-workflow are their own proof for US-30. US-11, U
 
 ### Human steps
 
-1. Create a Bitwarden Free organization with Secrets Manager, the two projects, the secrets by env var name, and the three machine accounts. Put the `t14` and `mac` tokens in each computer's token file, and the `github` token in a repo secret when a workflow first needs it.
-2. In Jira, add the components `agent-workflow` and `machines` to AW, and connect the machines repo to Jira's GitHub integration.
-3. On each computer, once: move the chezmoi source to `~/dev/machines`, leave the symlink, and run `chezmoi init` so the new `sourceDir` takes effect.
-4. Run `/setup-repo` in machines with an admin token.
-5. Run `lefthook install` once in each existing clone on the other computer.
-6. Remove the native Claude Code on the T14 and the Homebrew cask on the Mac after the pinned `claude` runs.
-7. File the Pitchridge ticket for the wrapper.
-8. Restart `switchboard.service` at the cutover when not on a call.
+KC builds only on the T14 and in the cloud. The Mac takes every change through its hourly chezmoi sync and `install.sh`, which keep its skills and Claude Code config the same as the T14's. No step below runs by hand on the Mac.
+
+1. Start Secrets Manager in KC's Bitwarden account, and create each machine account's access token. Bitwarden shows a token once, in its web app only. An agent creates the projects and the secrets with `bws` after the first token exists.
+2. Restart `switchboard.service` at the cutover when no call is live, or let the service finish its live calls on stop.
+
+An agent does the rest: the Jira components through the Jira API (Jira is already linked to GitHub), `/setup-repo` in machines with `gh`, the move of the chezmoi source and the removal of the old Claude Code installs through a chezmoi run-once script that each computer runs on its next sync, and the Pitchridge ticket for the wrapper.
 
 ### Decisions for KC to verify
 
