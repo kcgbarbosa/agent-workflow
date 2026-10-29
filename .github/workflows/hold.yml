@@ -1,0 +1,25 @@
+# The required `hold` check. It fails while the pull request has the hold label, so auto-merge waits.
+# setup-repo writes it from skills/setup-repo/gate/ in agent-workflow.
+name: hold
+
+# Its own workflow, because adding or removing the label must run it again, and the gate must not.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+# A newer push or label change cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  hold:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ "$HOLD" = true ]; then
+            echo "The hold label is on. Remove it to let the pull request merge." >&2
+            exit 1
+          fi
+        env:
+          HOLD: ${{ contains(github.event.pull_request.labels.*.name, 'hold') }}

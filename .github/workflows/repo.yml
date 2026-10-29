@@ -1,6 +1,6 @@
 name: repo
 
-# Not on push to main: the pull request already ran this check, and each run bills minutes.
+# The tests and the lint run in the gate's `make check`. This workflow keeps the check that reads the pull request.
 on:
   pull_request:
 
@@ -10,17 +10,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
+  co-authors:
     runs-on: ubuntu-latest
     steps:
-      # The whole history, so the co-authors step can list the pull request commits.
+      # The whole history, so the step can list the pull request commits.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
-      - run: shellcheck install.sh .github/scripts/*.sh
-      - run: uv run --no-project --with pytest pytest tests
-      # A step, not its own job: a 10-second job still bills a whole minute.
       # The body and SHAs go in through env, so a crafted body cannot inject shell code.
       - run: .github/scripts/check-co-authors.sh
         env:
