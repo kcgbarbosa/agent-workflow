@@ -1,6 +1,6 @@
 # The rest of KC's tooling in TypeScript
 
-Epic: none yet. Key persona: KC, the maintainer of every repo. ADRs: none in this repo. This file holds the requirements for the switchboard, the start page, and machine-status in TypeScript, one toolchain pin on both computers, one hooks file per repo, and one secrets injector. It builds on `docs/specs/shared-merge-gate.md` and does not repeat it.
+Epic: [AW-8](https://kcgbarbosa.atlassian.net/browse/AW-8). Key persona: KC, the maintainer of every repo. ADRs: none in this repo. This file holds the requirements for the switchboard, the start page, and machine-status in TypeScript, one toolchain pin on both computers, one hooks file per repo, and one secrets injector. It builds on `docs/specs/shared-merge-gate.md` and does not repeat it.
 
 ## Problem Statement
 
