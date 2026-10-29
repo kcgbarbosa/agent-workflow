@@ -37,6 +37,7 @@ US-8. As KC, I want a request without the token refused with 401, and `/health` 
 US-9. As KC, I want `/api/status` with the token to give whether the session runs, when I last talked, and how many replies wait, so that the start page tile keeps working.
 US-10. As KC, I want a request that ElevenLabs hung up on to end with no error in the journal, so that the journal shows only real faults.
 US-11. As KC, I want the TypeScript switchboard on the same port, unit name, Funnel address, token, model ID, and session name, so that nothing changes in ElevenLabs, Twilio, or the other sessions that message it.
+US-51. As KC on a call, I want a stop or restart of the switchboard to refuse new requests and wait for the asks that run to end before it exits, so that an agent can restart it at any time and no call drops.
 
 ### The start page and machine-status in TypeScript (Must)
 
@@ -127,7 +128,8 @@ US-50. As KC, I want GitHub Actions to read secrets with OIDC and no stored toke
 - The timings are constants with today's values: 1 second to the filler, 10 seconds between updates, 30 seconds for a retry to join, 45 seconds in all.
 - The response headers and the first empty chunk go out before the ask starts, as today, so ElevenLabs gets bytes at once.
 - `switchboard.service` runs Node on the package entry from the main checkout. The unit name, the port 8796, the env file, and the Funnel node stay. The pages registry row and `80-switchboard` change only where they name `uv`.
-- The cutover is one restart. A restart ends a call in progress, so KC restarts it when not on a call. The rollback is a revert and a restart.
+- On `SIGTERM` the server stops taking requests, answers new ones with 503, and exits when the running asks end or after 60 seconds. `switchboard.service` sets `TimeoutStopSec=75` so systemd waits for it. Then an agent can restart it at any time.
+- The cutover is one restart by an agent. The rollback is a revert and a restart.
 
 ### The start page and machine-status
 
@@ -200,6 +202,7 @@ The ported tests keep today's margins, such as a 0.5 second filler against a 2 s
 | The session ID is kept so a restart resumes                                             | US-7                              |
 | A request without the token is refused, and the status needs the token                  | US-8, US-9                        |
 | A request that hangs up mid-answer leaves no error in the output                        | US-10                             |
+| A `SIGTERM` during an ask answers new requests with 503 and exits after the ask ends    | US-51                             |
 | The 20-run repeat of the switchboard suite                                              | US-43                             |
 | Each ported start page test: routes, Sessions rows, actions, older version, needs trust | US-12, US-13, US-16, US-44        |
 | Each ported pages test: unit, port, serve mapping, checkout and copy drift              | US-12, US-44                      |
@@ -230,8 +233,7 @@ The ported repo checks of agent-workflow are their own proof for US-30. US-11, U
 
 KC builds only on the T14 and in the cloud. The Mac takes every change through its hourly chezmoi sync and `install.sh`, which keep its skills and Claude Code config the same as the T14's. No step below runs by hand on the Mac.
 
-1. Start Secrets Manager in KC's Bitwarden account, and create each machine account's access token. Bitwarden shows a token once, in its web app only. An agent creates the projects and the secrets with `bws` after the first token exists.
-2. Restart `switchboard.service` at the cutover when no call is live, or let the service finish its live calls on stop.
+Start Secrets Manager in KC's Bitwarden account, and create each machine account's access token. Bitwarden shows a token once, in its web app only. KC also creates the two projects, `loop` and `pitchridge`, and gives each machine account its access. An agent adds the secrets with `bws` after the first token exists.
 
 An agent does the rest: the Jira components through the Jira API (Jira is already linked to GitHub), `/setup-repo` in machines with `gh`, the move of the chezmoi source and the removal of the old Claude Code installs through a chezmoi run-once script that each computer runs on its next sync, and the Pitchridge ticket for the wrapper.
 
