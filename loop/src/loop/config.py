@@ -172,7 +172,15 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
     agent = top.table("agent", optional=True)
     demo_table = top.table("demo", optional=True)
     acceptance = top.table("acceptance", optional=True)
+    review = top.table("review", optional=True)
     secrets_table = top.table("secrets")
+
+    # The shared merge gate reads these. The loop checks their types and uses none of them.
+    review.flag("enabled", True)
+    review.text("model", None)
+    review.text("effort", None)
+    review.texts("skip", ())
+    ui.texts("blocking", ())
 
     secrets = {}
     for env in secrets_table.keys():
@@ -244,6 +252,7 @@ def _parse(repo: Path, data: dict[str, Any], state_dir: Path | None) -> Config:
         agent,
         demo_table,
         acceptance,
+        review,
         secrets_table,
     )
     for table in tables:

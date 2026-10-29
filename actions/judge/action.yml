@@ -1,0 +1,32 @@
+name: judge
+description: >-
+  The gate's UI judge. It reads the screenshot diff folder that the repo's browser tests write, `screenshot-diff/` at the repo
+  root, with one folder per changed step: `baseline.png`, `new.png`, `diff.png`, and `step.json`, which holds `line`, the step's
+  ticket line, and `path`, the screenshot's path in the repo. The tests leave out a change below their tolerance, and the pull
+  request commits the new screenshots as the baselines. One model call per step, with no tools, answers blocking, minor, or fine.
+  Only a change on `loop.toml [ui] blocking` can block. A blocking verdict fails the step and comments the step, the sentence,
+  and the two images. Minor verdicts collect in one checklist comment.
+inputs:
+  claude_code_oauth_token:
+    description: The token Claude Code bills, so the judge runs on that Claude plan.
+    required: true
+  model:
+    description: The model of each call.
+    default: claude-opus-5-5
+  effort:
+    description: The effort of each call. One look at three images needs little.
+    default: low
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: python3 "$GITHUB_ACTION_PATH/judge.py"
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        SCREENSHOTS: screenshot-diff
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        JUDGE_MODEL: ${{ inputs.model }}
+        JUDGE_EFFORT: ${{ inputs.effort }}

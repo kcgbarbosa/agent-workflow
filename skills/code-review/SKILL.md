@@ -65,14 +65,14 @@ Spawn each as a `general-purpose` subagent on your own model, because a review i
 
 - The full diff command and commit list.
 - The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full (the sub-agent has no other access to it).
-- The brief: "Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+- The brief: "Report, per file/hunk where relevant, (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls: documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Give each finding its file path and a line number in the file at `HEAD`. Under 400 words."
 
 **Spec sub-agent prompt** should include:
 
 - The diff command and commit list.
 - The path or fetched contents of the spec.
 - The acceptance test titles from step 2, and the path of `docs/agents/testing.md`, when there are any.
-- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong; (d) each 'What the user sees' line with no acceptance test of the same name, or whose test does not check what the line says, or stubs an API, as `docs/agents/testing.md` gives. Quote the spec line for each finding. Under 400 words."
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong; (d) each 'What the user sees' line with no acceptance test of the same name, or whose test does not check what the line says, or stubs an API, as `docs/agents/testing.md` gives. Quote the spec line for each finding. Give each finding its file path and a line number in the file at `HEAD`. Under 400 words."
 
 If the spec is missing, skip the Spec sub-agent and note this in the final report.
 
@@ -81,6 +81,17 @@ If the spec is missing, skip the Spec sub-agent and note this in the final repor
 Present the two reports under `## Standards` and `## Spec` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings, because the two axes are deliberately separate (see _Why two axes_).
 
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
+
+### 6. Return the findings
+
+End with every finding of both axes as one JSON list, in a `json` code block, so the gate can post each at its line and decide. A caller that gives a JSON schema, such as the gate's review, gets the list in that shape and nothing else. Each finding has four keys:
+
+- `path`: the file, relative to the repo root.
+- `line`: a line number in that file at `HEAD`, on the line the finding is about.
+- `severity`: `blocking` when the merge should wait: a bug, a spec requirement missing or wrong, or a broken documented standard. `minor` for the rest, and always for a baseline smell or a judgement call.
+- `sentence`: one sentence that says what is wrong and what to do.
+
+A finding with no line, such as a missing requirement, takes the line of the closest code it touches.
 
 ## Why two axes
 

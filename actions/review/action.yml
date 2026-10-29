@@ -1,0 +1,39 @@
+name: review
+description: >-
+  The gate's second-model review. Claude Code runs the code-review skill on the pull request, and review.py posts the findings
+  as one pull request review, with a request for changes and a failed step on a blocking finding. A later push reviews only the
+  commits since the last review. `loop.toml [review]` overrides each input: `enabled` (default true), `model`, `effort`, and
+  `skip`, a list of path globs. A diff of skip paths only runs no model.
+inputs:
+  claude_code_oauth_token:
+    description: The token Claude Code bills, so the review runs on that Claude plan.
+    required: true
+  model:
+    description: The model, unless loop.toml [review] names one.
+    required: true
+  effort:
+    description: The effort, unless loop.toml [review] names one.
+    required: true
+  skip:
+    description: Path globs, split on whitespace, unless loop.toml [review] names `skip`.
+    required: true
+runs:
+  using: composite
+  steps:
+    # The repo's own code-review skill wins. Without one, the review uses agent-workflow's.
+    - shell: bash
+      run: |
+        if [ ! -e .claude/skills/code-review ]; then
+          mkdir -p ~/.claude/skills
+          cp -R "$GITHUB_ACTION_PATH/../../skills/code-review" ~/.claude/skills/
+        fi
+        python3 "$GITHUB_ACTION_PATH/review.py"
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        REVIEW_MODEL: ${{ inputs.model }}
+        REVIEW_EFFORT: ${{ inputs.effort }}
+        REVIEW_SKIP: ${{ inputs.skip }}

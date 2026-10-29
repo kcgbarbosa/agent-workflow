@@ -73,7 +73,7 @@ Settles where the key goes in commits. The script names each branch `feat/<KEY>-
 
 ### Gates
 
-Settles the ticket gate, the merge gate, and what CI runs. `[gates]` gives `ticket`, `merge`, and `timeout_minutes`. `agent_hint` adds a line to each ticket file for what the gate command does not say, such as what the tests need from the stack. A gate is an argument list that the script runs with no shell, so a pipe or `&&` in it does not work: put them in a script or a make target. The script gives a gate none of the repo's secrets (Secrets). A gate that needs the stack's secrets reads them from the secrets file through a repo script, and passes no others on.
+Settles the ticket gate, the merge gate, and what CI runs. `[gates]` gives `ticket`, `merge`, and `timeout_minutes`. `agent_hint` adds a line to each ticket file for what the gate command does not say, such as what the tests need from the stack. A gate is an argument list that the script runs with no shell, so a pipe or `&&` in it does not work: put them in a script or a make target. The script gives a gate none of the repo's secrets (Secrets). A gate that needs the stack's secrets reads them from the secrets file through a repo script, and passes no others on. The `[review]` table, with `enabled`, `model`, `effort`, and `skip`, and `[ui]` `blocking` are settings of the shared merge gate, which `actions/review/action.yml` and `actions/judge/action.yml` give. The script checks their types and uses none of them.
 
 ### Acceptance tests
 
