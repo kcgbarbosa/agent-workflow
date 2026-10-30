@@ -26,6 +26,7 @@ function now(): string {
 export class Log {
   readonly path: string;
   readonly run: string;
+  private closed = false;
 
   constructor(path: string, run: string) {
     this.path = path;
@@ -36,9 +37,15 @@ export class Log {
   write(ticket: string, step: string, result: string, extra: Extra = {}): Line {
     const { commit = null, session = null, detail = "", ...fields } = extra;
     const line: Line = { time: now(), epic: this.run, ticket, step, result, commit, session, detail, ...fields };
+    if (this.closed && step !== "notify") return line;
     appendFileSync(this.path, JSON.stringify(line) + "\n");
     console.log([line.time, ticket, step, result, detail].filter(Boolean).join(" "));
     return line;
+  }
+
+  /** After a stop, a step that the stop cut short writes no result. Only the stop's notify line follows. */
+  close(): void {
+    this.closed = true;
   }
 
   lines(): Line[] {

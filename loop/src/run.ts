@@ -11,7 +11,7 @@ import { archive } from "./archive.ts";
 import type { Config } from "./config.ts";
 import { git, slug } from "./git.ts";
 import * as github from "./github.ts";
-import { run } from "./spawn.ts";
+import { endAll, run } from "./spawn.ts";
 import { type Ticket, Jira } from "./jira.ts";
 import { Log } from "./log.ts";
 
@@ -86,6 +86,7 @@ export class Run {
   private readonly stopped = new Set<string>();
   /** Why no new ticket starts: the circuit breaker or a usage limit the loop does not wait for. */
   private halt: "circuit-breaker" | "usage-limit" | null = null;
+  private stopping = false;
   /** Until when, in epoch milliseconds, the run waits for a usage limit to reset. */
   private pausedUntil = 0;
   private wake: () => void = () => {};
@@ -754,8 +755,21 @@ export class Run {
     return held;
   }
 
-  /** An ntfy message holds the run and its result only. */
+  /** The SIGTERM of `loop stop`. It ends every agent session, and the step in progress writes no result. */
+  async stop(): Promise<void> {
+    this.stopping = true;
+    this.log.write(this.name, "stop", "stopped");
+    this.log.close();
+    await endAll();
+    await this.send(`${this.name} stopped`);
+  }
+
   private async notify(message: string): Promise<void> {
+    if (!this.stopping) await this.send(message);
+  }
+
+  /** An ntfy message holds the run and its result only. */
+  private async send(message: string): Promise<void> {
     const url = `${this.config.ntfyUrl.replace(/\/$/, "")}/${this.secrets.NTFY_TOPIC}`;
     try {
       const response = await fetch(url, { method: "POST", body: message, signal: AbortSignal.timeout(30_000) });
