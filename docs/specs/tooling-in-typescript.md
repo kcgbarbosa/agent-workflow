@@ -8,11 +8,13 @@ KC reads TypeScript and cannot read Python. After the shared merge gate moves th
 
 The Mac and the T14 install their tools in different ways and at different versions, so a command that works on one can fail on the other. The rules that every repo must obey, such as Prettier on Markdown, are wired by hand in each repo or written as a line that asks the agent to remember. A secret takes four hops that KC wrote: Bitwarden, a JSON file that `loop secrets` copies, a Python wrapper, Make, then the agent. A changed secret needs a manual copy on each host.
 
-The machines repo is not on the start page, so KC cannot open a session in it from the phone, and the loop cannot run there.
+The machines repo sits outside `~/dev`, so it is not a repo like the others: the loop cannot run there, and the hourly worktree sweep does not see it.
+
+The start page still has a Sessions section with a Remote Control switch per repo, but T3 Code is now the way into sessions, and Remote Control is only the fallback.
 
 ## Solution
 
-The switchboard moves to TypeScript beside the loop in agent-workflow, with the same behaviour that PR #94 gave it, so ElevenLabs sees no change. The start page and machine-status move to TypeScript in machines, each one file that Node runs directly.
+The switchboard moves to TypeScript beside the loop in agent-workflow, with the same behaviour that PR #94 gave it, so ElevenLabs sees no change. The start page and machine-status move to TypeScript in machines, each one file that Node runs directly. The start page drops Sessions, and a T3 Code tile comes first. `claude-rc@agent-workflow` stays on as the fallback door, and a chat there starts any other repo's server.
 
 One `mise.toml` in machines pins the tools on both computers, and chezmoi applies it as the global mise config. Each repo keeps its own mise file for its own code, as the gate spec writes it.
 
@@ -20,7 +22,7 @@ Each repo gets one lefthook file that lists its format, lint, and policy checks.
 
 Bitwarden Secrets Manager holds each secret once. Each computer and GitHub Actions hold one machine token. `bws run` starts the loop's units with the secrets in their environment, and the secrets file and the Python wrapper go away.
 
-The chezmoi source moves to `~/dev/machines`, so machines is a repo like the others: a start page row, a Remote Control server, the gate, and the loop.
+The chezmoi source moves to `~/dev/machines`, so machines is a repo like the others: the loop, the gate, and T3 Code work in it.
 
 ## User Stories
 
@@ -41,7 +43,8 @@ US-51. As KC on a call, I want a stop or restart of the switchboard to refuse ne
 
 ### The start page and machine-status in TypeScript (Must)
 
-US-12. As KC, I want the start page to serve the same page, and `/api/status`, `/api/pages`, `/api/sessions`, and the session actions to give the same answers, so that `index.html` and my habits do not change.
+US-12. As KC, I want the start page to serve the same page without its Sessions section, and `/api/status` and `/api/pages` to give the same answers, so that my habits do not change and T3 Code is the one way into sessions.
+US-53. As KC, I want a T3 Code tile first on the start page, with its health dot, so that the main way into sessions is one tap or the `1` key.
 US-14. As KC, I want `machine-status`, `--refresh`, `--full`, `--ping`, and `--restore-done` to print and report what they do today, with UNKNOWN and the reason where a probe cannot decide, so that the summary and the healthchecks alerts keep working on both computers.
 US-15. As KC, I want the hourly job to sync the dotfiles as today: push when ahead, fast-forward and apply when behind, alert on an unfiled edit or on two-sided commits, so that the move changes no sync rule.
 US-16. As KC, I want the start page and machine-status each to be one TypeScript file that imports only Node built-ins, so that chezmoi still deploys a copy and nothing installs when they run.
@@ -80,7 +83,7 @@ US-38. As KC, I want `loop secrets` and the secrets file gone, and an old `[secr
 
 ### Machines as a repo like the others (Must)
 
-US-39. As KC, I want the chezmoi source at `~/dev/machines`, so that it has a row on the start page, a Remote Control server, and the loop.
+US-39. As KC, I want the chezmoi source at `~/dev/machines`, so that the loop, the gate, and T3 Code work in it like any repo.
 US-40. As KC, I want chezmoi to ignore every file of the repo that is not a dotfile, such as the package files, `node_modules`, the Makefile, `AGENTS.md`, `docs`, and the tests, so that no dev file lands in my home folder.
 US-41. As KC, I want machines on the gate with the admin bypass of its branch protection left on, so that chezmoi's auto-push and the hourly sync can still push to main.
 US-42. As KC, I want each ticket to carry the Jira component of the repo it changes, `agent-workflow` or `machines`, so that a loop run in one repo takes only that repo's tickets.
@@ -98,7 +101,6 @@ US-47. As the maintainer, I want every document that names `~/.local/share/chezm
 US-48. As KC, I want a bot to open a pull request when a pinned tool has a new release, so that bumps need no memory. Later: US-23 shows the bumps first, and the bot is a new tool.
 US-49. As KC, I want the restic, B2, healthchecks, and switchboard secrets in the injector, so that every secret lives in one place. Later: a backup must run when Bitwarden is unreachable, and the switchboard token is made on the T14 and pasted into ElevenLabs.
 US-50. As KC, I want GitHub Actions to read secrets with OIDC and no stored token, so that no long-lived token sits in GitHub. Later: the Bitwarden action documents only a stored machine token.
-US-13. As KC, I want each Sessions row to show the server state, the open chats, the older version with its restart button, and needs trust as today, so that I manage Remote Control servers from the phone as today. Later: T3 Code is the control surface, so the start page keeps only each row's name, pin, and switch.
 
 ## Implementation Decisions
 
@@ -135,7 +137,9 @@ US-13. As KC, I want each Sessions row to show the server state, the open chats,
 ### The start page and machine-status
 
 - Each is one `.ts` file with only `node:` imports and erasable syntax, run by Node's built-in type stripping. machines gets dev-only `package.json` entries for TypeScript, `@types/node`, oxlint, and Vitest. `tsc --noEmit` runs with `erasableSyntaxOnly`.
-- The start page keeps every route, port 8780, the probes, the TTLs, and the env vars that the tests set. `index.html` does not change.
+- The start page keeps every route but `/api/sessions` and the session actions, and it keeps port 8780, the probes, the TTLs, and the env vars that the tests set.
+- `index.html` loses the Sessions section, the trust dialog, and the viewport-segments layout, so the tiles wrap across the Duo fold. A T3 Code tile comes first, owns the `T3 Code` pages row, and shows only its health dot, since whether T3 Code has a stable API for a live fact is UNKNOWN. The machines README's Sessions paragraph goes in the same pull request, and the switch-over deletes `~/.local/state/start-page/pins.json` on the T14.
+- `claude-rc@agent-workflow` stays enabled as the fallback door, and every other `claude-rc@` unit stays off. A chat there starts another repo's server with `systemctl --user start claude-rc@<repo>`.
 - machine-status keeps its flags, its output lines, its cache, its UNKNOWN rule, and its healthchecks slugs. It finds the chezmoi source with `chezmoi source-path`, as today, so the move of the source needs no change in it.
 - A two-line shell shim on PATH runs each file, so `machine-status` stays a command and the units keep their names.
 - `start-page.service`, `machine-status.service`, and the Mac launchd plist run Node through the mise shims.
@@ -148,7 +152,7 @@ US-13. As KC, I want each Sessions row to show the server state, the open chats,
 - No global Python pin. uv installs the Python that each project names, and the T14's system `python3` keeps the apt packages that depend on it.
 - No Playwright pin. Each repo's lockfile pins Playwright, and Playwright installs the browsers of that version.
 - mise's shim folder goes first on PATH in `.zshenv`, `environment.d`, each user unit, and the launchd plist. Shims install a missing version on first use, and the hourly job runs `mise install` so a new pin does not wait for a first use.
-- Claude Code: `config/settings.json` sets `DISABLE_UPDATES` to `1` in `env`, so only a pin bump changes the version. The native install on the T14 and the Homebrew cask on the Mac are removed once the pinned `claude` runs. The start page's older-version row now appears only after a pin bump, and its restart button stays.
+- Claude Code: `config/settings.json` sets `DISABLE_UPDATES` to `1` in `env`, so only a pin bump changes the version. The native install on the T14 and the Homebrew cask on the Mac are removed once the pinned `claude` runs. A running Remote Control server keeps the version it started with, so a pin bump ends with `systemctl --user restart claude-rc@agent-workflow` when that server has no open chat.
 - `packages.yaml` drops `uv` and `gitleaks` from Homebrew, and `.chezmoiexternal.toml.tmpl` drops gitleaks. The apt `nodejs` stays, because the npm install of `@bitwarden/cli` uses it. `10-packages` never removes a package, so a computer keeps what it has.
 - `machine-status --full` prints the output of `mise outdated --global` as observations, with no alert. "Show outdated tool versions", https://mise.jdx.dev/cli/outdated.html.
 
@@ -206,7 +210,7 @@ The ported tests keep today's margins, such as a 0.5 second filler against a 2 s
 | A request that hangs up mid-answer leaves no error in the output                                                  | US-10                             |
 | A `SIGTERM` during an ask answers new requests with 503 and exits after the ask ends                              | US-51                             |
 | The 20-run repeat of the switchboard suite                                                                        | US-43                             |
-| Each ported start page test: routes, Sessions rows, actions                                                       | US-12, US-16, US-44               |
+| Each ported start page test: routes and tiles, with the T3 Code tile first. The Sessions tests are deleted        | US-12, US-16, US-44, US-53        |
 | Each ported pages test: unit, port, serve mapping, checkout and copy drift                                        | US-12, US-44                      |
 | Each ported machine-status test: summary, full report, ping, sync rules, UNKNOWN lines                            | US-14, US-15, US-16, US-23, US-44 |
 | Each ported Mac backup test                                                                                       | US-44                             |
@@ -226,6 +230,7 @@ The ported repo checks of agent-workflow are their own proof for US-30. US-11, U
 - The loop, except its secret source and the cross-repo blocker of US-46. Technical. The gate spec.
 - The backup scripts, the statusline, and the notify script. Technical. They stay shell. None planned.
 - Feature candidate generation. User-visible. Dropped by KC. None planned.
+- Sessions rows on the start page, with their state, open chats, older version, needs trust, pin, and switch. User-visible. Dropped by KC: T3 Code is the way into sessions, and `claude-rc@agent-workflow` is the fallback door. None planned.
 
 ## Further Notes
 
@@ -262,12 +267,12 @@ An agent does the rest: the Jira components through the Jira API (Jira is alread
 | Claude Code from mise's `claude` tool, updates off         | KC's decision; mise has the tool, and Claude Code has the off switch                                              | `registry/claude.toml` in jdx/mise, first backend `aqua:anthropics/claude-code`, then `http:claude` from Anthropic's release bucket; `DISABLE_AUTOUPDATER` only stops the background check, and `claude update` still works; `DISABLE_UPDATES` blocks every update, https://code.claude.com/docs/en/setup, read 2026-10-29 |
 | No global Python pin                                       | A mise `python3` shim first on PATH would hide the apt Python packages on the T14                                 | machines `.chezmoidata/packages.yaml`: `python3-openpyxl`, `python3-pil`; uv already pins per project                                                                                                                                                                                                                      |
 | No Playwright pin in mise                                  | The regressions came from dependency bumps, which the lockfile and the gate control, not from the computers       | Pitchridge commit `0edec7a` "the regressions of the WorkOS SDK 10.6 and Playwright 1.64 updates", after Dependabot PRs #185 and #192                                                                                                                                                                                       |
-| The amber Sessions rows are not drift between computers    | The row compares a running server with the installed version on the same computer                                 | machines `executable_start-page` `started_with`, `installed`, `row`; README Sessions paragraph                                                                                                                                                                                                                             |
 | Start page and machine-status stay in machines             | chezmoi deploys them as copies, and the pages registry names machines as their home                               | `.chezmoidata/pages.toml` Start page row; `60-start-page` hashes the server file                                                                                                                                                                                                                                           |
 | One `.ts` file each, run by type stripping                 | No build and no install at run time, so the chezmoi copy model holds                                              | "v23.6.0, v22.18.0: Type stripping is enabled by default", https://nodejs.org/api/typescript.html; `erasableSyntaxOnly`, https://www.typescriptlang.org/docs/handbook/release-notes/typescript-5-8.html                                                                                                                    |
 | machine-status is shell, not Python                        | It is 639 lines of bash with four inline `python3` blocks; the port replaces both                                 | `grep -c python3 dot_local/bin/executable_machine-status` gives 4                                                                                                                                                                                                                                                          |
 | The switchboard keeps `claude -p`                          | The stream-json protocol is what PR #94 proved, and the fake `claude` tests it                                    | `session.py` `TAG`, `--replay-user-messages` in `cli.py`; Agent SDK support for the name and replay is UNKNOWN                                                                                                                                                                                                             |
-| Move the chezmoi source to `~/dev/machines`                | Sessions lists repos in `~/dev`, and `claude-rc@.service` runs in `%h/dev/%i`                                     | README Sessions paragraph; `dot_config/systemd/user/claude-rc@.service` `WorkingDirectory`; `sourceDir`, https://www.chezmoi.io/reference/configuration-file/variables/                                                                                                                                                    |
+| Move the chezmoi source to `~/dev/machines`                | The loop, the worktree sweep, and `claude-rc@.service` work on repos in `~/dev`                                   | This spec's sweep; `dot_config/systemd/user/claude-rc@.service` `WorkingDirectory` `%h/dev/%i`; `sourceDir`, https://www.chezmoi.io/reference/configuration-file/variables/                                                                                                                                                |
+| No Sessions section on the start page                      | KC's decision: T3 Code is the way into sessions, and `claude-rc@agent-workflow` is the fallback door              | machines README, How they connect (machines PR #17)                                                                                                                                                                                                                                                                        |
 | Ignore list covers only non-dot files                      | chezmoi skips dot names in the source                                                                             | "chezmoi ignores all files and directories in the source directory that begin with a `.`", https://www.chezmoi.io/reference/source-state-attributes/                                                                                                                                                                       |
 | Admin bypass stays on in machines                          | Auto-push and the hourly sync push to main as KC                                                                  | `.chezmoi.toml.tmpl` `autoCommit`, `autoPush`; "restrictions ... don't apply to people with admin permissions" by default, https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches                                                 |
 | AW tickets with a repo component                           | machines has no Jira project, and an Epic run must not take another repo's ticket                                 | Gate spec: `loop start` takes `--filter <JQL>`; `docs/agents/issue-tracker.md` bans readiness labels only                                                                                                                                                                                                                  |
