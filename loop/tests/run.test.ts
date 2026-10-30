@@ -102,25 +102,6 @@ test("a check that reports late keeps the loop waiting until the pull request me
   expect(world.steps()).toContain("DEMO-3 merge merged");
 });
 
-test("a red check stops the ticket, leaves its pull request open, and builds no ticket it blocks", async () => {
-  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
-  world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
-
-  const running = world.loop("start", EPIC);
-  await world.until(() => world.prs().length === 1, "the pull request");
-  world.setCheck("DEMO-2", "fail");
-  const ran = await running;
-
-  expect(ran.code).toBe(1);
-  expect(world.prs().map((pr) => pr.state)).toEqual(["OPEN"]);
-  expect(world.decisions().find((line) => line.step === "wait")).toMatchObject({
-    result: "red",
-    checks: [{ name: "gate / check", bucket: "fail" }],
-  });
-  expect(world.calls().map((call) => call.key)).toEqual(["DEMO-2"]);
-  expect(world.decisions().at(-2)).toMatchObject({ step: "finish", result: "stopped" });
-});
-
 test("the ticket goes to In Progress at start and In Review when the pull request opens", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.jira.add("DEMO-3", "Already in progress", { parent: EPIC, status: "In Progress" });

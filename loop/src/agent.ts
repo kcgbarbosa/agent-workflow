@@ -37,13 +37,18 @@ export const SCHEMA = {
 export type Output = { status: "done" | "blocked"; reason: string; decisions: string[]; notes?: string[] };
 
 export type Session = {
-  result: "done" | "blocked" | "error" | "timeout";
+  result: "done" | "blocked" | "error" | "timeout" | "usage-limit";
   session: string | null;
   detail: string;
   output: Output | null;
   cost: number | null;
   usage: unknown;
+  /** At a usage limit, when it resets in epoch seconds, from the run's last rejected `rate_limit_event`. */
+  resets: number | null;
 };
+
+/** The text of a failed run that names a usage limit, as the Python loop matches it. */
+const USAGE_LIMIT = /usage limit|hit your limit|limit reached|rate.?limit/i;
 
 export type Ask = {
   prompt: string;
@@ -128,7 +133,8 @@ export async function ask(request: Ask): Promise<Session> {
     timedOut = true;
     abort.abort();
   }, request.minutes * 60_000);
-  const found: Session = { result: "error", session: request.resume, detail: "", output: null, cost: null, usage: null };
+  const found: Session = { result: "error", session: request.resume, detail: "", output: null, cost: null, usage: null, resets: null };
+  let limited = false;
   try {
     const messages = query({
       prompt: request.prompt,
@@ -150,6 +156,11 @@ export async function ask(request: Ask): Promise<Session> {
     for await (const message of messages) {
       appendFileSync(request.log, JSON.stringify(message) + "\n");
       if ("session_id" in message && message.session_id) found.session = message.session_id;
+      if (message.type === "rate_limit_event") {
+        const info = message.rate_limit_info;
+        if (info.status === "rejected" && info.resetsAt) found.resets = info.resetsAt;
+        continue;
+      }
       if (message.type !== "result") continue;
       found.cost = message.total_cost_usd ?? null;
       found.usage = message.usage ?? null;
@@ -160,6 +171,11 @@ export async function ask(request: Ask): Promise<Session> {
         found.detail = output.reason ?? "";
       } else if (!found.output) {
         found.detail = message.subtype === "success" ? "The agent returned no status." : message.subtype;
+        if (message.is_error) {
+          const text = message.subtype === "success" ? message.result : message.errors.join("\n");
+          if (text) found.detail = text.split("\n")[0] ?? found.detail;
+          limited = (message.subtype === "success" && message.api_error_status === 429) || USAGE_LIMIT.test(text);
+        }
       }
     }
   } catch (error) {
@@ -167,6 +183,8 @@ export async function ask(request: Ask): Promise<Session> {
   } finally {
     clearTimeout(timer);
   }
+  if (!found.output && !limited && !timedOut && USAGE_LIMIT.test(found.detail + "\n" + readFileSync(errors, "utf8"))) limited = true;
+  if (limited && !found.output) return { ...found, result: "usage-limit" };
   if (timedOut && !found.output) {
     return { ...found, result: "timeout", detail: `The agent ran past its limit of ${request.minutes} min.` };
   }
