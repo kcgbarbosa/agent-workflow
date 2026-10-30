@@ -42,10 +42,10 @@ US-51. As KC on a call, I want a stop or restart of the switchboard to refuse ne
 ### The start page and machine-status in TypeScript (Must)
 
 US-12. As KC, I want the start page to serve the same page, and `/api/status`, `/api/pages`, `/api/sessions`, and the session actions to give the same answers, so that `index.html` and my habits do not change.
-US-13. As KC, I want each Sessions row to show the server state, the open chats, the older version with its restart button, and needs trust as today, so that I manage Remote Control servers from the phone as today.
 US-14. As KC, I want `machine-status`, `--refresh`, `--full`, `--ping`, and `--restore-done` to print and report what they do today, with UNKNOWN and the reason where a probe cannot decide, so that the summary and the healthchecks alerts keep working on both computers.
 US-15. As KC, I want the hourly job to sync the dotfiles as today: push when ahead, fast-forward and apply when behind, alert on an unfiled edit or on two-sided commits, so that the move changes no sync rule.
 US-16. As KC, I want the start page and machine-status each to be one TypeScript file that imports only Node built-ins, so that chezmoi still deploys a copy and nothing installs when they run.
+US-52. As KC, I want the hourly job to remove each worktree whose work has merged, so that worktrees from chats and loop runs do not pile up in my repos.
 
 ### One toolchain pin (Must)
 
@@ -98,6 +98,7 @@ US-47. As the maintainer, I want every document that names `~/.local/share/chezm
 US-48. As KC, I want a bot to open a pull request when a pinned tool has a new release, so that bumps need no memory. Later: US-23 shows the bumps first, and the bot is a new tool.
 US-49. As KC, I want the restic, B2, healthchecks, and switchboard secrets in the injector, so that every secret lives in one place. Later: a backup must run when Bitwarden is unreachable, and the switchboard token is made on the T14 and pasted into ElevenLabs.
 US-50. As KC, I want GitHub Actions to read secrets with OIDC and no stored token, so that no long-lived token sits in GitHub. Later: the Bitwarden action documents only a stored machine token.
+US-13. As KC, I want each Sessions row to show the server state, the open chats, the older version with its restart button, and needs trust as today, so that I manage Remote Control servers from the phone as today. Later: T3 Code is the control surface, so the start page keeps only each row's name, pin, and switch.
 
 ## Implementation Decisions
 
@@ -138,6 +139,7 @@ US-50. As KC, I want GitHub Actions to read secrets with OIDC and no stored toke
 - machine-status keeps its flags, its output lines, its cache, its UNKNOWN rule, and its healthchecks slugs. It finds the chezmoi source with `chezmoi source-path`, as today, so the move of the source needs no change in it.
 - A two-line shell shim on PATH runs each file, so `machine-status` stays a command and the units keep their names.
 - `start-page.service`, `machine-status.service`, and the Mac launchd plist run Node through the mise shims.
+- The hourly job sweeps the linked worktrees that `git worktree list` gives for each repo in `~/dev`, except those under `~/.t3/worktrees`, which T3 Code cleans up itself. It removes a worktree and its local branch only when the branch's pull request has merged, the worktree's HEAD is that pull request's head, `git status` in it is empty, and no process has its working directory inside it. A worktree it cannot decide on, such as one whose pull request `gh` cannot read, stays, with an UNKNOWN line and the reason. The summary names each worktree it removed.
 
 ### The toolchain pin
 
@@ -192,26 +194,27 @@ The seams are the ones that exist today, ported:
 
 The ported tests keep today's margins, such as a 0.5 second filler against a 2 second fake answer. Each ported suite passes 20 runs in a row before its pull request merges.
 
-| Test                                                                                    | Stories                           |
-| --------------------------------------------------------------------------------------- | --------------------------------- |
-| The last thing said goes in, and the answer streams back without markup                 | US-5                              |
-| A reply that arrived between turns is said first                                        | US-6                              |
-| A slow answer starts with the filler                                                    | US-1                              |
-| A long turn keeps saying it is still working                                            | US-1, US-4                        |
-| Three retries of the same words make one turn and all hear the answer                   | US-2, US-3                        |
-| The session ID is kept so a restart resumes                                             | US-7                              |
-| A request without the token is refused, and the status needs the token                  | US-8, US-9                        |
-| A request that hangs up mid-answer leaves no error in the output                        | US-10                             |
-| A `SIGTERM` during an ask answers new requests with 503 and exits after the ask ends    | US-51                             |
-| The 20-run repeat of the switchboard suite                                              | US-43                             |
-| Each ported start page test: routes, Sessions rows, actions, older version, needs trust | US-12, US-13, US-16, US-44        |
-| Each ported pages test: unit, port, serve mapping, checkout and copy drift              | US-12, US-44                      |
-| Each ported machine-status test: summary, full report, ping, sync rules, UNKNOWN lines  | US-14, US-15, US-16, US-23, US-44 |
-| Each ported Mac backup test                                                             | US-44                             |
-| A run under a fake `bws` gives the agent the secrets, and the watch page masks them     | US-33, US-36, US-45               |
-| `loop start` refuses with no token file and with a missing name                         | US-35                             |
-| An old `[secrets]` entry with `item` and `field` loads with a warning                   | US-34, US-38                      |
-| A blocker outside the filter that Jira has Done does not hold a ticket                  | US-46                             |
+| Test                                                                                                              | Stories                           |
+| ----------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| The last thing said goes in, and the answer streams back without markup                                           | US-5                              |
+| A reply that arrived between turns is said first                                                                  | US-6                              |
+| A slow answer starts with the filler                                                                              | US-1                              |
+| A long turn keeps saying it is still working                                                                      | US-1, US-4                        |
+| Three retries of the same words make one turn and all hear the answer                                             | US-2, US-3                        |
+| The session ID is kept so a restart resumes                                                                       | US-7                              |
+| A request without the token is refused, and the status needs the token                                            | US-8, US-9                        |
+| A request that hangs up mid-answer leaves no error in the output                                                  | US-10                             |
+| A `SIGTERM` during an ask answers new requests with 503 and exits after the ask ends                              | US-51                             |
+| The 20-run repeat of the switchboard suite                                                                        | US-43                             |
+| Each ported start page test: routes, Sessions rows, actions                                                       | US-12, US-16, US-44               |
+| Each ported pages test: unit, port, serve mapping, checkout and copy drift                                        | US-12, US-44                      |
+| Each ported machine-status test: summary, full report, ping, sync rules, UNKNOWN lines                            | US-14, US-15, US-16, US-23, US-44 |
+| Each ported Mac backup test                                                                                       | US-44                             |
+| The sweep removes a merged, clean worktree, and keeps a dirty, unmerged, or busy one, and one it cannot decide on | US-52                             |
+| A run under a fake `bws` gives the agent the secrets, and the watch page masks them                               | US-33, US-36, US-45               |
+| `loop start` refuses with no token file and with a missing name                                                   | US-35                             |
+| An old `[secrets]` entry with `item` and `field` loads with a warning                                             | US-34, US-38                      |
+| A blocker outside the filter that Jira has Done does not hold a ticket                                            | US-46                             |
 
 The ported repo checks of agent-workflow are their own proof for US-30. US-11, US-17 to US-22, US-24 to US-29, US-31, US-32, US-37, and US-39 to US-42 are proved by real use: the first call after the cutover, the first `chezmoi apply` on each computer, the first commit in each repo, and the first gate run in machines. Review checks US-47.
 
