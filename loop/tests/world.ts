@@ -1,7 +1,8 @@
 // One scenario's world: a git repo with a bare origin, the fake Jira, the fake `gh`, the fake `claude`, and
 // the loop's own checkout with an origin of its own, all in a temporary folder with no network.
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { get as httpGet } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Line } from "../src/log.ts";
@@ -13,6 +14,12 @@ const FAKES = resolve(import.meta.dirname, "fakes");
 export const EPIC = "DEMO-1";
 
 export type Ran = { code: number; stdout: string; stderr: string };
+
+export type Watching = {
+  url: string;
+  get(path: string, host?: string): Promise<{ status: number; body: any }>;
+  close(): Promise<void>;
+};
 
 export type PullRequest = {
   number: number;
@@ -158,6 +165,55 @@ ${extra}`;
         done({ code, stdout, stderr });
       });
     });
+  }
+
+  /** Starts `loop watch` on a free port, and returns once it serves. */
+  async watch(): Promise<Watching> {
+    const child = spawn(LOOP, ["watch", "--repo", this.repo], { env: { ...this.env, LOOP_WATCH_PORT: "0" } });
+    const url = await new Promise<string>((done, fail) => {
+      let output = "";
+      child.stdout.on("data", (data: Buffer) => {
+        output += data;
+        const found = /serves the demo runs at (http:\/\/127\.0\.0\.1:\d+\/)/.exec(output);
+        if (found) done(found[1]!);
+      });
+      child.stderr.on("data", (data: Buffer) => (output += data));
+      child.once("close", (code) => fail(new Error(`loop watch exited with ${code}: ${output}`)));
+    });
+    // `fetch` sets the Host header itself, and the page's answer depends on it.
+    const get = (path: string, host = "localhost") =>
+      new Promise<{ status: number; body: any }>((done, fail) => {
+        const request = httpGet(url + path.replace(/^\//, ""), { headers: { host } }, (response) => {
+          let text = "";
+          response.on("data", (data: Buffer) => (text += data));
+          response.on("end", () =>
+            done({ status: response.statusCode ?? 0, body: response.headers["content-type"]?.includes("json") ? JSON.parse(text) : text }),
+          );
+        });
+        request.once("error", fail);
+      });
+    const close = () =>
+      new Promise<void>((done) => {
+        if (child.exitCode !== null) return done();
+        child.once("close", () => done());
+        child.kill("SIGTERM");
+      });
+    return { url, get, close };
+  }
+
+  /** Writes a recorded decisions log for the run. */
+  record(lines: object[], run = EPIC): void {
+    mkdirSync(join(this.state, run), { recursive: true });
+    const start = Date.parse("2026-10-20T10:00:00Z");
+    const text = lines.map((line, index) => JSON.stringify({
+      time: new Date(start + index * 60_000).toISOString().replace(/\.\d+Z$/, "+00:00"),
+      epic: run,
+      commit: null,
+      session: null,
+      detail: "",
+      ...line,
+    }) + "\n");
+    writeFileSync(join(this.state, run, "decisions.jsonl"), text.join(""));
   }
 
   /** Waits until the test's condition holds, as the loop runs beside it. */
