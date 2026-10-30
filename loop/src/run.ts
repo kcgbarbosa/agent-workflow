@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { ask, type Session } from "./agent.ts";
+import { ask, type Meter, type Session } from "./agent.ts";
 import type { Config } from "./config.ts";
 import { git, slug } from "./git.ts";
 import * as github from "./github.ts";
@@ -36,6 +36,8 @@ const SPARE_SLOTS = 8;
 const PUBLISHED_PORT = /:(\d+)(?:-(\d+))?->/g;
 
 const USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work.";
+// The plan meter line of a running agent comes at most this often.
+const METER_MS = 60_000;
 
 const STUCK_COMMENT = "The loop stopped this ticket.";
 
@@ -69,6 +71,8 @@ export class Run {
   private readonly home: string;
   readonly log: Log;
   private epic: string | null = null;
+  /** The summary of the Epic or ticket the run started with, for the watch page. */
+  private summary: string | null = null;
   private readonly merged = new Set<string>();
   private readonly byKey = new Map<string, Ticket>();
   /** The pull request each ticket opened in this run and that has not merged, which a dependent stacks on. */
@@ -97,7 +101,9 @@ export class Run {
   /** Builds the frontier until no ticket is left to start, and returns the exit code. */
   async run(): Promise<number> {
     const input = "key" in this.target ? this.target.key : `--filter ${this.target.filter}`;
-    this.log.write(this.name, "start", "ok", { detail: this.config.mainBranch, input });
+    // The watch page tells a running run from the pid, and two runs apart from the setup.
+    const setup = { model: this.config.agentModel, effort: this.config.agentEffort, parallel: this.config.parallel };
+    this.log.write(this.name, "start", "ok", { detail: this.config.mainBranch, input, pid: process.pid, setup });
     const tickets = await this.tickets();
     for (const ticket of tickets) this.byKey.set(ticket.key, ticket);
     await git(this.config.repo, "fetch", "--prune", "--quiet", "origin");
@@ -112,6 +118,7 @@ export class Run {
     const states = new Map(tickets.map((ticket) => [ticket.key, this.state(ticket)]));
     this.log.write(this.name, "frontier", "ok", {
       detail: tickets.map((ticket) => `${ticket.key} ${states.get(ticket.key)}`).join(", "),
+      summary: this.summary,
       tickets: tickets.map((ticket) => ({
         key: ticket.key,
         summary: ticket.summary,
@@ -178,6 +185,7 @@ export class Run {
   private async tickets(): Promise<Ticket[]> {
     if ("filter" in this.target) return this.jira.search(this.target.filter);
     const ticket = await this.jira.ticket(this.target.key);
+    this.summary = ticket.summary;
     if (ticket.issueType === "Epic") {
       this.epic = ticket.key;
       return this.jira.search(`parent = ${ticket.key} ORDER BY key ASC`);
@@ -343,6 +351,7 @@ export class Run {
         log: nextLog(runDir),
         minutes: this.config.agentTimeoutMinutes,
         stateDir: this.config.stateDir,
+        meter: this.meterLogger(key),
       });
       this.log.write(key, "agent", session.result, {
         commit: await git(worktree, "rev-parse", "HEAD"),
@@ -350,10 +359,24 @@ export class Run {
         detail: session.detail,
         cost: session.cost,
         usage: session.usage,
+        plan: session.plan,
       });
       if (session.result !== "usage-limit" || !(await this.pause(key, session.resets))) return session;
       if (session.session) prompt = USAGE_RESUME_PROMPT;
     }
+  }
+
+  /** Logs the plan meter while an agent runs, when the reading changed, at most once a minute. */
+  private meterLogger(key: string): (reading: Meter) => void {
+    let last = "";
+    let at = 0;
+    return (reading) => {
+      const text = JSON.stringify(reading);
+      if (text === last || Date.now() - at < METER_MS) return;
+      last = text;
+      at = Date.now();
+      this.log.write(key, "meter", "read", { meter: reading });
+    };
   }
 
   /**
