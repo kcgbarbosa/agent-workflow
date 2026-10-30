@@ -1,4 +1,4 @@
-// Reads `loop.toml`. A key the Python loop knew and this loop dropped warns and is ignored, so an old
+// Reads `loop.toml`. A key the old loop knew and this loop dropped warns and is ignored, so an old
 // file still loads. Any other unknown key refuses the file, as a typo would otherwise pass unseen.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -164,6 +164,21 @@ class Table {
 
 export function stateDirOf(name: string): string {
   return join(homedir(), ".local", "state", `${name}-loop`);
+}
+
+/** The `name` of `loop.toml` alone, with no check of the other keys, so a key that only newer code knows
+ * reaches the newer code that `loop start` runs in its unit.
+ */
+export function peek(repo: string): string {
+  const path = join(repo, FILE);
+  let data: Record<string, unknown>;
+  try {
+    data = parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new ConfigError(`${path}: ${(error as Error).message}`);
+  }
+  if (typeof data.name !== "string" || !data.name) throw new ConfigError(`${path}: name is missing`);
+  return data.name;
 }
 
 export function load(repo: string): Config {

@@ -28,7 +28,7 @@ test("a red gate resumes the agent with the failing job's log tail and the revie
   });
   world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { write: { "login.txt": "fixed\n" }, commit: "fix(DEMO-2): fix the login" }] });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   const [build, fix] = world.calls();
@@ -55,7 +55,7 @@ test("a ticket still red after the attempt limit is flagged with the reason and 
   world.verdicts({ "DEMO-2": "fail" });
   world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { write: { "login.txt": "fixed\n" } }] });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code).toBe(1);
   const issue = world.jira.issues.get("DEMO-2")!;
@@ -77,7 +77,7 @@ test("stuck tickets in a row as long as the circuit breaker start no new ticket"
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC });
   world.verdicts({ "DEMO-2": "fail" });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code).toBe(1);
   expect(world.calls().map((call) => call.key)).toEqual(["DEMO-2"]);
@@ -95,7 +95,7 @@ test.each([
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
   world.verdicts({ "DEMO-3": "pass" });
 
-  const running = world.loop("start", EPIC);
+  const running = world.loop("run", EPIC);
   await world.until(() => world.steps().includes("DEMO-3 wait green"), "the stacked pull request's green checks");
   const [base, stacked] = world.prs();
   expect(stacked!.baseRefName).toBe(base!.headRefName);
@@ -122,7 +122,7 @@ test("a usage limit pauses the run, and the run resumes the session when the lim
   // Reset 59 s ago, so the run resumes a second after the limit, a minute past the reset.
   world.plan({ "DEMO-2": [{ limit: { resetsIn: -59 } }, { write: { "login.txt": "login\n" } }] });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   const [limited, resumed] = world.calls();
@@ -144,7 +144,7 @@ test("a usage limit that resets past the longest wait stops the run", async () =
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC });
   world.plan({ "DEMO-2": [{ limit: { resetsIn: 7 * 3600 } }] });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code).toBe(1);
   expect(world.calls().map((call) => call.key)).toEqual(["DEMO-2"]);
@@ -162,7 +162,7 @@ test("two tickets build at the same time, each on its own stack slot", async () 
     "DEMO-3": [{ meet: "DEMO-2", write: { "logout.txt": "logout\n" } }],
   });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   const calls = world.calls().sort((a, b) => a.key.localeCompare(b.key));
@@ -179,7 +179,7 @@ test("a slot whose port another Compose project holds moves to a spare slot", as
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   expect(world.calls().map((call) => call.port)).toEqual(["3030"]);
@@ -193,7 +193,7 @@ test("a ticket with no free slot is stuck with the container that holds its port
   world.containers(["other\tother-web-1\t0.0.0.0:3000-3200->3000-3200/tcp"]);
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code).toBe(1);
   expect(world.calls()).toEqual([]);
