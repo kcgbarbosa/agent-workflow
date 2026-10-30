@@ -1,12 +1,12 @@
 ---
 name: setup-loop
-description: Set up the deterministic loop in a repo, a script that builds an Epic's tickets with agents and lands only what passes its gates.
+description: Set up the deterministic loop in a repo, a script that turns each ticket of an Epic into a pull request that merges when the shared merge gate passes.
 disable-model-invocation: true
 ---
 
 # Setup loop
 
-The **loop** is a script that builds one Epic unattended. The script makes every decision: which ticket runs next, whether a ticket passed, what lands on the Epic branch. Agents only implement tickets.
+The **loop** is a script that builds one Epic unattended, one pull request per ticket. The script decides which ticket runs next, and the shared merge gate decides whether it passed. Agents only implement tickets.
 
 [loop.md](loop.md) holds the fixed design and names the settings each repo fills in. [values.md](values.md) says how to find and choose each value, with the check that shows it is wrong. This skill fills in the settings for the current repo and plans the build.
 
@@ -17,7 +17,7 @@ The **loop** is a script that builds one Epic unattended. The script makes every
 Find the facts behind every settings section of loop.md yourself. Read the Find paragraph of each section in values.md, and look at:
 
 - the issue tracker doc (`docs/agents/issue-tracker.md`) and the children of a real Epic, to see how blocking edges are stored
-- the Makefile, package scripts, and CI workflows, for the gate commands
+- the Makefile, package scripts, and CI workflows, for the gate
 - Compose files and dev server configs, for fixed ports and the test database
 - the frontend layout, for the UI paths
 - the auth flow, for how a headless browser can sign in as each role
@@ -54,7 +54,7 @@ Done when the user has approved each file and it is written.
 
 List the tickets that build the loop in this repo. Each setting the repo does not support yet becomes a ticket:
 
-- prefactors: per-worktree ports, the same test database as production, seed data, per-role sign-in, the UI review skill, the browser MCP config
+- prefactors: the shared merge gate through `/setup-repo`, per-worktree ports, the same test database as production, seed data, per-role sign-in, the browser tests and their screenshot diffs
 - a `make loop` target, or the repo's equivalent, that runs `loop start`
 - human tickets: host prerequisites, tracker automation, test accounts, secrets
 - doc tickets for anything step 3 did not cover

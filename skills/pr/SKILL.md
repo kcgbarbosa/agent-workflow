@@ -12,6 +12,8 @@ metadata:
 Use this template for writing the PR body:
 
 ```markdown
+[<KEY>](<ticket link>): <ticket summary>. Spec: [<spec path>](<spec link>)
+
 ## Summary
 
 <diagram, diff-sketch, or tree>
@@ -35,6 +37,12 @@ Use this template for writing the PR body:
 ## Sections
 
 Skip all preambles and keep prose brief. Use the user's domain language from `GLOSSARY.md`.
+
+The body holds the ticket, the spec, the summary, the evidence, and the merge danger, and no list of decisions. An open question goes on the ticket, where KC answers it. In a pull request, a list of decisions reads as a list of blockers.
+
+### Ticket and spec
+
+Link the ticket and the spec section it builds, so the reviewer, and the gate's review, read what the change was asked to do. Leave out a part the change has none of.
 
 ### Summary
 

@@ -25,8 +25,7 @@ A person can also ask a remote session on the host to run it. The run is a syste
 
 **Choose.**
 
-- `in_progress` and `landed` default to `In Progress` and `In Review`. The landed status must mean "built, waiting for review", never the done status. The work is on the Epic branch, not on `main`, until a person merges the Epic PR.
-- `name_landed_keys_only = true` when the tracker's automation closes each issue that a merged pull request names, or a CI check fails a pull request that names a key that did not land. Without it, the Epic PR names a ticket that did not land, and a merge closes it by mistake. With no such automation, leave it `false`.
+- `in_progress` and `landed` default to `In Progress` and `In Review`. The landed status means "the pull request is open", never the done status, because the work reaches `main` only when the gate passes and the pull request merges.
 - The account that signs in is the one whose name shows on the loop's comments. It needs permission in the project to browse, comment, edit, transition, and attach files. Make its API token in the Atlassian account settings, under Security, API tokens, with the plain "Create API token" action. A token "with scopes" does not work, because the adapter uses basic auth on the site URL.
 
 **Check.**
@@ -38,7 +37,7 @@ A person can also ask a remote session on the host to run it. The run is a syste
 
 ## Status and stuck marker
 
-**Choose.** The loop sets the two statuses of Tracker and flags a stuck ticket. The tracker's automation sets Done, when the pull request that names the key merges into `main`. Where the Epic PR closes the Epic and its children at once, one automation rule on the Epic's Done does it. In Jira, a rule that another rule's change must start needs the setting that lets other rules trigger it. Priority, labels, and sprints stay with a person, because the loop never reads them.
+**Choose.** The loop sets the two statuses of Tracker, flags a stuck ticket, and sets the Epic to `Done` when its last ticket merges. The tracker's automation sets a ticket's Done, when the pull request that names the key merges into `main`. In Jira, a rule that another rule's change must start needs the setting that lets other rules trigger it. Priority, labels, and sprints stay with a person, because the loop never reads them.
 
 **Check.** A flagged ticket stands out on the board the team uses. If it does not, add the flag to the board's card layout, because it is the only sign of a stuck ticket there.
 
@@ -58,55 +57,25 @@ Write the rule in the issue tracker doc, so `to-tickets` follows it:
 
 **Find.** The issue tracker doc for the key format, the commit lint config, the CI checks on pull request titles and keys, and the merge strategy of the repo.
 
-**Choose.** The key is the commit scope, as in `feat(TIDE-12): add the tide table`. The script names each ticket branch `feat/TIDE-12-<slug>`, or `fix/` for a Bug. Set `main_branch` to the branch the Epic PR targets when it is not `main`.
+**Choose.** The key is the commit scope, as in `feat(TIDE-12): add the tide table`. The script names each ticket branch `feat/TIDE-12-<slug>`, or `fix/` for a Bug. Set `main_branch` to the branch each pull request targets when it is not `main`.
 
 **Check.** The commit lint accepts a scope in capitals with digits and a hyphen. Many lint presets force a lowercase scope, and then every commit of the ticket agent fails its hook.
 
-## Gates
+## Gate
 
-**Find.** The Makefile, the package scripts, and the CI workflows. The gate commands are the ones CI runs.
-
-**Choose.**
-
-- The **ticket gate** is the fast part: lint, type check, and the tests that a ticket's change can break. A ticket reruns it after every fix attempt.
-- The **merge gate** is what CI runs on a pull request: the ticket gate plus the slow parts, such as end-to-end tests. It runs once per landing, one landing at a time, on the Epic branch. Making it the same command as CI means a green Epic branch is a green CI.
-- A gate is an argument list with no shell. Put the steps behind one make target, package script, or script per gate, so the list stays short.
-- Typical commands by stack:
-
-| Stack      | Lint and types                          | Tests           | Slow part                         |
-| ---------- | --------------------------------------- | --------------- | --------------------------------- |
-| Python, uv | `uv run ruff check`, `uv run mypy`      | `uv run pytest` | integration tests against a stack |
-| Node       | `npm run lint`, `npm run typecheck`     | `npm test`      | `npm run build`, browser tests    |
-| Go         | `go vet ./...`                          | `go test ./...` | `go build ./...`                  |
-| Rust       | `cargo clippy -- -D warnings`           | `cargo test`    | `cargo build --release`           |
-| Gradle     | `./gradlew check` covers lint and tests |                 | `./gradlew build`                 |
-| A Makefile | `make lint`                             | `make test`     | `make check` runs all three       |
-
-- `timeout_minutes` defaults to 60. Set it to about twice the longest run of the merge gate from a cold start, with new volumes and no cache. A limit that is too low wastes fix attempts on a slow gate. A limit that is too high hides a hung process.
-- `agent_hint` is one line for what the gate command does not say, such as "`make test` starts the database of this worktree's stack". Put in it only what an agent cannot find by looking.
-
-**Check.**
-
-- Run both gates on a clean checkout of the main branch. A red main sticks every ticket, because each one fails its merge gate.
-- Run the ticket gate twice in a row. A gate that passes once and fails once spends the fix attempts of a ticket on noise.
-- After a gate, `git status` is clean. A gate that rewrites tracked files, such as a formatter, fails the next check, which refuses a tree with changes not committed.
-- A gate needs no sign-in and no prompt. The script gives a gate no secret (Secrets). A test that needs a key uses a development default, except the acceptance tests, whose make target reads the stack's secrets from the secrets file through a repo script (Acceptance tests).
-- The merge gate runs the acceptance suite after the fast checks, such as `make check acceptance`.
-
-## Acceptance tests
-
-**Find.** `docs/agents/testing.md`, which `/setup-repo` writes. It names the acceptance suite, its command for one ticket, and its list command.
+**Find.** The Makefile, the package scripts, and the CI workflows, and whether the repo already calls the shared merge gate in `.github/workflows/`.
 
 **Choose.**
 
-- `list` is the list command of `docs/agents/testing.md`, with `{key}` for the ticket, such as `["make", "acceptance-list", "ticket={key}"]`. It prints one title per line and needs no stack.
-- The `to-tickets` skill heads the list "What the user sees", which is the heading the loop reads.
-- A repo whose `docs/agents/testing.md` says "No acceptance suite" leaves the table out.
+- The shared merge gate checks every pull request, and the loop runs no gate of its own. `/setup-repo` puts the repo on it: the caller workflow, the `check` and `check-docs` make targets, the toolchain file, and the branch protection.
+- `[review]` `enabled` turns the gate's second-model review on or off. Off suits a small private repo. `model`, `effort`, and `skip` override the gate's defaults.
+- `agent_hint` is one line for what the gate does not say, such as "`make test` starts the database of this worktree's stack". Put in it only what an agent cannot find by looking.
 
 **Check.**
 
-- Run the list command for a landed ticket. It prints the title of each of its tests, and nothing else.
-- Each title matches a line of that ticket's "What the user sees", word for word.
+- `make check` passes on a clean checkout of the main branch. A red main makes every ticket's gate red, and each one spends its fix attempts on it.
+- Run `make check` twice in a row. A check that passes once and fails once spends the fix attempts of a ticket on noise.
+- An old `loop.toml` with `[gates]`, `[acceptance]`, `[demo]`, or `[ui]` `skill` warns at each start. Delete those keys.
 
 ## Stack per worktree
 
@@ -143,8 +112,8 @@ With `parallel = 2`, the highest slot is 3, so a port moves by at most 30. The b
 
 - Start two stacks at once with different `COMPOSE_PROJECT_NAME` and port values, and see both healthy.
 - Search the tree for each base port. A hit outside the default of an env var is a port that two tickets will collide on.
-- A migration runs from an empty volume to the head. The loop removes a ticket's volume at landing, so the chain must run from the start.
-- The slot ports are free on the host. Slot 1 belongs to every Epic, so a dev server a person left on `base + port_step` blocks the run.
+- A migration runs from an empty volume to the head, because the gate starts each check from one.
+- The slot ports are free on the host. Slot 2 is the first ticket's in every run, so a dev server a person left on `base + 2 x port_step` moves the ticket to a spare slot.
 
 ## UI review
 
@@ -153,9 +122,9 @@ With `parallel = 2`, the highest slot is 3, so a port moves by at most 30. The b
 **Choose.**
 
 - `path` is the one folder prefix that holds the screens. Choose the narrowest folder that holds all of them, because backend code under the prefix starts a review for nothing. Test files never count.
-- The review is a skill of the repo, at `.claude/skills/ui-review/` by default. It runs the ticket's acceptance tests on the real stack with the slot's ports: one test for each line of what the user sees, which taps through the flow as each role. The skill runs the UI review run that `docs/agents/testing.md` names, with the screenshot folder that the loop gives in its prompt, and reads every command from that file. A screenshot of a page as it loads proves nothing about a tap, a search, or a jump, so the review does not take one. It returns each fault with its screenshot. It changes no file. A missing secret, bucket, or seeded file blocks the review, and a step that shows an error screen fails it.
+- The gate's judge reviews the UI, from the screenshot diffs that the repo's browser tests write in the gate's `check` job. `blocking` lists the faults that fail `gate / judge`, and anything else is minor. The browser tests tap through each line of what the user sees as each role. A screenshot of a page as it loads proves nothing about a tap, a search, or a jump.
 - Check at the narrowest supported width, because a layout that fits there usually fits wider. Add a desktop width only when the layout differs. Use Chromium, and add WebKit when users reach the product on Safari or iOS, because WebKit shows faults Chromium hides. Check each language the product ships, because a longer string breaks a layout and a missing key shows. Check as each role that the diff affects, because roles see different screens.
-- The UI review run takes the screenshots and runs the checks that need no eyes, as one script. When it is given no folder and `LOOP_RUN_DIR` is set, its folder is `$LOOP_RUN_DIR/screenshots`, the one the loop attaches to the ticket, so a review that leaves out the folder still saves its screenshots there. Outside the loop, it stops and asks for the folder. The checks are horizontal overflow (`scrollWidth > clientWidth`), console errors, failed requests, and untranslated keys.
+- The browser tests also run the checks that need no eyes: horizontal overflow (`scrollWidth > clientWidth`), console errors, failed requests, and untranslated keys.
 - A script costs no context on a turn. A Playwright MCP server in `.mcp.json` adds its tool list to every turn (Connectors), so add one only for a flow the script cannot cover.
 - Install the browsers on each host, for example with `npx playwright install --with-deps chromium webkit`.
 
@@ -169,15 +138,14 @@ Rules for all three:
 
 - Test users exist only in a non-production environment, one per role, with the least permission that role has. A person creates them, as a human ticket. Their passwords are secrets (Secrets).
 - The sign-in code is development only, and the go-live checklist gets an item that removes or disables it.
-- Storage state files hold live sessions. Write them to a git-ignored folder in the worktree, never to the run folder, because the run folder is shown on the watch page and its screenshots go on the ticket. The review deletes them when it ends.
+- Storage state files hold live sessions. Write them to a git-ignored folder in the worktree, never to the run folder, because the run folder is shown on the watch page. The tests delete them when they end.
 
 Tidepool's example. The app signs in through a hosted page of an identity provider. `scripts/ui-session.py` calls the provider's password sign-in API in the staging environment for the test user of each role, seals the cookie as `/auth/callback` does, and saves `.auth/<role>.json`. The review loads that file into each browser context.
 
 **Check.**
 
 - From a cold shell with no browser profile, the sign-in script writes a session file for each role, and a page that needs a role loads as that role.
-- Run the review by hand on a branch with a small UI change. The screenshot folder holds a screenshot of each step, and the checks print their findings.
-- Run the command for one ticket. It saves no screenshot.
+- Run the browser tests on a branch with a small UI change. The diff folder holds the changed step, and the checks print their findings.
 - Search the run folder for the session files. None is there.
 
 ## Agent
@@ -196,7 +164,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 ## Notifications
 
-**Choose.** The events are fixed: a stuck ticket, the Epic PR opening, and the run stopping early. Use ntfy.sh unless the user runs a server, and then set `notify.url`. The topic is a long random name, for example from `openssl rand -hex 16`, kept in the vault as a secret. Subscribe to it in the ntfy app on the user's phone.
+**Choose.** The events are fixed: a stuck ticket, a pause and a stop, an Epic complete, and the finish. Use ntfy.sh unless the user runs a server, and then set `notify.url`. The topic is a long random name, for example from `openssl rand -hex 16`, kept in the vault as a secret. Subscribe to it in the ntfy app on the user's phone.
 
 **Check.** Post a test message to the topic with `curl -d test https://ntfy.sh/<topic>` and see it on the phone.
 
@@ -217,7 +185,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 **Find.** Which machines can run a loop for hours: an always-on machine suits it best. For each one, read the machine README for how to reach it, what it has installed, and how secrets get there.
 
-**Choose.** List in `tools` each command the gates and the agent call that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `systemd-inhibit`, and `docker` when `[stack]` is set. Each host runs Linux with systemd, and also needs the `loop` command from agent-workflow's `install.sh`, linger on for the user, `bw` for `loop secrets`, `gh` signed in, `claude` at or past the minimum version, Docker Engine running, and the browsers of the UI review.
+**Choose.** List in `tools` each command the agent calls that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `systemd-inhibit`, and `docker` when `[stack]` is set. Each host runs Linux with systemd and Node 22.18 or later, and also needs the `loop` command from agent-workflow's `install.sh`, linger on for the user, `bw` for `loop secrets`, `gh` signed in, Docker Engine running, and the browsers of the browser tests.
 
 **Check.** `loginctl show-user $USER -p Linger` prints `Linger=yes`. Run `loop start` on each host. A missing prerequisite ends the run at once, and `journalctl --user -u loop-<name>-<Epic key>` names every one.
 
@@ -249,12 +217,9 @@ BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
 | The config refuses the file with an unknown key           | A typo in `loop.toml`                                          |
 | The frontier starts a ticket before its blocker           | The link type of the edges, or the Epic children query         |
 | A ticket cannot move to a status                          | `tracker.in_progress`, `tracker.landed`, or the workflow       |
-| The Epic PR names a ticket that did not land              | `name_landed_keys_only`                                        |
-| A gate fails with "address already in use"                | `ports`, `port_step`, or a process left on a slot port         |
-| A gate passes by hand and times out in the loop           | `timeout_minutes`, or a cold start that the gate needs         |
-| A gate passes once and fails once                         | The gate itself. It is flaky, and a fix attempt cannot cure it |
-| A ticket sticks on "changes not committed" after the gate | A gate step that rewrites tracked files                        |
-| A test fails for a missing key in the loop only           | A secret a gate needs. Use a development default               |
-| The UI review is blocked, or saves no screenshots         | The sign-in, the skill, or `LOOP_RUN_DIR`                      |
+| A build fails with "address already in use"               | `ports`, `port_step`, or a process left on a slot port         |
+| A check passes once and fails once                        | The check itself. It is flaky, and a fix attempt cannot cure it |
+| A check fails for a missing key on the gate only          | A secret the check needs. Use a development default            |
+| The judge gets no screenshots                             | The sign-in, the browser tests, or their diff folder           |
 | The watch page shows red tool calls                       | An action that auto mode denies. Plan it as a human step       |
 | The run costs more than the plan allows                   | `effort`, then `parallel`                                      |
