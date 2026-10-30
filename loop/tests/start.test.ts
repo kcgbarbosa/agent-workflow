@@ -101,6 +101,7 @@ test("loop stop ends the run with a stopped line, and the next start goes on wit
   expect(stopped.stdout).toContain(`The loop stopped ${EPIC}. \`loop start ${EPIC}\` goes on with the same tickets.`);
   expect(world.unitAlive(UNIT)).toBe(false);
   expect(world.steps().filter((step) => step.startsWith(`${EPIC} stop`))).toEqual([`${EPIC} stop stopped`]);
+  expect(world.jira.notifications, JSON.stringify(world.decisions().slice(-3))).toContain(`${EPIC} stopped`);
 
   world.plan({});
   expect((await world.loop("start", EPIC)).code).toBe(0);

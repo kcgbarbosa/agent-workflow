@@ -96,19 +96,21 @@ async function run(target: Target, repoArg: string | undefined): Promise<number>
   const secrets = readSecrets(config);
   await awake(config.name, runName(target));
   const loop = new Run(config, secrets, target, { pollSeconds: POLL_SECONDS, meterSeconds: METER_SECONDS });
-  const stop = async () => {
-    loop.log.write(loop.log.run, "stop", "stopped");
-    await endAll();
-    process.exit(143);
+  let stopping: Promise<never> | null = null;
+  const stop = () => {
+    stopping ??= loop.stop().then(() => process.exit(143));
   };
   process.once("SIGTERM", stop);
   process.once("SIGINT", stop);
+  let code: number;
   try {
-    return await loop.run();
+    code = await loop.run();
   } catch (error) {
     loop.log.write(loop.log.run, "stop", "loop-error", { detail: (error as Error).message });
-    return 1;
+    code = 1;
   }
+  // A stop ends the agents, so the run can return before the stop has notified. The stop ends the process.
+  return stopping ?? code;
 }
 
 /** Serves the page until the process stops. It changes nothing the loop reads. */
