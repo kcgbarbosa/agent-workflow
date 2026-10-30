@@ -25,6 +25,7 @@ export type PullRequest = {
   number: number;
   url: string;
   headRefName: string;
+  headRefOid?: string;
   baseRefName: string;
   isDraft?: boolean;
   title: string;
@@ -146,6 +147,11 @@ ${extra}`;
   /** The log of each failed job. */
   jobLog(text: string): void {
     writeFileSync(join(this.fakes, "job-log.txt"), text);
+  }
+
+  /** The checks that auto-merge waits for, as branch protection requires them, even before they report. */
+  required(names: string[]): void {
+    writeFileSync(join(this.fakes, "required.json"), JSON.stringify(names));
   }
 
   /** GitHub leaves the pull requests on a merged branch where they are, as when the repo keeps merged branches. */

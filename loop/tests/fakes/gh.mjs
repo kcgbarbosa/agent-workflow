@@ -6,7 +6,8 @@
 // FAKE_DIR/job-log.txt. GitHub retargets the pull requests on a merged branch to its base, unless
 // FAKE_DIR/no-retarget exists. A new pull request gets the review of FAKE_DIR/reviews.json by ticket key, in
 // the shape the gate's review posts: the findings in the diff as comments, and the others in the body. A draft
-// pull request does not merge, as on GitHub.
+// pull request does not merge, as on GitHub. Auto-merge also waits for each check that FAKE_DIR/required.json
+// names to report, as branch protection's required checks do.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,7 +46,11 @@ const fail = (message, code = 1) => {
   process.exit(code);
 };
 const STATES = { pass: "SUCCESS", fail: "FAILURE", pending: "PENDING", skipping: "SKIPPED", cancel: "CANCELLED" };
-const green = (pr) => pr.checks.length > 0 && pr.checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
+const required = existsSync(join(fakes, "required.json")) ? JSON.parse(readFileSync(join(fakes, "required.json"), "utf8")) : [];
+const green = (pr) =>
+  pr.checks.length > 0 &&
+  pr.checks.every((check) => check.bucket === "pass" || check.bucket === "skipping") &&
+  required.every((name) => pr.checks.some((check) => check.name === name));
 const git = (...command) => execFileSync("git", ["-C", origin, ...command], { encoding: "utf8" }).trim();
 const keyOf = (branch) => /^(?:feat|fix|docs)\/([A-Z][A-Z0-9]*-\d+)-/.exec(branch)?.[1];
 const verdicts = existsSync(join(fakes, "verdicts.json")) ? JSON.parse(readFileSync(join(fakes, "verdicts.json"), "utf8")) : {};

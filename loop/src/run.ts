@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { ask, type Meter, runSetup, type Session } from "./agent.ts";
 import { archive, mdLinks, specLinks } from "./archive.ts";
 import type { Config } from "./config.ts";
-import { git, originUrl, slug } from "./git.ts";
+import { git, gitOk, originUrl, slug } from "./git.ts";
 import * as github from "./github.ts";
 import { endAll, run } from "./spawn.ts";
 import { type Ticket, Jira } from "./jira.ts";
@@ -168,6 +168,8 @@ export class Run {
       this.log.write(key, "start", "merged-before", { pr: pr.url, detail: "Its pull request merged before this run." });
       // A kill between a merge and its retarget leaves a dependent on the merged branch.
       await this.retarget(key, pr.headRefName, pr.baseRefName);
+      // So does a kill before its worktree is removed.
+      await this.removeWorktree(key, join(this.home, "worktrees", key), pr.headRefName);
     }
 
     // Slot 0 is the main checkout and slot 1 stays free, so the tickets take 2 and up.
@@ -377,7 +379,8 @@ export class Run {
       }
 
       // Wait. A stacked pull request that is green waits for its base to merge, then waits on its checks
-      // again with auto-merge on, so a check that turns red after the retarget still gets a fix attempt.
+      // again with auto-merge on, since green so far may predate the review, so a check that turns red after
+      // the retarget still gets a fix attempt. When auto-merge does not turn on, the loop merges on that green.
       let checks: Awaited<ReturnType<Run["wait"]>>;
       for (;;) {
         checks = await this.wait(key, url, autoMerge, commit);
@@ -393,9 +396,12 @@ export class Run {
           this.log.write(key, "base", result, { pr: url, detail: result === "main" ? `${stack.key} merged.` : `${stack.key} did not merge.` });
           if (result !== "main") return "stopped";
         }
-        // Green so far may predate the review, so the next wait lasts until GitHub merges or a check fails.
-        [autoMerge] = await this.autoMerge(url);
-        if (!autoMerge) break;
+        let detail: string;
+        [autoMerge, detail] = await this.autoMerge(url);
+        if (!autoMerge) {
+          this.log.write(key, "auto-merge", "fail", { pr: url, detail });
+          break;
+        }
       }
       if (checks.result === "green") break;
       if (checks.result !== "red" || checks.closed) return "stopped";
@@ -414,7 +420,24 @@ export class Run {
     this.mergedUrls.push(url);
     this.open.delete(key);
     await this.retarget(key, branch, (await github.view(repo, url)).baseRefName);
+    await this.removeWorktree(key, worktree, branch);
     return "merged";
+  }
+
+  /**
+   * Removes a merged ticket's worktree and local branch, so neither piles up on the host. The pull request and
+   * the log keep its history. A ticket that stops keeps both, so a restart resumes on them.
+   */
+  private async removeWorktree(key: string, worktree: string, branch: string): Promise<void> {
+    const repo = this.config.repo;
+    try {
+      if (!existsSync(worktree)) return;
+      await git(repo, "worktree", "remove", "--force", worktree);
+      await gitOk(repo, "branch", "--delete", "--force", branch);
+      this.log.write(key, "worktree", "removed", { detail: worktree });
+    } catch (error) {
+      this.log.write(key, "worktree", "fail", { detail: (error as Error).message });
+    }
   }
 
   /** A run of the head agent, which waits out each usage limit that resets in time and resumes its session. */
