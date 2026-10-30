@@ -1,0 +1,24 @@
+{
+  "name": "loop",
+  "private": true,
+  "description": "The TypeScript loop: each ticket becomes one pull request that merges itself when the gate is green. The Python loop beside it runs until the cutover.",
+  "type": "module",
+  "bin": {
+    "loop": "bin/loop"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "check": "tsc && vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.312",
+    "smol-toml": "1.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}
