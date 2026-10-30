@@ -86,7 +86,7 @@ Settles which MCP servers the agent gets. The script passes no MCP configuration
 
 ### Notifications
 
-Settles the channel, the events, and what a message may contain. `notify.url` is the ntfy server, and the `NTFY_TOPIC` secret is the topic. The events are a stuck ticket, `<KEY> stuck`; a pause, `<run> paused`; a usage limit that stops the run, `<run> stopped at a usage limit`; a stop, `<run> stopped`; an Epic complete, `<Epic key> complete`; and the finish, `<run> finished.` with what it merged and stopped. A message holds keys and statuses only. Anyone who knows the topic can read the messages, so the topic is a secret.
+Settles the channel, the events, and what a message may contain. `notify.url` is the ntfy server, and the `NTFY_TOPIC` secret is the topic. The events are a stuck ticket, `<KEY> stuck`; a pause, `<run> paused`; a usage limit that stops the run, `<run> stopped at a usage limit`; a stop, or a failure of the loop itself, `<run> stopped`; an Epic complete, `<Epic key> complete`; and the finish, `<run> finished.` with what it merged and stopped. A message holds keys and statuses only. Anyone who knows the topic can read the messages, so the topic is a secret.
 
 ### Secrets
 

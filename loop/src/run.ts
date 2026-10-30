@@ -764,6 +764,12 @@ export class Run {
     await this.send(`${this.name} stopped`);
   }
 
+  /** The loop itself failed, such as on a tracker that does not answer. */
+  async failed(error: Error): Promise<void> {
+    this.log.write(this.name, "stop", "loop-error", { detail: error.message });
+    await this.notify(`${this.name} stopped`);
+  }
+
   private async notify(message: string): Promise<void> {
     if (!this.stopping) await this.send(message);
   }
