@@ -236,8 +236,9 @@ def main() -> int:
 
     changed = git("diff", "--name-only", since, head).splitlines()
     to_review = [path for path in changed if not any(fnmatch.fnmatch(path, pattern) for pattern in config.skip)]
-    if not to_review:
-        blocking = last.blocking if last and follows else 0
+    blocking = last.blocking if last and follows else 0
+    # A blocking finding can sit in a skip path, such as a spec, so any change after one gets a model run to clear it.
+    if not to_review and not (blocking and changed):
         print(f"gate / review: nothing to review since {since[:7]} outside the skip paths, so no model runs.")
         if blocking:
             print(f"The last review at {last.head[:7]} has {blocking} blocking findings.")
