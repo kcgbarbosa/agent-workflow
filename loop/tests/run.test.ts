@@ -139,9 +139,11 @@ test("the ticket goes to In Progress at start and In Review when the pull reques
 test("a ticket whose pull request merged before the run counts as done, and its dependent builds", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
-  world.mergedBefore("DEMO-2", "feat/DEMO-2-add-the-login-page");
-  // More pull requests since than one page of `gh pr list` holds.
-  for (let number = 0; number < 250; number++) world.mergedBefore("OTHER-1", `feat/OTHER-${number}-work`);
+  // Its branch is gone and was named from the summary the ticket had then.
+  world.mergedBefore("DEMO-2", "feat/DEMO-2-add-a-sign-in-page", "feat(DEMO-2): Add a sign-in page");
+  // More pull requests since than one page of `gh pr list` holds, one of them for DEMO-20.
+  world.mergedBefore("DEMO-20", "feat/DEMO-20-work");
+  for (let number = 0; number < 250; number++) world.mergedBefore(`OTHER-${number}`, `feat/OTHER-${number}-work`);
   world.verdicts({ "DEMO-3": "pass" });
 
   const ran = await world.loop("start", EPIC);
