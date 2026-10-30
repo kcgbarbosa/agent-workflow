@@ -1,6 +1,13 @@
 {
   "permissions": {
-    "defaultMode": "auto"
+    "defaultMode": "bypassPermissions",
+    "deny": [
+      "mcp__claude_ai_Vercel__create_deployment",
+      "mcp__claude_ai_Vercel__request_promote",
+      "mcp__claude_ai_Vercel__request_rollback",
+      "mcp__claude_ai_Render__trigger_deploy",
+      "mcp__claude_ai_Atlassian_MCP__executeDestructive"
+    ]
   },
   "model": "opus",
   "hooks": {
@@ -58,5 +65,6 @@
   "attribution": {
     "commit": "",
     "pr": ""
-  }
+  },
+  "skipDangerousModePermissionPrompt": true
 }
