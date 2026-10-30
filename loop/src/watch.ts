@@ -86,6 +86,9 @@ export type EventView = {
   warning?: true;
 };
 
+/** A thing that needs KC: its kind, the ticket or the run it is about, why, and the pull request to open. */
+export type NeedsKc = { kind: string; ticket: string; reason: string; pr: string | null };
+
 export type QueueItem = { key: string; state: string; waits_on: string[] };
 
 export type TicketView = {
@@ -121,6 +124,7 @@ export type EpicView = {
   resumes: string | null;
   progress: { complete: number; total: number };
   queue: QueueItem[];
+  needs_kc: NeedsKc[];
   state: string;
   stop_reason: string;
   started: string | null;
@@ -146,6 +150,7 @@ export type HostRun = {
   status: string;
   progress: { complete: number; total: number };
   stuck: number;
+  needs_kc: number;
   working: { key: string; step: string | null }[];
 };
 
@@ -240,6 +245,7 @@ export function hostView(stateDir: string): HostProject[] {
         status: view.status,
         progress: view.progress,
         stuck: view.stats.stuck,
+        needs_kc: view.needs_kc.length,
         working: view.tickets
           .filter((ticket) => ticket.column === "running")
           .map((ticket) => ({ key: ticket.key, step: ticket.step?.name ?? null })),
@@ -306,6 +312,7 @@ export function epicView(stateDir: string, epic: string, running?: boolean): Epi
   let state = starts.length ? "stopped" : "idle";
   let stopReason = starts.length ? "killed" : "";
   let finished = false;
+  let ended = false;
   const byTicket = new Map<string, Line[]>();
   const events: EventView[] = [];
   let resumes: string | null = null;
@@ -314,9 +321,11 @@ export function epicView(stateDir: string, epic: string, running?: boolean): Epi
     const key = ticketKey(line);
     if (key === epic) {
       if (step === "stop") {
+        ended = true;
         state = "stopped";
         stopReason = result;
       } else if (step === "finish") {
+        ended = true;
         state = "stopped";
         stopReason = "";
         finished = true;
@@ -399,6 +408,10 @@ export function epicView(stateDir: string, epic: string, running?: boolean): Epi
     resumes: status === "paused" ? resumes : null,
     progress: { complete, total: columns.length },
     queue: queue(columns),
+    needs_kc: [
+      ...(starts.length && !live && !ended ? [{ kind: "stopped", ticket: epic, reason: stopReason, pr: null }] : []),
+      ...needsKc(columns, everyByTicket),
+    ],
     state,
     stop_reason: stopReason,
     started: runLines.length ? runLines[0].time : null,
@@ -410,6 +423,27 @@ export function epicView(stateDir: string, epic: string, running?: boolean): Epi
     epic_files: runFiles(home, join(home, "runs", epic)),
     epic_agents: agentLogs(join(home, "runs", epic)).map(({ number, updated }) => ({ number, updated })),
   };
+}
+
+/** What needs KC on the tickets, kind by kind: a pull request held by the hold label, a stuck ticket, checks that
+ * timed out, and a pull request that did not merge. A merged ticket needs nothing.
+ */
+function needsKc(tickets: TicketView[], everyByTicket: Map<string, Line[]>): NeedsKc[] {
+  const kinds: Record<string, NeedsKc[]> = { held: [], stuck: [], timeout: [], merge: [] };
+  for (const ticket of tickets) {
+    if (ticket.column === "merged") continue;
+    const lines = everyByTicket.get(ticket.key) ?? [];
+    const pr = ticket.pr?.url ?? null;
+    const add = (kind: string, reason: unknown) => kinds[kind].push({ kind, ticket: ticket.key, reason: String(reason ?? ""), pr });
+    const held = waitAfterPush(lines);
+    if (held?.result === "held") add("held", held.detail);
+    if (ticket.column === "stuck") add("stuck", ticket.stuck_reason);
+    const wait = lines.findLast((line) => line.step === "wait");
+    if (wait?.result === "timeout") add("timeout", wait.detail);
+    const merge = lines.findLast((line) => line.step === "merge");
+    if (merge?.result === "fail") add("merge", merge.detail);
+  }
+  return Object.values(kinds).flat();
 }
 
 /** Whether the ticket's last agent run met a usage limit, with no step after it. */
@@ -819,9 +853,14 @@ function pullRequest(lines: Line[]): PullRequest | null {
   );
   const url = linked ? prOf(linked) : null;
   if (!url) return null;
-  const pushed = lines.findLastIndex((line) => line.step === "push" && line.result === "ok");
-  const wait = pushed < 0 ? undefined : lines.slice(pushed + 1).findLast((line) => line.step === "wait");
+  const wait = waitAfterPush(lines);
   return { url, result: wait ? wait.result : "pending", checks: checksOf(wait) };
+}
+
+/** The ticket's latest wait line after its latest push, if any. */
+function waitAfterPush(lines: Line[]): Line | undefined {
+  const pushed = lines.findLastIndex((line) => line.step === "push" && line.result === "ok");
+  return pushed < 0 ? undefined : lines.slice(pushed + 1).findLast((line) => line.step === "wait");
 }
 
 /** The base a ticket stacks on, from its latest start line of this run. */

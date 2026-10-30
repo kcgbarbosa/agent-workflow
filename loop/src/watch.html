@@ -182,9 +182,10 @@ main.wrap { padding-top: 8px; padding-bottom: 48px; display: grid; gap: 24px; }
 .note { padding: 16px; border-radius: var(--radius-sm); background: var(--ground); color: var(--text-muted); }
 .note b { color: var(--text); font-weight: 550; }
 .list { list-style: none; margin: 0; padding: 0; }
-.list button { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; width: 100%; text-align: left; background: none; border: 0; border-top: 1px solid var(--line); padding: 12px 4px; min-height: 44px; }
-.list li:first-child button { border-top: 0; }
-.list button:hover .what > div:first-child { text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.list button, .list a.row { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; width: 100%; text-align: left; background: none; border: 0; border-top: 1px solid var(--line); padding: 12px 4px; min-height: 44px; }
+.list a.row { color: inherit; text-decoration: none; }
+.list li:first-child button, .list li:first-child a.row { border-top: 0; }
+.list button:hover .what > div:first-child, .list a.row:hover .what > div:first-child { text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
 .list .n { color: var(--text-muted); font-variant-numeric: tabular-nums; text-align: right; }
 .list .what { min-width: 0; }
 .list .what > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -194,7 +195,7 @@ main.wrap { padding-top: 8px; padding-bottom: 48px; display: grid; gap: 24px; }
 /* --- Home: each project on the host and its runs --- */
 .projects { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); align-items: start; }
 @media (max-width: 1023px) { .projects { gap: 16px; } }
-.list.epics button { grid-template-columns: minmax(0, 1fr) auto; }
+.list.epics button, .list.needs a.row { grid-template-columns: minmax(0, 1fr) auto; }
 .textbtn { background: none; border: 0; padding: 0; color: var(--text-muted); text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
 .textbtn:hover { color: var(--text); text-decoration-color: var(--text); }
 .metric .sub a { color: var(--text-muted); }
@@ -342,6 +343,8 @@ const STOPPED = {
   stopped: "loop stop stopped the run. loop start goes on with the same tickets.",
   killed: "The run was killed. loop start goes on with the same tickets, at the step each one stopped in.",
 };
+// The label of each kind of thing that needs KC.
+const NEEDS = { stopped: ["Run stopped", "warn"], held: ["Held", "warn"], stuck: ["Stuck", "bad"], timeout: ["Checks timed out", "bad"], merge: ["Did not merge", "bad"] };
 const WINDOWS = [["five_hour", "5-hour usage", "5-hour window"], ["seven_day", "Weekly usage", "weekly window"]];
 const QUEUE_SHOWN = 3;
 const RUNS_SHOWN = 5;
@@ -528,9 +531,9 @@ function projectPanel(p) {
   const rows = shown.map((r) => {
     const { complete, total } = r.progress;
     const facts = [
+      r.needs_kc ? `${r.needs_kc} ${r.needs_kc === 1 ? "needs" : "need"} you` : "",
       total ? `${complete} of ${plural(total, "ticket", "tickets")} complete` : "No tickets read yet",
       ...r.working.map((w) => `${w.key} in ${stepName(w.step || "agent")}`),
-      r.stuck ? `${r.stuck} stuck` : "",
       `last step ${ago(r.updated)}`,
     ].filter(Boolean);
     return h("li", {}, h("button", { onclick: () => go("", p.name, r.key) },
@@ -570,7 +573,7 @@ function render() {
   else if (ui.page === "tickets") main.replaceChildren(pageHead("Tickets"), ticketList(v));
   else if (ui.page === "diagnostics") renderDiagnostics(v);
   else if (ui.page === "usage") main.replaceChildren(pageHead("Usage"), usageView(v));
-  else main.replaceChildren(pageHead(v.summary || v.key), metrics(v), h("div", { class: "work" }, workQueue(v)));
+  else main.replaceChildren(pageHead(v.summary || v.key), needsPanel(v), metrics(v), h("div", { class: "work" }, workQueue(v)));
   watchTitle();
 }
 
@@ -633,21 +636,31 @@ function usageCard(label, reading) {
       [`${Math.max(0, 100 - used)}% left`, reset].filter(Boolean).join(" · "))]);
 }
 
+// --- Overview: what needs KC ---
+// A row opens its pull request, or the ticket view when it has none. A stopped run opens Diagnostics.
+function needsPanel(v) {
+  const byKey = Object.fromEntries(v.tickets.map((t) => [t.key, t]));
+  const rows = v.needs_kc.map((n) => {
+    const href = n.pr || hashFor(ui.project, ui.epic, n.kind === "stopped" ? "diagnostics" : n.ticket);
+    const summary = n.kind === "stopped" ? "The run" : byKey[n.ticket]?.summary || "";
+    const reason = n.kind === "stopped" ? STOPPED[n.reason] || n.reason : n.reason;
+    return h("li", {}, h("a", { class: "row", href, ...(n.pr ? { target: "_blank", rel: "noopener" } : {}) },
+      h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, n.ticket), " ", summary),
+        reason ? h("div", { class: "rowreason" }, reason) : ""),
+      tile(NEEDS[n.kind] || [n.kind, ""])));
+  });
+  return h("section", { class: "panel" },
+    h("div", { class: "phead" }, h("h2", {}, "Needs you")),
+    h("div", { class: "pbody" }, rows.length ? h("ul", { class: "list needs" }, rows) : h("div", { class: "note" }, "Nothing needs you")));
+}
+
 // --- Overview: the work queue ---
 function workQueue(v) {
   const working = v.tickets.filter((t) => t.column === "running");
   const stopped = v.tickets.filter((t) => t.column === "stopped");
-  const stuck = v.tickets.filter((t) => t.column === "stuck");
   const byKey = Object.fromEntries(v.tickets.map((t) => [t.key, t]));
   const groups = [h("div", { class: "group" }, h("h3", {}, "Currently working"), working.length ? working.map(currentCard) : stateNote(v))];
   if (stopped.length) groups.push(h("div", { class: "group" }, h("h3", {}, "Stopped mid-step"), stopped.map(currentCard)));
-  if (stuck.length) {
-    groups.push(h("div", { class: "group" }, h("h3", {}, "Needs you"), h("ul", { class: "list" }, stuck.map((t) =>
-      h("li", {}, h("button", { onclick: () => go(t.key) }, h("span", { class: "n" }, ""),
-        h("span", { class: "what" }, h("div", {}, h("span", { class: "key" }, t.key), " ", t.summary),
-          h("div", { class: "rowreason" }, t.stuck_reason || "The ticket is flagged in the tracker.")),
-        tile(COLUMN.stuck)))))));
-  }
   if (v.queue.length) {
     groups.push(h("div", { class: "group" }, h("h3", {}, "Up next"), h("ul", { class: "list" }, v.queue.slice(0, QUEUE_SHOWN).map((q, i) => {
       const t = byKey[q.key];

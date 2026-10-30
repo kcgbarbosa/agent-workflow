@@ -219,6 +219,93 @@ test("the steps list holds retarget and worktree lines, and a failed one is a wa
   ]);
 });
 
+/** A ticket's lines up to its open pull request, with no wait yet. */
+function opened(key: string, pr: string): object[] {
+  return [
+    { ticket: key, step: "start", result: "new", detail: `feat/${key}`, slot: 0 },
+    { ticket: key, step: "build", result: "started", attempt: 1 },
+    { ticket: key, step: "build", result: "pass", commit: `${key}-1` },
+    { ticket: key, step: "push", result: "ok", commit: `${key}-1` },
+    { ticket: key, step: "pr", result: "open", commit: `${key}-1`, pr },
+  ];
+}
+
+const HOLD = "The hold label is on. The loop waits until it is not.";
+
+/** A killed run with one ticket of each needs-KC kind: held, stuck with no pull request, timed out, and not merged. */
+function eachKind(): object[] {
+  return [
+    { ticket: EPIC, step: "start", result: "ok", pid: deadPid() },
+    FRONTIER,
+    ...opened("DEMO-2", `${PR}2`),
+    { ticket: "DEMO-2", step: "wait", result: "held", pr: `${PR}2`, checks: [{ name: "hold", bucket: "fail" }], detail: HOLD },
+    { ticket: "DEMO-3", step: "start", result: "new", detail: "feat/DEMO-3", slot: 1 },
+    { ticket: "DEMO-3", step: "build", result: "started", attempt: 1 },
+    { ticket: "DEMO-3", step: "build", result: "blocked", detail: "The spec does not say which page." },
+    { ticket: "DEMO-3", step: "stuck", result: "started", detail: "The agent is blocked: the spec does not say which page." },
+    ...opened("DEMO-4", `${PR}4`),
+    { ticket: "DEMO-4", step: "wait", result: "timeout", pr: `${PR}4`, checks: [], detail: "The checks ran past 60 min." },
+    ...opened("DEMO-5", `${PR}5`),
+    { ticket: "DEMO-5", step: "wait", result: "green", pr: `${PR}5`, checks: [{ name: "gate / check", bucket: "pass" }] },
+    { ticket: "DEMO-5", step: "merge", result: "fail", pr: `${PR}5`, detail: "The pull request did not merge." },
+  ];
+}
+
+test("a log with one ticket of each kind gives the needs-KC rows in order, each with its reason and its link", async () => {
+  world.record(eachKind());
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.needs_kc).toEqual([
+    { kind: "stopped", ticket: EPIC, reason: "killed", pr: null },
+    { kind: "held", ticket: "DEMO-2", reason: HOLD, pr: `${PR}2` },
+    { kind: "stuck", ticket: "DEMO-3", reason: "The agent is blocked: the spec does not say which page.", pr: null },
+    { kind: "timeout", ticket: "DEMO-4", reason: "The checks ran past 60 min.", pr: `${PR}4` },
+    { kind: "merge", ticket: "DEMO-5", reason: "The pull request did not merge.", pr: `${PR}5` },
+  ]);
+});
+
+test("a run with nothing to act on gives an empty needs-KC list", async () => {
+  world.record([...redThenFixed(process.pid), { ticket: "DEMO-3", step: "start", result: "new", detail: "feat/DEMO-3", slot: 1 }]);
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.state).toBe("running");
+  expect(view.needs_kc).toEqual([]);
+});
+
+test("a held pull request released by a later wait leaves the list, and a merged one leaves it", async () => {
+  const held = { ticket: "DEMO-2", step: "wait", result: "held", pr: `${PR}2`, checks: [{ name: "hold", bucket: "fail" }], detail: HOLD };
+  world.record([
+    { ticket: EPIC, step: "start", result: "ok", pid: process.pid },
+    FRONTIER,
+    ...opened("DEMO-2", `${PR}2`),
+    held,
+    { ticket: "DEMO-2", step: "wait", result: "red", pr: `${PR}2`, checks: [{ name: "gate / check", bucket: "fail" }], detail: "Failed: gate / check" },
+    ...opened("DEMO-3", `${PR}3`),
+    { ...held, ticket: "DEMO-3", pr: `${PR}3` },
+    { ticket: "DEMO-3", step: "merge", result: "merged", commit: "m3", pr: `${PR}3` },
+  ]);
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.needs_kc).toEqual([]);
+});
+
+test("the home view counts the needs-KC rows of each run", async () => {
+  world.record(eachKind());
+  world.record([...redThenFixed(process.pid)].map((line) => ({ ...line, ...((line as { ticket: string }).ticket === EPIC ? { ticket: "DEMO-10" } : {}) })), "DEMO-10");
+  watching = await world.watch();
+
+  const { body: home } = await watching.get("/api/home");
+
+  const counts = Object.fromEntries(home[0].runs.map((run: { key: string; needs_kc: number }) => [run.key, run.needs_kc]));
+  expect(counts).toEqual({ [EPIC]: 5, "DEMO-10": 0 });
+});
+
 /** Two runs of the Epic: the first merges one ticket, the second merges two after a red check. */
 function twoRuns(): object[] {
   const agent = (ticket: string, session: string, cost: number, plan: object) => ({
