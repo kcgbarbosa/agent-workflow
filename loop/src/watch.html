@@ -330,9 +330,9 @@ const STATUS = { running: ["Running", "run"], paused: ["Paused", "warn"], comple
 const HEALTH = { "on-track": ["On track", "ok"], attention: ["Needs attention", "warn"], blocked: ["Blocked", "bad"] };
 const COLUMN = { merged: ["Merged", "ok"], running: ["Running", "run"], stopped: ["Stopped", "warn"], stuck: ["Stuck", "bad"], waiting: ["Up next", ""], done: ["Done before this run", "ok"] };
 const QUEUE = { ready: ["Ready", "plain"], waiting: ["Waiting", ""], blocked: ["Blocked", "bad"] };
-const RESULT = { pass: "ok", ok: "ok", done: "ok", fail: "bad", stuck: "bad", error: "bad", "loop-error": "bad", conflict: "bad", timeout: "bad", findings: "warn", "usage-pause": "warn", open: "warn", unfixed: "warn", restart: "warn", green: "ok", red: "bad", merged: "ok", pending: "" };
+const RESULT = { pass: "ok", ok: "ok", done: "ok", fail: "bad", stuck: "bad", error: "bad", "loop-error": "bad", conflict: "bad", timeout: "bad", findings: "warn", "usage-pause": "warn", open: "warn", unfixed: "warn", restart: "warn", green: "ok", red: "bad", merged: "ok", held: "warn", removed: "ok", pending: "" };
 // The label of a pull request's checks, by the result of its latest wait.
-const CHECKS = { pending: "Checks pending", green: "Checks green", red: "Checks red", timeout: "Checks timed out", merged: "Merged" };
+const CHECKS = { pending: "Checks pending", held: "Held", green: "Checks green", red: "Checks red", timeout: "Checks timed out", merged: "Merged" };
 // The check buckets that count as failed.
 const FAILED_BUCKETS = ["fail", "cancel"];
 const STOPPED = {
@@ -420,7 +420,11 @@ function prLink(pr) {
   return h("a", { href: pr.url, target: "_blank", rel: "noopener", onclick: (e) => e.stopPropagation() }, prNumber(pr.url));
 }
 const checksTile = (pr) => tile([CHECKS[pr.result] || pr.result, RESULT[pr.result] || ""]);
-const failedChecks = (pr) => pr.checks.filter((c) => FAILED_BUCKETS.includes(c.bucket)).map((c) => c.name);
+const failedChecks = (pr) => pr.checks.filter((c) => FAILED_BUCKETS.includes(c.bucket));
+// A check's name opens its run on GitHub. A check logged with no link, or a link that is not a web address,
+// shows its name alone.
+const checkName = (c) => /^https?:\/\//.test(c.link || "") ? h("a", { href: c.link, target: "_blank", rel: "noopener", onclick: (e) => e.stopPropagation() }, c.name) : c.name;
+const checkNames = (checks) => checks.flatMap((c, i) => [i ? ", " : "", checkName(c)]);
 
 // --- Routing: #/ is home, then #/<project>/<Epic>/<view or ticket> ---
 function readHash() {
@@ -679,7 +683,7 @@ function currentCard(t) {
       h("dt", {}, "Latest activity"), h("dd", { title: latest ? latest.summary || latest.text : "" },
         latest ? [latest.kind === "tool" ? h("span", { class: "toolname" }, latest.tool) : "", latest.summary || latest.text] : h("span", { class: "muted" }, "No agent output yet")),
       h("dt", {}, "Last agent output"), h("dd", {}, output ? ago(output) : "-"),
-      step.name === "wait" && t.pr ? [h("dt", {}, "Checks"), h("dd", {}, checksTile(t.pr), failedChecks(t.pr).length ? ` ${failedChecks(t.pr).join(", ")}` : "")] : "",
+      step.name === "wait" && t.pr ? [h("dt", {}, "Checks"), h("dd", {}, checksTile(t.pr), failedChecks(t.pr).length ? [" ", ...checkNames(failedChecks(t.pr))] : "")] : "",
       t.stacked_on ? [h("dt", {}, "Stacked on"), h("dd", {}, h("code", {}, t.stacked_on.branch), t.stacked_on.pr ? ` ${prNumber(t.stacked_on.pr)}` : "")] : ""),
     health.reason ? h("div", { class: "why" }, health.reason) : "");
 }
@@ -741,7 +745,8 @@ function renderTicket(v) {
   const facts = [
     ["Tracker status", t.status || "-"],
     ["Depends on", blockers.length ? blockers : "None"],
-    t.pr ? ["Pull request", [prLink(t.pr), " ", checksTile(t.pr), ...t.pr.checks.map((c) => h("div", {}, h("span", { class: "muted" }, `${c.bucket} `), c.name))]] : null,
+    t.pr ? ["Pull request", [prLink(t.pr), " ", checksTile(t.pr), ...t.pr.checks.map((c) => h("div", {}, h("span", { class: "muted" }, `${c.bucket} `), checkName(c)))]] : null,
+    t.auto_merge ? ["Auto-merge", [tile(["Off", "warn"]), " ", t.auto_merge, h("div", { class: "muted" }, "The loop merges it itself on green.")]] : null,
     t.step ? [t.column === "stopped" ? "Stopped in" : "Stage", `${stepName(t.step.name)} · ${since(t.step.since)}${t.step.paused ? " · paused" : ""}`] : null,
     t.last ? ["Last step", `${lastStep(t.last)} · ${ago(t.last.time)}`] : null,
     t.cost ? ["API list price", h("span", { title: "What the API would bill. It is not the plan usage." }, `${money(t.cost)}, not plan usage`)] : null,
@@ -803,7 +808,7 @@ function stepsView(events) {
     h("tr", {},
       h("td", { class: "t" }, clock(e.time)),
       h("td", { class: "k" }, e.ticket),
-      h("td", { class: "s" }, h("b", {}, e.step), tile([e.result, RESULT[e.result] || ""])),
+      h("td", { class: "s" }, h("b", {}, e.step), tile([e.result, e.warning ? "warn" : RESULT[e.result] || ""])),
       h("td", { class: "d" }, e.cost !== undefined ? `${money(e.cost)} API list price · ${e.turns} turns ` : "",
         e.log ? h("a", { href: fileUrl(e.log), target: "_blank" }, "log") : "", " ", e.log ? "" : (e.detail || "").slice(0, 400)))))));
 }
