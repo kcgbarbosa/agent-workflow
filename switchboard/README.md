@@ -10,8 +10,8 @@ iPhone (CarPlay) -> Twilio number -> ElevenLabs agent -> Tailscale Funnel (switc
 
 - ElevenLabs does the speech both ways. Its agent's LLM is a custom LLM: this server, which speaks the OpenAI chat completions API and streams Server-Sent Events.
 - The server keeps one `claude -p` running in stream-json mode, named `switchboard`, in bypass mode. Only the last thing KC said goes in, since the session already holds the conversation. It lives across calls, and a restart resumes it from the ID in `~/.local/state/switchboard/session`.
-- It reaches T3 Code threads with the `t3` command: `t3 thread list`, `show`, `send` and `start`. It sends with `--wait` in the background, and the reply wakes it for a turn of its own. What it says then is read out at the start of KC's next turn on the call.
-- Other sessions reach it with `SendMessage` to `switchboard`. Their messages wake it the same way.
+- It reaches T3 Code threads with the `t3` command: `t3 thread list`, `show`, `send` and `start`. It sends with `--wait` in the background. Whether the reply wakes it for a turn of its own is not verified yet; AW-17's test call checks it. KC can always ask for replies, and it reads the thread.
+- Other sessions reach it with `SendMessage` to `switchboard`. A message wakes it for a turn of its own, and what it says then is read out at the start of KC's next turn on the call.
 - ElevenLabs gives up on a custom LLM that sends nothing for about 4 seconds and sends the same request again, sometimes two at once. So the call hears "One moment..." after 1 second of silence, then "Still working on it..." every 10 seconds. A request with the same words within 30 seconds joins the ask already running instead of starting a second turn. After 45 seconds the call hears that the rest comes when KC asks, and the rest waits for the next turn.
 - `src/switchboard/prompt.md` is what the session is told about the call: how to talk, what it may do, and what waits for a screen.
 
