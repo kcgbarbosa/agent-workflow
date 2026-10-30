@@ -74,6 +74,34 @@ test("the loop waits for the pull request's checks and merges on green", async (
   expect(world.steps().slice(-3)).toEqual(["DEMO-2 merge merged", "DEMO-1 finish ok", "DEMO-1 notify ok"]);
 });
 
+test("a check that reports late keeps the loop waiting until the pull request merges", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
+  world.verdicts({ "DEMO-3": "pass" });
+
+  const running = world.loop("start", EPIC);
+  await world.until(() => world.prs().length === 1, "the pull request");
+  world.setChecks("DEMO-2", { "gate / check": "pending", "gate / review": "pending" });
+  world.setChecks("DEMO-2", { "gate / check": "pass" });
+  const polls = world.ghCalls().length;
+  await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
+  expect(world.prs()[0]!.state).toBe("OPEN");
+  expect(world.steps().filter((step) => /DEMO-2 (wait|merge)/.test(step))).toEqual([]);
+  world.setChecks("DEMO-2", { "gate / review": "pass" });
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.decisions().find((line) => line.step === "wait")).toMatchObject({
+    result: "green",
+    checks: [
+      { name: "gate / check", bucket: "pass" },
+      { name: "gate / review", bucket: "pass" },
+    ],
+  });
+  expect(world.steps()).toContain("DEMO-2 merge merged");
+  expect(world.steps()).toContain("DEMO-3 merge merged");
+});
+
 test("a red check stops the ticket, leaves its pull request open, and builds no ticket it blocks", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
@@ -112,6 +140,8 @@ test("a ticket whose pull request merged before the run counts as done, and its 
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
   world.mergedBefore("DEMO-2", "feat/DEMO-2-add-the-login-page");
+  // More pull requests since than one page of `gh pr list` holds.
+  for (let number = 0; number < 250; number++) world.mergedBefore("OTHER-1", `feat/OTHER-${number}-work`);
   world.verdicts({ "DEMO-3": "pass" });
 
   const ran = await world.loop("start", EPIC);

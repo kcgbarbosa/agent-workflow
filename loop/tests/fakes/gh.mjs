@@ -41,9 +41,16 @@ function squash(pr) {
   pr.mergeCommit = { oid: commit };
 }
 
-// GitHub merges a pull request with auto-merge on as soon as its checks are green.
-for (const pr of state.prs) if (pr.state === "OPEN" && pr.autoMerge && green(pr)) squash(pr);
-save();
+// GitHub merges a pull request with auto-merge on as soon as its checks are green. A call that changes
+// nothing leaves the file alone, so a test's own write to it is never lost.
+let settled = false;
+for (const pr of state.prs) {
+  if (pr.state === "OPEN" && pr.autoMerge && green(pr)) {
+    squash(pr);
+    settled = true;
+  }
+}
+if (settled) save();
 
 const [noun, verb] = args;
 const show = (pr) => {
@@ -53,8 +60,13 @@ const show = (pr) => {
 if (noun !== "pr") fail(`fake gh: no ${noun}`);
 if (verb === "list") {
   const wanted = option("state") ?? "open";
-  const prs = state.prs.filter((pr) => wanted === "all" || pr.state === wanted.toUpperCase());
-  console.log(JSON.stringify(prs.map(show)));
+  const head = option("head");
+  const prs = state.prs.filter(
+    (pr) => (wanted === "all" || pr.state === wanted.toUpperCase()) && (head === undefined || pr.headRefName === head),
+  );
+  // Newest first, and 30 unless `--limit` says otherwise, as gh lists them.
+  const limit = Number(option("limit") ?? 30);
+  console.log(JSON.stringify(prs.reverse().slice(0, limit).map(show)));
 } else if (verb === "view") {
   console.log(JSON.stringify(show(find(args[2]))));
 } else if (verb === "create") {

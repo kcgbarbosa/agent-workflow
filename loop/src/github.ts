@@ -21,9 +21,10 @@ async function gh(cwd: string, args: string[], ok: (code: number) => boolean = (
   return done;
 }
 
-export async function pullRequests(cwd: string): Promise<PullRequest[]> {
+/** The pull requests of one head branch, in any state, so no count of older ones can push it out. */
+export async function pullRequestsOf(cwd: string, branch: string): Promise<PullRequest[]> {
   const fields = "number,url,state,headRefName,baseRefName,title,mergeCommit";
-  const done = await gh(cwd, ["pr", "list", "--state", "all", "--limit", "200", "--json", fields]);
+  const done = await gh(cwd, ["pr", "list", "--head", branch, "--state", "all", "--json", fields]);
   return JSON.parse(done.stdout || "[]") as PullRequest[];
 }
 
