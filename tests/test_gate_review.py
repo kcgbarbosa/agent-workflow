@@ -156,15 +156,28 @@ def test_a_later_push_after_a_merge_of_main_reviews_only_the_pull_requests_commi
 
 
 def test_a_merge_of_main_does_not_count_against_the_skip_paths(pr: FakeGitHub) -> None:
-    pr.reply(result(finding("a.py", 2, "blocking", "Two is wrong.")))
-    assert pr.run(REVIEW, **INPUTS).returncode == 1
+    pr.reply(result(finding("a.py", 2, "minor", "Name it.")))
+    assert pr.run(REVIEW, **INPUTS).returncode == 0
     update_branch(pr, {"b.py": "from main\n"})
     pr.commit({"README.md": "# app\nFixed.\n"})
 
     run = pr.run(REVIEW, **INPUTS)
 
-    assert run.returncode == 1
+    assert run.returncode == 0, run.stderr
     assert len(pr.claude_calls) == 1
+
+
+def test_a_fix_in_a_skip_path_after_a_blocking_finding_gets_a_model_run_that_clears_it(pr: FakeGitHub) -> None:
+    pr.reply(result(finding("docs/spec.md", 4, "blocking", "The spec says auto mode.")))
+    assert pr.run(REVIEW, **INPUTS).returncode == 1
+
+    pr.commit({"docs/spec.md": "bypass mode\n"})
+    pr.reply(result())
+    run = pr.run(REVIEW, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert len(pr.claude_calls) == 2
+    assert "earlier-review.json" in pr.claude_calls[1]["argv"][pr.claude_calls[1]["argv"].index("-p") + 1]
 
 
 @pytest.mark.parametrize("answer", ["null", '{"verdict": "fine"}'])

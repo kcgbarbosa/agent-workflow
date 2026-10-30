@@ -8,7 +8,7 @@ check-docs: root loop-deps
 	cd loop && npx vitest run tests/docs.test.ts
 
 root:
-	uv run --no-project --python 3.12 --with pytest pytest tests
+	uv run --no-project --python 3.12 --with pytest --with pyyaml pytest tests
 
 # The TypeScript loop. `mise.toml` pins its Node.
 loop: loop-deps

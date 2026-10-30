@@ -3,7 +3,7 @@ description: >-
   The gate's second-model review. Claude Code runs the code-review skill on the pull request, and review.py posts the findings
   as one pull request review, with a request for changes and a failed step on a blocking finding. A later push reviews only the
   commits since the last review. `loop.toml [review]` overrides each input: `enabled` (default true), `model`, `effort`, and
-  `skip`, a list of path globs. A diff of skip paths only runs no model.
+  `skip`, a list of path globs. A diff of skip paths only runs no model, unless the last review had a blocking finding.
 inputs:
   claude_code_oauth_token:
     description: The Claude Code token of the plan the review bills. One of the two tokens is needed.
