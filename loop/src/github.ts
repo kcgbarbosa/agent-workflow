@@ -64,6 +64,11 @@ export async function stackedOn(cwd: string, branch: string): Promise<PullReques
   return JSON.parse((await gh(cwd, ["pr", "list", "--base", branch, "--state", "open", "--json", FIELDS])).stdout || "[]") as PullRequest[];
 }
 
+/** The open pull requests from the branch. */
+export async function openFrom(cwd: string, branch: string): Promise<PullRequest[]> {
+  return JSON.parse((await gh(cwd, ["pr", "list", "--head", branch, "--state", "open", "--json", FIELDS])).stdout || "[]") as PullRequest[];
+}
+
 export async function retarget(cwd: string, url: string, base: string): Promise<void> {
   await gh(cwd, ["pr", "edit", url, "--base", base]);
 }

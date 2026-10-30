@@ -46,7 +46,7 @@ const fail = (message, code = 1) => {
 const STATES = { pass: "SUCCESS", fail: "FAILURE", pending: "PENDING", skipping: "SKIPPED", cancel: "CANCELLED" };
 const green = (pr) => pr.checks.length > 0 && pr.checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
 const git = (...command) => execFileSync("git", ["-C", origin, ...command], { encoding: "utf8" }).trim();
-const keyOf = (branch) => /^(?:feat|fix)\/([A-Z][A-Z0-9]*-\d+)-/.exec(branch)?.[1];
+const keyOf = (branch) => /^(?:feat|fix|docs)\/([A-Z][A-Z0-9]*-\d+)-/.exec(branch)?.[1];
 const verdicts = existsSync(join(fakes, "verdicts.json")) ? JSON.parse(readFileSync(join(fakes, "verdicts.json"), "utf8")) : {};
 
 function review(pr, findings) {
