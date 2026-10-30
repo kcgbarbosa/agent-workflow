@@ -104,7 +104,7 @@ Each "What the user sees" line is an acceptance test on the real stack. See `doc
 
 ### Workflow
 
-grill-with-docs → to-spec → to-tickets → implement, or the loop. See `docs/agents/workflow.md`.
+grill-with-docs → to-spec → to-tickets → the loop or a T3 Code thread → the gate. See `docs/agents/workflow.md`.
 ```
 
 When a labels file from the retired setup skill exists in `docs/agents/`, tell the user it is obsolete and offer to delete it. Delete it only if they agree.

@@ -23,7 +23,7 @@ No acceptance suite. See `docs/agents/testing.md`.
 
 ### Workflow
 
-grill-with-docs → to-spec → to-tickets → implement, or the loop. See `docs/agents/workflow.md`.
+grill-with-docs → to-spec → to-tickets → the loop or a T3 Code thread → the gate. See `docs/agents/workflow.md`.
 
 ### Loop
 
