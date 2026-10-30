@@ -74,9 +74,18 @@ if command -v claude >/dev/null 2>&1; then
   claude mcp get aws-mcp >/dev/null 2>&1 || claude mcp add --scope user --transport http aws-mcp https://aws-mcp.us-east-1.api.aws/mcp
 fi
 
-# An editable install, so a git pull updates the loop command too.
-if command -v uv >/dev/null 2>&1; then
-  uv tool install --quiet --editable "$repo/loop" || echo "agent-workflow: the loop command did not install" >&2
+# The loop command is a link to loop/bin/loop, so a git pull updates it too. Node runs its TypeScript as it is.
+# The Python loop was a uv tool of the same name, which the link replaces.
+if command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q '^loop '; then
+  uv tool uninstall loop >/dev/null || true
+fi
+if command -v npm >/dev/null 2>&1; then
+  if npm ci --prefix "$repo/loop" --no-audit --no-fund --silent; then
+    mkdir -p "$HOME/.local/bin"
+    ln -sfn "$repo/loop/bin/loop" "$HOME/.local/bin/loop"
+  else
+    echo "agent-workflow: the loop command did not install" >&2
+  fi
 else
-  echo "agent-workflow: skipped the loop command, uv is missing" >&2
+  echo "agent-workflow: skipped the loop command, npm is missing" >&2
 fi

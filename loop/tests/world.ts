@@ -216,6 +216,40 @@ ${extra}`;
     writeFileSync(join(this.state, run, "decisions.jsonl"), text.join(""));
   }
 
+  /** The calls of the fake `systemd-run`, `systemctl`, and `systemd-inhibit`, in order. */
+  systemd(): { tool: string; args: string[] }[] {
+    const path = join(this.fakes, "systemd.jsonl");
+    return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+  }
+
+  /** Whether the fake unit's process lives. */
+  unitAlive(unit: string): boolean {
+    const path = join(this.fakes, "units", `${unit}.json`);
+    if (!existsSync(path)) return false;
+    const { pid } = JSON.parse(readFileSync(path, "utf8")) as { pid: number | null };
+    if (pid === null) return true;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Waits until the run that `loop start` started in its unit ends, and returns what it printed. */
+  async untilUnitEnds(unit: string): Promise<string> {
+    await this.until(() => !this.unitAlive(unit), `${unit} to end`);
+    return readFileSync(join(this.fakes, "units", `${unit}.log`), "utf8");
+  }
+
+  /** A command of this test alone, first on the PATH, such as a fake `bw`. */
+  command(name: string, script: string): void {
+    const bin = join(this.fakes, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, name), script, { mode: 0o755 });
+    if (!this.env.PATH!.startsWith(bin)) this.env.PATH = `${bin}:${this.env.PATH}`;
+  }
+
   /** Waits until the test's condition holds, as the loop runs beside it. */
   async until(condition: () => boolean, what: string): Promise<void> {
     const deadline = Date.now() + 30_000;

@@ -139,6 +139,9 @@ export class FakeJira {
     if (!part && method === "GET") return [200, this.json(issue)];
     if (!part && method === "PUT") {
       if ("customfield_10021" in body.fields) issue.flagged = Boolean(body.fields.customfield_10021);
+      if ("description" in body.fields) {
+        issue.body = body.fields.description.content.map((paragraph: { content: { text: string }[] }) => paragraph.content.map((item) => item.text).join(""));
+      }
       return [204, undefined];
     }
     if (part === "comment" && method === "POST") {

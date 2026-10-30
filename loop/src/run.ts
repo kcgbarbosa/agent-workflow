@@ -7,17 +7,18 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { ask, type Meter, runSetup, type Session } from "./agent.ts";
+import { archive } from "./archive.ts";
 import type { Config } from "./config.ts";
 import { git, slug } from "./git.ts";
 import * as github from "./github.ts";
-import { run } from "./spawn.ts";
+import { endAll, run } from "./spawn.ts";
 import { type Ticket, Jira } from "./jira.ts";
 import { Log } from "./log.ts";
 
 /** The longest the loop waits for the checks of one pull request. */
 const WAIT_MINUTES = 120;
 
-/** The lines of a failed job's log that a fix attempt gets, as the Python loop gives a failed gate's. */
+/** The lines of a failed job's log that a fix attempt gets. */
 const LOG_TAIL_LINES = 80;
 
 /** A usage limit that resets later than this stops the run. */
@@ -26,7 +27,7 @@ const MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60;
 /** The run resumes this long after the reset, so the first call after it meets no limit. */
 const PAST_RESET_SECONDS = 60;
 
-/** The Python loop's Epic slot. The tickets take the slots after it, so both loops give a ticket the same ports. */
+/** The slot the old loop gave the Epic branch. The tickets take the slots after it, so a repo's ports stay as they were. */
 const EPIC_SLOT = 1;
 
 /** The slots after the ticket slots that a ticket's stack moves to when another project holds its ports. */
@@ -38,6 +39,9 @@ const PUBLISHED_PORT = /:(\d+)(?:-(\d+))?->/g;
 const USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work.";
 
 const STUCK_COMMENT = "The loop stopped this ticket.";
+
+/** The status an Epic takes when its last ticket merges. */
+const EPIC_DONE = "Done";
 
 export type Target = { key: string } | { filter: string };
 
@@ -73,6 +77,8 @@ export class Run {
   /** The summary of the Epic or ticket the run started with, for the watch page. */
   private summary: string | null = null;
   private readonly merged = new Set<string>();
+  /** The address of each merged pull request, which names the repo on GitHub. */
+  private readonly mergedUrls: string[] = [];
   private readonly byKey = new Map<string, Ticket>();
   /** The pull request each ticket opened in this run and that has not merged, which a dependent stacks on. */
   private readonly open = new Map<string, { url: string; branch: string }>();
@@ -80,6 +86,7 @@ export class Run {
   private readonly stopped = new Set<string>();
   /** Why no new ticket starts: the circuit breaker or a usage limit the loop does not wait for. */
   private halt: "circuit-breaker" | "usage-limit" | null = null;
+  private stopping = false;
   /** Until when, in epoch milliseconds, the run waits for a usage limit to reset. */
   private pausedUntil = 0;
   private wake: () => void = () => {};
@@ -113,7 +120,10 @@ export class Run {
       const pr = prs.find((item) => item.state === "MERGED");
       if (pr) mergedBefore.set(ticket.key, pr);
     }
-    for (const key of mergedBefore.keys()) this.merged.add(key);
+    for (const [key, pr] of mergedBefore) {
+      this.merged.add(key);
+      this.mergedUrls.push(pr.url);
+    }
     const states = new Map(tickets.map((ticket) => [ticket.key, this.state(ticket)]));
     this.log.write(this.name, "frontier", "ok", {
       detail: tickets.map((ticket) => `${ticket.key} ${states.get(ticket.key)}`).join(", "),
@@ -132,7 +142,7 @@ export class Run {
       await this.retarget(key, pr.headRefName, pr.baseRefName);
     }
 
-    // Slot 0 is the main checkout and slot 1 the Epic's, as in the Python loop, so the tickets take 2 and up.
+    // Slot 0 is the main checkout and slot 1 stays free, so the tickets take 2 and up.
     const slots = Array.from({ length: this.config.parallel }, (_, index) => EPIC_SLOT + 1 + index);
     const finished = new Map<string, Finished>();
     const running = new Map<string, Promise<void>>();
@@ -174,12 +184,43 @@ export class Run {
     if (stopped.length) parts.push(`stopped: ${stopped.join(", ")}`);
     if (left.length) parts.push(`waiting on a blocker: ${left.map((ticket) => ticket.key).join(", ")}`);
     if (this.halt) parts.push(`the loop stopped at the ${this.halt}`);
+    if (await this.completeEpic(tickets)) parts.push(`${this.epic} is complete`);
     const detail = parts.join(". ");
     const failed = stopped.length > 0 || this.halt !== null;
     this.log.write(this.name, "finish", failed ? "stopped" : "ok", { detail });
     await this.notify(`${this.name} finished. ${detail}`);
     return failed ? 1 : 0;
   }
+  /**
+   * When every ticket of the Epic has merged or is done, archives the Epic's spec, then marks the Epic done. A
+   * run that finds the Epic done does nothing, and an archive that fails leaves it open, so the next run goes on.
+   */
+  private async completeEpic(tickets: Ticket[]): Promise<boolean> {
+    if (!this.epic) return false;
+    try {
+      const epic = await this.jira.ticket(this.epic);
+      if (epic.done) return false;
+      const children = this.name === this.epic ? tickets : await this.jira.search(`parent = ${this.epic} ORDER BY key ASC`);
+      if (!children.length || !children.every((child) => this.merged.has(child.key) || child.done)) return false;
+      const [url] = this.mergedUrls;
+      if (!url) throw new Error(`No pull request of ${this.epic} merged, so the loop does not know the repo on GitHub.`);
+      const archived = await archive(this.config, this.jira, epic, url.split("/pull/")[0]!, this.home);
+      this.log.write(this.name, "archive", archived.result, { detail: archived.detail, pr: archived.pr });
+    } catch (error) {
+      this.log.write(this.name, "archive", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
+      return false;
+    }
+    try {
+      await this.jira.transition(this.epic, EPIC_DONE);
+      this.log.write(this.name, "complete", "ok", { detail: `${this.epic} is ${EPIC_DONE}.` });
+    } catch (error) {
+      this.log.write(this.name, "complete", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
+      return false;
+    }
+    await this.notify(`${this.epic} complete`);
+    return true;
+  }
+
   /** The tickets of an Epic, the one ticket of a key, or the tickets a filter finds. */
   private async tickets(): Promise<Ticket[]> {
     if ("filter" in this.target) return this.jira.search(this.target.filter);
@@ -329,6 +370,7 @@ export class Run {
     }
     this.log.write(key, "merge", "merged", { commit: merged, pr: url });
     this.merged.add(key);
+    this.mergedUrls.push(url);
     this.open.delete(key);
     await this.retarget(key, branch, (await github.view(repo, url)).baseRefName);
     return "merged";
@@ -655,7 +697,7 @@ export class Run {
     return { ...env, ...this.secrets, LOOP_RUN_DIR: runDir, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
   }
 
-  /** The env of the slot's stack, on its ports, as the Python loop sets them. A repo with no stack has none. */
+  /** The env of the slot's stack, on its ports. A repo with no stack has none. */
   private slotEnv(slot: number, key: string): Record<string, string> {
     const stack = this.config.stack!;
     const env: Record<string, string> = {};
@@ -668,7 +710,7 @@ export class Run {
   /**
    * The env of the slot's stack, on ports that no other Compose project holds. When another project, such as
    * a stack from a session outside the loop, holds one, the slot moves to a free spare slot for the rest of the
-   * run, as in the Python loop. With no spare slot free, it throws PortsTaken.
+   * run. With no spare slot free, it throws PortsTaken.
    */
   private async stackEnv(key: string, slot: number): Promise<Record<string, string>> {
     if (!this.config.stack) return {};
@@ -713,8 +755,27 @@ export class Run {
     return held;
   }
 
-  /** An ntfy message holds the run and its result only. */
+  /** The SIGTERM of `loop stop`. It ends every agent session, and the step in progress writes no result. */
+  async stop(): Promise<void> {
+    this.stopping = true;
+    this.log.write(this.name, "stop", "stopped");
+    this.log.close();
+    await endAll();
+    await this.send(`${this.name} stopped`);
+  }
+
+  /** The loop itself failed, such as on a tracker that does not answer. */
+  async failed(error: Error): Promise<void> {
+    this.log.write(this.name, "stop", "loop-error", { detail: error.message });
+    await this.notify(`${this.name} stopped`);
+  }
+
   private async notify(message: string): Promise<void> {
+    if (!this.stopping) await this.send(message);
+  }
+
+  /** An ntfy message holds the run and its result only. */
+  private async send(message: string): Promise<void> {
     const url = `${this.config.ntfyUrl.replace(/\/$/, "")}/${this.secrets.NTFY_TOPIC}`;
     try {
       const response = await fetch(url, { method: "POST", body: message, signal: AbortSignal.timeout(30_000) });

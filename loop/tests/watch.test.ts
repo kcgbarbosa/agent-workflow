@@ -56,7 +56,7 @@ test("the watch page shows each ticket's pull request and its checks from the lo
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": ["fail", "pass"] });
   world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { write: { "login.txt": "fixed\n" }, commit: "fix(DEMO-2): fix the login" }] });
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
   expect(ran.code, ran.stderr).toBe(0);
 
   watching = await world.watch();
@@ -204,7 +204,7 @@ test("a real run logs the plan meter and the usage the report reads", async () =
   world.env.LOOP_METER_SECONDS = "0.3";
   world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" }, meter: { five_hour: [0.1, 0.25] }, pause: 1000 }] });
   world.verdicts({ "DEMO-2": "pass" });
-  expect((await world.loop("start", EPIC)).code).toBe(0);
+  expect((await world.loop("run", EPIC)).code).toBe(0);
 
   const ran = await world.loop("report", EPIC, "--json");
 

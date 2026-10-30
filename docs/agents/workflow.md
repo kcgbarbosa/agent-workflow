@@ -26,7 +26,7 @@ A decision grill stops after step 1. Its only output is an ADR. A feature grill 
 | Way         | Scope                  | Pull requests       | Context                                                                 |
 | ----------- | ---------------------- | ------------------- | ----------------------------------------------------------------------- |
 | `implement` | One ticket             | One for each ticket | Each ticket starts a new window                                         |
-| The loop    | All tickets of an Epic | One for the Epic    | A script starts a new session for each ticket and runs the gates itself |
+| The loop    | All tickets of an Epic | One for each ticket | A script starts a new session for each ticket, and the gate checks each |
 
 The owner picks one for each Epic. `/setup-loop` writes `docs/agents/loop.md` for a repo that uses the loop.
 
