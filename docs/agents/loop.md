@@ -8,7 +8,7 @@ The loop runs from `~/dev/agent-workflow`, through the `~/.local/bin/loop` link 
 
 ### Run
 
-On t14: `cd ~/dev/agent-workflow && loop start <Epic key>`, which fast-forwards the checkout first. `loop stop <Epic key>` ends a run. From another device, ask a Remote Control session on t14 to run it.
+On t14: `cd ~/dev/agent-workflow && loop start <Epic key>`, which fast-forwards the checkout first. `loop stop <Epic key>` ends a run. From another device, run it from a T3 Code thread on t14.
 
 ### Tracker
 
