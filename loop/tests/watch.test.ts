@@ -194,6 +194,40 @@ test("a ticket with auto-merge on has no auto-merge reason", async () => {
   expect(view.tickets[0].auto_merge).toBeNull();
 });
 
+test("a real run's passing build line carries the agent's reason, and the outcome gives it with the decisions", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" }, reason: "Added the login page.", decisions: ["Email login only.", "No remember-me box."] }] });
+  const ran = await world.loop("run", EPIC);
+  expect(ran.code, ran.stderr).toBe(0);
+
+  watching = await world.watch();
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(world.decisions().find((line) => line.step === "build" && line.result === "pass")!.detail).toBe("Added the login page.");
+  expect(view.tickets[0].outcome).toEqual({ result: "pass", reason: "Added the login page.", decisions: ["Email login only.", "No remember-me box."] });
+});
+
+test("a blocked ticket's outcome gives the agent's reason", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.plan({ "DEMO-2": [{ status: "blocked", reason: "The spec leaves the login provider open." }] });
+  await world.loop("run", EPIC);
+
+  watching = await world.watch();
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.tickets[0].outcome).toEqual({ result: "blocked", reason: "The spec leaves the login provider open.", decisions: [] });
+});
+
+test("a ticket with no finished build has no outcome", async () => {
+  world.record([...redThenFixed(process.pid).slice(0, 4)]);
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.tickets.map((ticket: { outcome: unknown }) => ticket.outcome)).toEqual([null, null]);
+});
+
 test("the steps list holds retarget and worktree lines, and a failed one is a warning", async () => {
   const worktree = `${world.state}/${EPIC}/worktrees/DEMO-2`;
   world.record([

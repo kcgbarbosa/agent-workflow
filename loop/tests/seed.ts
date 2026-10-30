@@ -50,7 +50,7 @@ function lines(home: string): object[] {
     },
     { ticket: "DEMO-2", step: "start", result: "new", detail: "feat/DEMO-2-add-the-login-page", slot: 0 },
     { ticket: "DEMO-2", step: "build", result: "started", attempt: 1 },
-    { ticket: "DEMO-2", step: "build", result: "pass", commit: "a1" },
+    { ticket: "DEMO-2", step: "build", result: "pass", commit: "a1", detail: "Added the login page, with its form and its tests." },
     { ticket: "DEMO-2", step: "push", result: "ok", commit: "a1" },
     {
       ticket: "DEMO-2",
@@ -59,6 +59,7 @@ function lines(home: string): object[] {
       commit: "a1",
       pr: pr(1),
       auto_merge: false,
+      decisions: ["The form takes an email, not a user name.", "A wrong password shows one message, not which field was wrong."],
       detail: "Auto-merge is off: Auto-merge is not allowed for this repository",
     },
     { ticket: "DEMO-2", step: "auto-merge", result: "fail", pr: pr(1), detail: "Auto-merge is off: Auto-merge is not allowed for this repository" },

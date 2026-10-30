@@ -89,6 +89,9 @@ export type EventView = {
 /** A thing that needs KC: its kind, the ticket or the run it is about, why, and the pull request to open. */
 export type NeedsKc = { kind: string; ticket: string; reason: string; pr: string | null };
 
+/** What happened to a ticket: the result of its latest finished build, the agent's reason, and its decisions. */
+export type Outcome = { result: string; reason: string; decisions: string[] };
+
 export type QueueItem = { key: string; state: string; waits_on: string[] };
 
 export type TicketView = {
@@ -107,6 +110,7 @@ export type TicketView = {
   files: string[];
   pr: PullRequest | null;
   auto_merge: string | null;
+  outcome: Outcome | null;
   stacked_on: { branch: string; pr: string | null } | null;
   red: number;
 };
@@ -393,6 +397,7 @@ export function epicView(stateDir: string, epic: string, running?: boolean): Epi
       files: runFiles(home, runDir),
       pr: pr && column === "merged" ? { ...pr, result: "merged" } : pr,
       auto_merge: autoMergeOff(everything),
+      outcome: outcomeOf(everything),
       stacked_on: stackedOn(own),
       red: own.filter((line) => line.step === "wait" && line.result === "red").length,
     });
@@ -832,6 +837,17 @@ function autoMergeOff(lines: Line[]): string | null {
   const opened = lines.findLastIndex((line) => line.step === "pr" && line.result === "open");
   const failed = lines.slice(opened + 1).findLast((line) => line.step === "auto-merge" && line.result === "fail");
   return failed ? String(failed.detail ?? "") : null;
+}
+
+/** The ticket's outcome, from its latest finished build line and the decisions of its latest open, or null
+ * before a build finishes.
+ */
+function outcomeOf(lines: Line[]): Outcome | null {
+  const built = lines.findLast((line) => line.step === "build" && ["pass", "fail", "blocked"].includes(line.result));
+  if (!built) return null;
+  const opened = lines.findLast((line) => line.step === "pr" && line.result === "open");
+  const decisions = Array.isArray(opened?.decisions) ? opened.decisions.map(String) : [];
+  return { result: built.result, reason: String(built.detail ?? ""), decisions };
 }
 
 /** The pull request a line names, or null when it names none. */

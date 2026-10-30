@@ -218,6 +218,12 @@ table.tickets td.t .key { display: block; }
 .facts-grid div { min-width: 0; }
 .facts-grid dt { color: var(--text-muted); }
 .facts-grid dd { margin: 2px 0 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.outcome { display: grid; gap: 6px; padding: 12px 16px; border-radius: var(--radius-sm); background: var(--confirm-soft); overflow-wrap: anywhere; }
+.outcome.bad { background: var(--bad-soft); }
+.outcome p { margin: 0; white-space: pre-wrap; }
+.outcome ul { margin: 0; padding-left: 18px; }
+details.output > summary { cursor: pointer; padding: 12px 24px; color: var(--text-muted); }
+@media (max-width: 1023px) { details.output > summary { padding: 12px 16px; } }
 .reason { padding: 12px 16px; border-radius: var(--radius-sm); background: var(--bad-soft); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .segments { display: flex; gap: 4px; padding: 0 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow-x: auto; }
 .segments button { background: none; border: 0; padding: 12px 8px; color: var(--text-muted); border-bottom: 2px solid transparent; white-space: nowrap; font-weight: 500; }
@@ -332,6 +338,7 @@ const HEALTH = { "on-track": ["On track", "ok"], attention: ["Needs attention", 
 const COLUMN = { merged: ["Merged", "ok"], running: ["Running", "run"], stopped: ["Stopped", "warn"], stuck: ["Stuck", "bad"], waiting: ["Up next", ""], done: ["Done before this run", "ok"] };
 const QUEUE = { ready: ["Ready", "plain"], waiting: ["Waiting", ""], blocked: ["Blocked", "bad"] };
 const RESULT = { pass: "ok", ok: "ok", done: "ok", fail: "bad", stuck: "bad", error: "bad", "loop-error": "bad", conflict: "bad", timeout: "bad", findings: "warn", "usage-pause": "warn", open: "warn", unfixed: "warn", restart: "warn", green: "ok", red: "bad", merged: "ok", held: "warn", removed: "ok", pending: "" };
+const OUTCOME = { pass: ["Built", "ok"], fail: ["Build failed", "bad"], blocked: ["Blocked", "bad"] };
 // The label of a pull request's checks, by the result of its latest wait.
 const CHECKS = { pending: "Checks pending", held: "Held", green: "Checks green", red: "Checks red", timeout: "Checks timed out", merged: "Merged" };
 // The check buckets that count as failed.
@@ -351,7 +358,7 @@ const RUNS_SHOWN = 5;
 const ui = {
   project: null, epic: null, page: "", ticket: null, tab: null, agent: null, follow: true, version: null, drawn: null,
   projects: [], epics: [], view: null, usage: {}, feed: null, report: null, reportWrap: null,
-  forecast: null, forecastWrap: null, forecastOpen: false, home: [], homeOpen: new Set(),
+  forecast: null, forecastWrap: null, forecastOpen: false, outputOpen: null, home: [], homeOpen: new Set(),
 };
 // --- Helpers ---
 function h(tag, props, ...children) {
@@ -766,6 +773,7 @@ function renderTicket(v) {
   ].filter(Boolean);
   const head = pageHead(t.summary ? `${t.key} ${t.summary}` : t.key);
   const top = h("div", { class: "detail-head" },
+    t.outcome ? outcomePanel(t.outcome) : "",
     h("div", { style: "display:flex;gap:8px;flex-wrap:wrap" }, ticketState(v, t), health ? tile(HEALTH[health.state], true) : ""),
     t.step ? stepper(t.step) : "",
     health && health.reason ? h("div", { class: "why", style: "margin:0" }, health.reason) : "",
@@ -773,8 +781,17 @@ function renderTicket(v) {
     h("dl", { class: "facts-grid" }, facts.map(([k, val]) => h("div", {}, h("dt", {}, k), h("dd", {}, val)))));
   detailPanel(main, head, top, {
     key: t.key, agents: t.agents, live: t.column === "running", events: v.events.filter((e) => e.ticket === t.key || String(e.ticket).startsWith(`${t.key}-`)),
-    files: t.files,
+    files: t.files, fold: Boolean(t.outcome),
   });
+}
+
+/** What happened to the ticket: the result of its latest build, the agent's reason, and each decision on its own line. */
+function outcomePanel(o) {
+  const [label, tone] = OUTCOME[o.result] || [o.result, ""];
+  return h("div", { class: `outcome ${tone}` },
+    h("div", {}, tile([label, tone], true)),
+    o.reason ? h("p", {}, o.reason) : "",
+    o.decisions.length ? h("ul", {}, o.decisions.map((d) => h("li", {}, d))) : "");
 }
 
 // --- Diagnostics: the whole run ---
@@ -801,7 +818,8 @@ function detailPanel(main, head, top, d) {
   const bar = h("div", { class: "segments" }, tabs.map(([k, label]) =>
     h("button", { class: ui.tab === k ? "on" : "", onclick: () => { ui.tab = k; ui.feed = null; render(); } }, label)));
   // The activity feed keeps its rows between polls, so an open row stays open.
-  if (panel && ui.feed && ui.tab === "activity" && panel.contains(ui.feed.root) && ui.feed.key === d.key) {
+  if (panel && ui.feed && ui.tab === "activity" && panel.contains(ui.feed.root) && ui.feed.key === d.key
+    && (panel.children[2].tagName === "DETAILS") === Boolean(d.fold)) {
     main.firstChild.replaceWith(head);
     panel.children[0].replaceWith(top);
     panel.children[1].replaceWith(bar);
@@ -809,7 +827,12 @@ function detailPanel(main, head, top, d) {
     return;
   }
   let body;
-  if (ui.tab === "activity") body = activityView(d.key, d.agents, d.live);
+  if (ui.tab === "activity" && d.fold) {
+    // Under an outcome the agent's raw output is folded. A redraw opens a new fold, which fires a toggle that changes nothing.
+    body = h("details", { class: "output", open: ui.outputOpen === d.key,
+      ontoggle: (e) => { if (e.target.open === (ui.outputOpen === d.key)) return; ui.outputOpen = e.target.open ? d.key : null; } },
+      h("summary", {}, "Agent output"), activityView(d.key, d.agents, d.live));
+  } else if (ui.tab === "activity") body = activityView(d.key, d.agents, d.live);
   else if (ui.tab === "steps") body = stepsView(d.events);
   else body = h("div", { class: "body files" }, d.files.map((f) => h("a", { href: fileUrl(f), target: "_blank" }, f.replace(/^runs\/[^/]+\//, ""))));
   main.replaceChildren(head, h("section", { class: "panel detail" }, top, bar, body));
