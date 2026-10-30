@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { EPIC, World } from "./world.ts";
 
@@ -71,8 +71,9 @@ test("the loop waits for the pull request's checks and merges on green", async (
   expect(world.prs()[0]!.state).toBe("MERGED");
   const wait = world.decisions().find((line) => line.step === "wait");
   expect(wait).toMatchObject({ result: "green", pr: world.prs()[0]!.url, checks: [{ name: "gate / check", bucket: "pass" }] });
-  expect(world.steps().slice(-6)).toEqual([
+  expect(world.steps().slice(-7)).toEqual([
     "DEMO-2 merge merged",
+    "DEMO-2 worktree removed",
     "DEMO-1 archive no-spec",
     "DEMO-1 complete ok",
     "DEMO-1 notify ok",
@@ -244,10 +245,13 @@ test("a ticket whose pull request merged before the run counts as done, and its 
   expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual([]);
 });
 
-test("a restart does not rebuild a ticket the first run merged", async () => {
+test("a restart does not rebuild a ticket the first run merged, and removes the worktree a kill left behind", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });
   expect((await world.loop("run", EPIC)).code).toBe(0);
+  // As a kill between the merge and the removal leaves them.
+  const worktree = `${world.state}/${EPIC}/worktrees/DEMO-2`;
+  world.git(world.repo, "worktree", "add", "--quiet", "-b", world.prs()[0]!.headRefName, worktree);
 
   const ran = await world.loop("run", EPIC);
 
@@ -255,6 +259,25 @@ test("a restart does not rebuild a ticket the first run merged", async () => {
   expect(world.calls()).toHaveLength(1);
   expect(world.prs()).toHaveLength(1);
   expect(world.steps()).toContain("DEMO-2 start merged-before");
+  expect(existsSync(worktree)).toBe(false);
+  expect(world.git(world.repo, "branch", "--list", "feat/DEMO-2-*")).toBe("");
+  expect(world.steps().filter((step) => step === "DEMO-2 worktree removed")).toHaveLength(2);
+});
+
+test("a merged ticket's worktree and branch are removed, and a stuck ticket keeps both for its restart", async () => {
+  world.writeConfig("[limits]\nfix_attempts = 1\n");
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass", "DEMO-3": "fail" });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code).toBe(1);
+  expect(existsSync(`${world.state}/${EPIC}/worktrees/DEMO-2`)).toBe(false);
+  expect(world.git(world.repo, "branch", "--list", "feat/DEMO-2-*")).toBe("");
+  expect(world.steps()).toContain("DEMO-2 worktree removed");
+  expect(existsSync(`${world.state}/${EPIC}/worktrees/DEMO-3`)).toBe(true);
+  expect(world.git(world.repo, "branch", "--list", "feat/DEMO-3-*")).not.toBe("");
 });
 
 test("a ticket blocked by another builds after the blocker merges, from a main that holds its work", async () => {
@@ -267,8 +290,8 @@ test("a ticket blocked by another builds after the blocker merges, from a main t
   expect(ran.code, ran.stderr).toBe(0);
   const steps = world.steps();
   expect(steps.indexOf("DEMO-2 merge merged")).toBeLessThan(steps.indexOf("DEMO-3 start new"));
-  const worktree = `${world.state}/${EPIC}/worktrees/DEMO-3`;
-  expect(world.git(worktree, "log", "--format=%s", "-3").split("\n")).toEqual([
+  const head = world.prs().find((pr) => pr.headRefName.includes("/DEMO-3-"))!.headRefOid!;
+  expect(world.git(world.origin, "log", "--format=%s", "-3", head).split("\n")).toEqual([
     "feat(DEMO-3): change",
     "feat(DEMO-2): Add the login page (#100)",
     "chore: start",
@@ -296,6 +319,7 @@ test("the decisions log has one line per step, and no gate, review, land, or Epi
     "DEMO-2 tracker-status ok",
     "DEMO-2 wait green",
     "DEMO-2 merge merged",
+    "DEMO-2 worktree removed",
     "DEMO-1 archive no-spec",
     "DEMO-1 complete ok",
     "DEMO-1 notify ok",

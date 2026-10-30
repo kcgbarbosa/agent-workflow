@@ -118,24 +118,54 @@ test.each([
 
 test("a stacked ticket waits on its checks again after the retarget, and a late red check gets a fix attempt", async () => {
   world.writeConfig("[limits]\nparallel = 2\n");
+  world.required(["gate / check", "gate / review"]);
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
-  world.verdicts({ "DEMO-3": ["pass", "pass"] });
   world.plan({ "DEMO-3": [{ write: { "logout.txt": "logout\n" } }, { write: { "logout.txt": "fixed\n" }, commit: "fix(DEMO-3): fix the logout" }] });
+  const demo3 = () => world.prs().find((pr) => pr.headRefName.includes("/DEMO-3-"));
 
   const running = world.loop("run", EPIC);
-  await world.until(() => world.steps().includes("DEMO-3 wait green"), "the stacked pull request's green checks");
-  // The review reports after the first wait saw green, as when it is still running at the retarget.
+  await world.until(() => world.steps().includes("DEMO-3 pr open"), "the stacked pull request");
+  expect(demo3()!.autoMerge).toBeNull();
+  // The base merges and the retarget happens before the stacked pull request's first green.
+  world.setChecks("DEMO-2", { "gate / check": "pass", "gate / review": "pass" });
+  await world.until(() => demo3()!.baseRefName === "main", "the retarget to main");
+  world.setCheck("DEMO-3", "pass");
+  await world.until(() => world.steps().includes("DEMO-3 wait green"), "the stacked pull request's first green");
+  // The review reports after that green, so auto-merge has not merged it.
   world.setChecks("DEMO-3", { "gate / review": "fail" });
-  world.setCheck("DEMO-2", "pass");
+  await world.until(() => (demo3() as { pushes?: number }).pushes === 2, "the fix attempt's push");
+  world.setChecks("DEMO-3", { "gate / check": "pass", "gate / review": "pass" });
   const ran = await running;
 
   expect(ran.code, ran.stderr).toBe(0);
+  expect(world.steps().some((step) => step.startsWith("DEMO-3 base"))).toBe(false);
   const waits = world.steps().filter((step) => step.startsWith("DEMO-3 wait"));
   expect(waits.slice(0, 2)).toEqual(["DEMO-3 wait green", "DEMO-3 wait red"]);
   expect(world.calls().filter((call) => call.key === "DEMO-3")).toHaveLength(2);
   expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED", "MERGED"]);
   expect(world.git(world.origin, "show", "main:logout.txt")).toBe("fixed");
+});
+
+test("a stacked ticket whose auto-merge does not turn on after the retarget logs why, and the loop merges it", async () => {
+  world.writeConfig("[limits]\nparallel = 2\n");
+  world.noAutoMerge();
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
+  const demo3 = () => world.prs().find((pr) => pr.headRefName.includes("/DEMO-3-"));
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.steps().includes("DEMO-3 pr open"), "the stacked pull request");
+  world.setCheck("DEMO-2", "pass");
+  await world.until(() => demo3()!.baseRefName === "main", "the retarget to main");
+  world.setCheck("DEMO-3", "pass");
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const failed = world.decisions().find((line) => line.ticket === "DEMO-3" && line.step === "auto-merge");
+  expect(failed).toMatchObject({ result: "fail", pr: demo3()!.url });
+  expect(String(failed!.detail)).toContain("Auto-merge is not allowed");
+  expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED", "MERGED"]);
 });
 
 test("a usage limit pauses the run, and the run resumes the session when the limit resets", async () => {
