@@ -30,7 +30,6 @@ export type Config = {
   trackerUrl: string;
   inProgress: string;
   inReview: string;
-  nameLandedKeysOnly: boolean;
   agentModel: string;
   agentEffort: string;
   parallel: number;
@@ -38,9 +37,6 @@ export type Config = {
   fixAttempts: number;
   circuitBreaker: number;
   stack: { ports: Record<string, number>; portStep: number } | null;
-  uiPath: string | null;
-  uiAcceptedUnchecked: string[];
-  uiBlocking: string[];
   review: { enabled: boolean; model: string | null; effort: string | null; skip: string[] };
   ntfyUrl: string;
   /** `exact` is false for a `since` with a date only. */
@@ -126,7 +122,6 @@ class Table {
     });
   }
 
-  /** A date or a date and time, as TOML writes it or as text. */
   /** Whether the date of a key has a time, so that a date alone can leave its whole day unclear. */
   hasTime(key: string): boolean {
     const value = this.get(key);
@@ -239,6 +234,13 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     return { plan, since, exact };
   });
 
+  // Keys the loop checks and uses for nothing: `name_landed_keys_only` is from the Epic pull request the loop no
+  // longer opens, and `[ui]` `path`, `accepted_unchecked`, and `blocking` are settings of the gate's judge.
+  tracker.flag("name_landed_keys_only", false);
+  ui.text("path", null);
+  ui.texts("accepted_unchecked", []);
+  ui.texts("blocking", []);
+
   const config: Config = {
     repo,
     name,
@@ -248,7 +250,6 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     trackerUrl: tracker.text("url"),
     inProgress: tracker.text("in_progress", "In Progress"),
     inReview: tracker.text("landed", "In Review"),
-    nameLandedKeysOnly: tracker.flag("name_landed_keys_only", false),
     agentModel: agent.text("model", "claude-opus-5-5"),
     agentEffort: agent.text("effort", "high"),
     parallel: limits.number("parallel", 1),
@@ -256,9 +257,6 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     fixAttempts: limits.number("fix_attempts", 2),
     circuitBreaker: limits.number("circuit_breaker", 2),
     stack,
-    uiPath: ui.text("path", null),
-    uiAcceptedUnchecked: ui.texts("accepted_unchecked", []),
-    uiBlocking: ui.texts("blocking", []),
     review: {
       enabled: review.flag("enabled", true),
       model: review.text("model", null),
