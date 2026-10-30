@@ -147,6 +147,27 @@ test("a stacked ticket waits on its checks again after the retarget, and a late 
   expect(world.git(world.origin, "show", "main:logout.txt")).toBe("fixed");
 });
 
+test("a stacked ticket whose auto-merge does not turn on after the retarget logs why, and the loop merges it", async () => {
+  world.writeConfig("[limits]\nparallel = 2\n");
+  world.noAutoMerge();
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
+  const demo3 = () => world.prs().find((pr) => pr.headRefName.includes("/DEMO-3-"));
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.steps().includes("DEMO-3 pr open"), "the stacked pull request");
+  world.setCheck("DEMO-2", "pass");
+  await world.until(() => demo3()!.baseRefName === "main", "the retarget to main");
+  world.setCheck("DEMO-3", "pass");
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const failed = world.decisions().find((line) => line.ticket === "DEMO-3" && line.step === "auto-merge");
+  expect(failed).toMatchObject({ result: "fail", pr: demo3()!.url });
+  expect(String(failed!.detail)).toContain("Auto-merge is not allowed");
+  expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED", "MERGED"]);
+});
+
 test("a usage limit pauses the run, and the run resumes the session when the limit resets", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });

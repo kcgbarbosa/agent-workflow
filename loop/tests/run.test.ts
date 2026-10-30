@@ -245,10 +245,13 @@ test("a ticket whose pull request merged before the run counts as done, and its 
   expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual([]);
 });
 
-test("a restart does not rebuild a ticket the first run merged", async () => {
+test("a restart does not rebuild a ticket the first run merged, and removes the worktree a kill left behind", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });
   expect((await world.loop("run", EPIC)).code).toBe(0);
+  // As a kill between the merge and the removal leaves them.
+  const worktree = `${world.state}/${EPIC}/worktrees/DEMO-2`;
+  world.git(world.repo, "worktree", "add", "--quiet", "-b", world.prs()[0]!.headRefName, worktree);
 
   const ran = await world.loop("run", EPIC);
 
@@ -256,6 +259,9 @@ test("a restart does not rebuild a ticket the first run merged", async () => {
   expect(world.calls()).toHaveLength(1);
   expect(world.prs()).toHaveLength(1);
   expect(world.steps()).toContain("DEMO-2 start merged-before");
+  expect(existsSync(worktree)).toBe(false);
+  expect(world.git(world.repo, "branch", "--list", "feat/DEMO-2-*")).toBe("");
+  expect(world.steps().filter((step) => step === "DEMO-2 worktree removed")).toHaveLength(2);
 });
 
 test("a merged ticket's worktree and branch are removed, and a stuck ticket keeps both for its restart", async () => {

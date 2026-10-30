@@ -154,6 +154,11 @@ ${extra}`;
     writeFileSync(join(this.fakes, "required.json"), JSON.stringify(names));
   }
 
+  /** GitHub refuses to turn auto-merge on, as in a repo where it is off. */
+  noAutoMerge(): void {
+    writeFileSync(join(this.fakes, "no-auto-merge"), "");
+  }
+
   /** GitHub leaves the pull requests on a merged branch where they are, as when the repo keeps merged branches. */
   noRetarget(): void {
     writeFileSync(join(this.fakes, "no-retarget"), "");

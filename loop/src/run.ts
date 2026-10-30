@@ -166,10 +166,8 @@ export class Run {
     });
     for (const [key, pr] of mergedBefore) {
       this.log.write(key, "start", "merged-before", { pr: pr.url, detail: "Its pull request merged before this run." });
-      // A kill between a merge and its retarget leaves a dependent on the merged branch.
-      await this.retarget(key, pr.headRefName, pr.baseRefName);
-      // So does a kill before its worktree is removed.
-      await this.removeWorktree(key, join(this.home, "worktrees", key), pr.headRefName);
+      // A kill after a merge can leave a dependent on the merged branch, and the ticket's worktree and branch.
+      await this.afterMerge(key, pr.headRefName, pr.baseRefName, join(this.home, "worktrees", key));
     }
 
     // Slot 0 is the main checkout and slot 1 stays free, so the tickets take 2 and up.
@@ -419,9 +417,14 @@ export class Run {
     this.merged.add(key);
     this.mergedUrls.push(url);
     this.open.delete(key);
-    await this.retarget(key, branch, (await github.view(repo, url)).baseRefName);
-    await this.removeWorktree(key, worktree, branch);
+    await this.afterMerge(key, branch, (await github.view(repo, url)).baseRefName, worktree);
     return "merged";
+  }
+
+  /** Moves a merged ticket's dependents to its base, and removes its worktree and branch. */
+  private async afterMerge(key: string, branch: string, base: string, worktree: string): Promise<void> {
+    await this.retarget(key, branch, base);
+    await this.removeWorktree(key, worktree, branch);
   }
 
   /**
@@ -431,9 +434,11 @@ export class Run {
   private async removeWorktree(key: string, worktree: string, branch: string): Promise<void> {
     const repo = this.config.repo;
     try {
-      if (!existsSync(worktree)) return;
-      await git(repo, "worktree", "remove", "--force", worktree);
-      await gitOk(repo, "branch", "--delete", "--force", branch);
+      const hasWorktree = existsSync(worktree);
+      const hasBranch = await gitOk(repo, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
+      if (!hasWorktree && !hasBranch) return;
+      if (hasWorktree) await git(repo, "worktree", "remove", "--force", worktree);
+      if (hasBranch) await git(repo, "branch", "--delete", "--force", branch);
       this.log.write(key, "worktree", "removed", { detail: worktree });
     } catch (error) {
       this.log.write(key, "worktree", "fail", { detail: (error as Error).message });
@@ -766,7 +771,9 @@ export class Run {
         } else {
           if (held && autoMerge) {
             // GitHub turns auto-merge off on a draft and does not turn it back on. When that fails, the loop merges.
-            [autoMerge] = await this.autoMerge(url);
+            let detail: string;
+            [autoMerge, detail] = await this.autoMerge(url);
+            if (!autoMerge) this.log.write(key, "auto-merge", "fail", { pr: url, detail });
           }
           held = false;
           const passed = checks.length > 0 && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
