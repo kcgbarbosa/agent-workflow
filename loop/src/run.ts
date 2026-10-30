@@ -167,7 +167,7 @@ export class Run {
     for (const [key, pr] of mergedBefore) {
       this.log.write(key, "start", "merged-before", { pr: pr.url, detail: "Its pull request merged before this run." });
       // A kill after a merge can leave a dependent on the merged branch, and the ticket's worktree and branch.
-      await this.afterMerge(key, pr.headRefName, pr.baseRefName, join(this.home, "worktrees", key));
+      await this.afterMerge(key, pr.headRefName, pr.baseRefName);
     }
 
     // Slot 0 is the main checkout and slot 1 stays free, so the tickets take 2 and up.
@@ -394,12 +394,8 @@ export class Run {
           this.log.write(key, "base", result, { pr: url, detail: result === "main" ? `${stack.key} merged.` : `${stack.key} did not merge.` });
           if (result !== "main") return "stopped";
         }
-        let detail: string;
-        [autoMerge, detail] = await this.autoMerge(url);
-        if (!autoMerge) {
-          this.log.write(key, "auto-merge", "fail", { pr: url, detail });
-          break;
-        }
+        autoMerge = await this.turnOnAutoMerge(key, url);
+        if (!autoMerge) break;
       }
       if (checks.result === "green") break;
       if (checks.result !== "red" || checks.closed) return "stopped";
@@ -417,27 +413,30 @@ export class Run {
     this.merged.add(key);
     this.mergedUrls.push(url);
     this.open.delete(key);
-    await this.afterMerge(key, branch, (await github.view(repo, url)).baseRefName, worktree);
+    await this.afterMerge(key, branch, (await github.view(repo, url)).baseRefName);
     return "merged";
   }
 
   /** Moves a merged ticket's dependents to its base, and removes its worktree and branch. */
-  private async afterMerge(key: string, branch: string, base: string, worktree: string): Promise<void> {
+  private async afterMerge(key: string, branch: string, base: string): Promise<void> {
     await this.retarget(key, branch, base);
-    await this.removeWorktree(key, worktree, branch);
+    await this.removeWorktree(key, branch);
   }
 
   /**
    * Removes a merged ticket's worktree and local branch, so neither piles up on the host. The pull request and
    * the log keep its history. A ticket that stops keeps both, so a restart resumes on them.
    */
-  private async removeWorktree(key: string, worktree: string, branch: string): Promise<void> {
+  private async removeWorktree(key: string, branch: string): Promise<void> {
     const repo = this.config.repo;
+    const worktree = join(this.home, "worktrees", key);
     try {
       const hasWorktree = existsSync(worktree);
       const hasBranch = await gitOk(repo, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
       if (!hasWorktree && !hasBranch) return;
+      // A folder deleted by hand leaves git still registering the worktree, and `branch --delete` refuses then.
       if (hasWorktree) await git(repo, "worktree", "remove", "--force", worktree);
+      else await git(repo, "worktree", "prune");
       if (hasBranch) await git(repo, "branch", "--delete", "--force", branch);
       this.log.write(key, "worktree", "removed", { detail: worktree });
     } catch (error) {
@@ -598,6 +597,13 @@ export class Run {
     } catch (error) {
       return [false, `Auto-merge is off: ${(error as Error).message}`];
     }
+  }
+
+  /** Turns auto-merge on again, and logs why when it stays off, so the loop merges on the next green. */
+  private async turnOnAutoMerge(key: string, url: string): Promise<boolean> {
+    const [on, detail] = await this.autoMerge(url);
+    if (!on) this.log.write(key, "auto-merge", "fail", { pr: url, detail });
+    return on;
   }
 
   /** Waits until a stacked pull request targets main, or its blocker stops without a merge. */
@@ -771,9 +777,7 @@ export class Run {
         } else {
           if (held && autoMerge) {
             // GitHub turns auto-merge off on a draft and does not turn it back on. When that fails, the loop merges.
-            let detail: string;
-            [autoMerge, detail] = await this.autoMerge(url);
-            if (!autoMerge) this.log.write(key, "auto-merge", "fail", { pr: url, detail });
+            autoMerge = await this.turnOnAutoMerge(key, url);
           }
           held = false;
           const passed = checks.length > 0 && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");

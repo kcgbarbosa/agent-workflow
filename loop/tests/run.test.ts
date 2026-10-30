@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { EPIC, World } from "./world.ts";
 
@@ -177,6 +177,25 @@ test("a draft pull request is a pause the loop waits out, as the hold label is",
   expect(world.steps().filter((step) => step.startsWith("DEMO-2 wait"))).toEqual(["DEMO-2 wait held", "DEMO-2 wait green"]);
 });
 
+test("a draft whose auto-merge does not turn back on logs why, and the loop merges it", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.steps().includes("DEMO-2 pr open"), "the pull request with auto-merge on");
+  world.draft("DEMO-2", true);
+  world.setCheck("DEMO-2", "pass");
+  await world.until(() => world.steps().includes("DEMO-2 wait held"), "the held wait");
+  world.noAutoMerge();
+  world.draft("DEMO-2", false);
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const failed = world.decisions().find((line) => line.ticket === "DEMO-2" && line.step === "auto-merge");
+  expect(failed).toMatchObject({ result: "fail", pr: world.prs()[0]!.url });
+  expect(String(failed!.detail)).toContain("Auto-merge is not allowed");
+  expect(world.prs()[0]!.state).toBe("MERGED");
+});
+
 test("the pull request body holds the ticket text and names the spec, and no list of decisions", async () => {
   const spec = "https://github.com/kcgbarbosa/demo/blob/main/docs/specs/login.md";
   world.jira.issues.get(EPIC)!.body = [`Spec: ${spec}`];
@@ -262,6 +281,23 @@ test("a restart does not rebuild a ticket the first run merged, and removes the 
   expect(existsSync(worktree)).toBe(false);
   expect(world.git(world.repo, "branch", "--list", "feat/DEMO-2-*")).toBe("");
   expect(world.steps().filter((step) => step === "DEMO-2 worktree removed")).toHaveLength(2);
+});
+
+test("a restart removes the branch of a merged ticket whose worktree folder was deleted by hand", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
+  expect((await world.loop("run", EPIC)).code).toBe(0);
+  const worktree = `${world.state}/${EPIC}/worktrees/DEMO-2`;
+  world.git(world.repo, "worktree", "add", "--quiet", "-b", world.prs()[0]!.headRefName, worktree);
+  // git still registers the worktree, so `branch --delete` refuses until a prune.
+  rmSync(worktree, { recursive: true, force: true });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.git(world.repo, "branch", "--list", "feat/DEMO-2-*")).toBe("");
+  expect(world.steps().filter((step) => step === "DEMO-2 worktree removed")).toHaveLength(2);
+  expect(world.steps()).not.toContain("DEMO-2 worktree fail");
 });
 
 test("a merged ticket's worktree and branch are removed, and a stuck ticket keeps both for its restart", async () => {
