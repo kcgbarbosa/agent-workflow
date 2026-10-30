@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { ask, type Meter, runSetup, type Session } from "./agent.ts";
-import { archive } from "./archive.ts";
+import { archive, mdLinks } from "./archive.ts";
 import type { Config } from "./config.ts";
 import { git, slug } from "./git.ts";
 import * as github from "./github.ts";
@@ -43,6 +43,18 @@ const STUCK_COMMENT = "The loop stopped this ticket.";
 /** The status an Epic takes when its last ticket merges. */
 const EPIC_DONE = "Done";
 
+/** The required check that fails while the pull request has the hold label. It is a pause, not a red gate. */
+const HOLD_CHECK = "hold";
+
+/** The types of a ticket's branch and commit scope: `fix` for a Bug, `feat` for the rest. */
+const BRANCH_TYPES = ["feat", "fix"];
+
+/** The key in a branch the loop named, `<type>/<KEY>-<slug>`. */
+const BRANCH_KEY = new RegExp(`^(?:${BRANCH_TYPES.join("|")})/([A-Z][A-Z0-9]*-\\d+)-`);
+
+/** A repo path of a Markdown file, as a ticket names its spec. */
+const MD_PATH = /[\w./-]+\.md\b/;
+
 export type Target = { key: string } | { filter: string };
 
 /** `meterSeconds` is the least time between two plan meter lines of a running agent. */
@@ -52,6 +64,12 @@ type State = "merged" | "done" | "flagged" | "ready" | "waiting";
 
 type Finished = "merged" | "stopped" | "stuck";
 
+/** A pull request this run opened and that has not merged, which a dependent ticket stacks on. */
+type OpenPr = { url: string; branch: string };
+
+/** The blocker whose open pull request a ticket stacks on. */
+type Stack = { key: string } & OpenPr;
+
 class PortsTaken extends Error {}
 
 export function runName(target: Target): string {
@@ -60,7 +78,16 @@ export function runName(target: Target): string {
 }
 
 function branchPrefixes(key: string): string[] {
-  return [`feat/${key}-`, `fix/${key}-`];
+  return BRANCH_TYPES.map((type) => `${type}/${key}-`);
+}
+
+function typeOf(ticket: Ticket): string {
+  return ticket.issueType === "Bug" ? "fix" : "feat";
+}
+
+/** The checks that make the gate red. */
+function redChecks(checks: github.Check[]): github.Check[] {
+  return checks.filter((check) => check.bucket === "fail" || check.bucket === "cancel");
 }
 
 
@@ -74,14 +101,15 @@ export class Run {
   private readonly home: string;
   readonly log: Log;
   private epic: string | null = null;
+  /** The Epic's description, whose Spec line names the spec that each pull request body names. */
+  private epicText: Promise<string> | null = null;
   /** The summary of the Epic or ticket the run started with, for the watch page. */
   private summary: string | null = null;
   private readonly merged = new Set<string>();
   /** The address of each merged pull request, which names the repo on GitHub. */
   private readonly mergedUrls: string[] = [];
   private readonly byKey = new Map<string, Ticket>();
-  /** The pull request each ticket opened in this run and that has not merged, which a dependent stacks on. */
-  private readonly open = new Map<string, { url: string; branch: string }>();
+  private readonly open = new Map<string, OpenPr>();
   /** The tickets that finished in this run without a merge. */
   private readonly stopped = new Set<string>();
   /** Why no new ticket starts: the circuit breaker or a usage limit the loop does not wait for. */
@@ -197,6 +225,7 @@ export class Run {
    */
   private async completeEpic(tickets: Ticket[]): Promise<boolean> {
     if (!this.epic) return false;
+    let stillOpen = "";
     try {
       const epic = await this.jira.ticket(this.epic);
       if (epic.done) return false;
@@ -206,13 +235,15 @@ export class Run {
       if (!url) throw new Error(`No pull request of ${this.epic} merged, so the loop does not know the repo on GitHub.`);
       const archived = await archive(this.config, this.jira, epic, url.split("/pull/")[0]!, this.home);
       this.log.write(this.name, "archive", archived.result, { detail: archived.detail, pr: archived.pr });
+      // The archive pull request merges on its own once its gate is green, and the Epic does not wait for it.
+      if (archived.result === "pr-open") stillOpen = ` The archive pull request ${archived.pr} is still open.`;
     } catch (error) {
       this.log.write(this.name, "archive", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
       return false;
     }
     try {
       await this.jira.transition(this.epic, EPIC_DONE);
-      this.log.write(this.name, "complete", "ok", { detail: `${this.epic} is ${EPIC_DONE}.` });
+      this.log.write(this.name, "complete", "ok", { detail: `${this.epic} is ${EPIC_DONE}.${stillOpen}` });
     } catch (error) {
       this.log.write(this.name, "complete", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
       return false;
@@ -228,6 +259,7 @@ export class Run {
     this.summary = ticket.summary;
     if (ticket.issueType === "Epic") {
       this.epic = ticket.key;
+      this.epicText = Promise.resolve(ticket.text);
       return this.jira.search(`parent = ${ticket.key} ORDER BY key ASC`);
     }
     this.epic = ticket.parent;
@@ -238,16 +270,20 @@ export class Run {
     if (this.merged.has(ticket.key)) return "merged";
     if (ticket.done) return "done";
     if (ticket.flagged) return "flagged";
-    const open = ticket.blockers.filter((blocker) => !blocker.done && !this.merged.has(blocker.key));
-    return !open.length || this.stackOn(ticket) ? "ready" : "waiting";
+    return !this.openBlockers(ticket).length || this.stackOn(ticket) ? "ready" : "waiting";
+  }
+
+  /** The blockers that are neither done in the tracker nor merged. */
+  private openBlockers(ticket: Ticket): { key: string; done: boolean }[] {
+    return ticket.blockers.filter((blocker) => !blocker.done && !this.merged.has(blocker.key));
   }
 
   /**
    * The blocker whose open pull request the ticket stacks on: its one blocker that has not merged, once that
    * blocker's pull request opened in this run. A ticket with two open blockers waits, since a branch has one base.
    */
-  private stackOn(ticket: Ticket): { key: string; url: string; branch: string } | null {
-    const open = ticket.blockers.filter((blocker) => !blocker.done && !this.merged.has(blocker.key));
+  private stackOn(ticket: Ticket): Stack | null {
+    const open = this.openBlockers(ticket);
     if (open.length !== 1) return null;
     const key = open[0]!.key;
     const pr = this.open.get(key);
@@ -320,7 +356,7 @@ export class Run {
       // so that GitHub never merges it into the blocker's branch.
       if (url === null) {
         try {
-          url = await this.pullRequest(ticket, branch, runDir, base, session.output?.reason ?? "", session.output?.decisions ?? []);
+          url = await this.pullRequest(ticket, branch, runDir, base, session.output?.reason ?? "");
         } catch (error) {
           this.log.write(key, "pr", "fail", { commit, detail: (error as Error).message });
           return "stopped";
@@ -331,14 +367,16 @@ export class Run {
         } else {
           detail = `It stacks on ${base}, so auto-merge waits until it targets ${main}.`;
         }
-        this.log.write(key, "pr", "open", { commit, pr: url, auto_merge: autoMerge, detail });
+        // An open question of the agent goes in the log, not in the body, where it would read as a blocker.
+        const decisions = session.output?.decisions ?? [];
+        this.log.write(key, "pr", "open", { commit, pr: url, auto_merge: autoMerge, detail, ...(decisions.length ? { decisions } : {}) });
         this.open.set(key, { url, branch });
         this.wake();
         await this.status(key, this.config.inReview);
       }
 
       // Wait
-      const checks = await this.wait(url, autoMerge, commit);
+      const checks = await this.wait(key, url, autoMerge, commit);
       this.log.write(key, "wait", checks.result, {
         commit,
         pr: url,
@@ -485,7 +523,7 @@ export class Run {
   private async fixPrompt(url: string, checks: github.Check[]): Promise<string> {
     const repo = this.config.repo;
     let text = `The merge gate is red on ${url}. Fix the cause and commit the fix. Do not push: the loop pushes, and the gate runs again.\n`;
-    for (const check of checks.filter((item) => item.bucket === "fail" || item.bucket === "cancel")) {
+    for (const check of redChecks(checks)) {
       text += `\n## ${check.name}\n\n`;
       try {
         const log = await github.failedLog(repo, check.link, LOG_TAIL_LINES);
@@ -557,7 +595,7 @@ export class Run {
       return;
     }
     for (const pr of dependents) {
-      const owner = /^(?:feat|fix)\/([A-Z][A-Z0-9]*-\d+)-/.exec(pr.headRefName)?.[1] ?? key;
+      const owner = BRANCH_KEY.exec(pr.headRefName)?.[1] ?? key;
       try {
         await github.retarget(this.config.repo, pr.url, base);
         this.log.write(owner, "retarget", "ok", { pr: pr.url, detail: `${branch} merged, so it targets ${base}.` });
@@ -578,8 +616,8 @@ export class Run {
     const found = refs.split("\n").filter(Boolean);
     const local = found.find((ref) => ref.startsWith("refs/heads/"));
     const remote = found.find((ref) => ref.startsWith("refs/remotes/origin/"));
-    const type = ticket.issueType === "Bug" ? "fix" : "feat";
-    const branch = local?.slice("refs/heads/".length) ?? remote?.slice("refs/remotes/origin/".length) ?? `${type}/${ticket.key}-${slug(ticket.summary)}`;
+    const branch =
+      local?.slice("refs/heads/".length) ?? remote?.slice("refs/remotes/origin/".length) ?? `${typeOf(ticket)}/${ticket.key}-${slug(ticket.summary)}`;
     return { branch, local: local !== undefined, remote: remote !== undefined };
   }
 
@@ -595,7 +633,7 @@ export class Run {
     return branch;
   }
 
-  private async writeTicket(ticket: Ticket, branch: string, runDir: string, stack: { key: string; branch: string } | null): Promise<void> {
+  private async writeTicket(ticket: Ticket, branch: string, runDir: string, stack: Stack | null): Promise<void> {
     let text = `# ${ticket.key}: ${ticket.summary}\n\n${ticket.text.trim()}\n\n`;
     const comments = await this.jira.comments(ticket.key);
     if (comments.length) {
@@ -615,36 +653,59 @@ export class Run {
     writeFileSync(join(runDir, "ticket.md"), text);
   }
 
-  /** The open pull request of the branch, or a new one whose title becomes the squash commit on main. */
-  private async pullRequest(ticket: Ticket, branch: string, runDir: string, base: string, reason: string, decisions: string[]): Promise<string> {
+  /**
+   * The open pull request of the branch, or a new one whose title becomes the squash commit on main. The body
+   * holds the ticket text and names the spec, which the gate's review reads the work against.
+   */
+  private async pullRequest(ticket: Ticket, branch: string, runDir: string, base: string, reason: string): Promise<string> {
     const repo = this.config.repo;
     const open = (await github.pullRequestsOf(repo, ticket.key, branch, branchPrefixes(ticket.key))).find((pr) => pr.state === "OPEN");
     if (open) return open.url;
     const bodyFile = join(runDir, "pr-body.md");
     if (!existsSync(bodyFile)) {
       const browse = `${this.config.trackerUrl.replace(/\/$/, "")}/browse/${ticket.key}`;
-      let body = `[${ticket.key}](${browse}): ${ticket.summary}\n\n${reason}\n`;
-      if (decisions.length) body += `\n## Decisions\n\n${decisions.map((item) => `- ${item}`).join("\n")}\n`;
+      const spec = await this.specLine(ticket);
+      let body = `[${ticket.key}](${browse}): ${ticket.summary}.${spec ? ` ${spec}` : ""}\n\n`;
+      if (reason) body += `${reason}\n\n`;
+      body += `## Ticket\n\n${ticket.text.trim()}\n`;
       writeFileSync(bodyFile, body);
     }
-    const type = ticket.issueType === "Bug" ? "fix" : "feat";
-    return github.create(repo, branch, base, `${type}(${ticket.key}): ${ticket.summary}`, bodyFile);
+    return github.create(repo, branch, base, `${typeOf(ticket)}(${ticket.key}): ${ticket.summary}`, bodyFile);
+  }
+
+  /**
+   * The `Spec:` line of the pull request body: the first Markdown file the Epic's description links, as its
+   * Spec line does, else the first Markdown path on a line of the ticket that names the spec, else none.
+   */
+  private async specLine(ticket: Ticket): Promise<string> {
+    if (this.epic) {
+      this.epicText ??= this.jira.ticket(this.epic).then((epic) => epic.text);
+      const [link] = mdLinks(await this.epicText.catch(() => ""));
+      if (link) return `Spec: [${link.path}](${link.url})`;
+    }
+    const named = ticket.text.split("\n").find((line) => /\bspec\b/i.test(line) && MD_PATH.test(line));
+    const path = named ? MD_PATH.exec(named)?.[0] : null;
+    return path ? `Spec: ${path}` : "";
   }
 
   /**
    * Polls until a check fails, the pull request merges, or the wait runs out. With auto-merge on, GitHub
    * merges once every required check passes, so a check that has not reported yet keeps the loop waiting.
    * With auto-merge off, every check reported so far passing is green, and the loop merges. The checks count
-   * once the pull request's head is the pushed commit, so the checks of the commit before a fix never do.
+   * once the pull request's head is the pushed commit, so the checks of the commit before a fix never do. The
+   * `hold` check fails while the hold label is on: that is a pause the loop waits out, not a red gate, and the
+   * wait's limit does not run while it lasts.
    */
   private async wait(
+    key: string,
     url: string,
     autoMerge: boolean,
     commit: string,
   ): Promise<{ result: "green" | "red" | "timeout"; checks: github.Check[]; detail: string; closed: boolean }> {
     const repo = this.config.repo;
-    const deadline = Date.now() + WAIT_MINUTES * 60_000;
+    let deadline = Date.now() + WAIT_MINUTES * 60_000;
     let checks: github.Check[] = [];
+    let held = false;
     for (;;) {
       const pr = await github.view(repo, url).catch(() => null);
       if (pr?.state === "MERGED") {
@@ -659,10 +720,19 @@ export class Run {
         } catch (error) {
           console.error((error as Error).message);
         }
-        const red = checks.filter((check) => check.bucket === "fail" || check.bucket === "cancel");
+        const red = redChecks(checks).filter((check) => check.name !== HOLD_CHECK);
         if (red.length) return { result: "red", checks, detail: `Failed: ${red.map((check) => check.name).join(", ")}`, closed: false };
-        const passed = checks.length > 0 && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
-        if (passed && !autoMerge) return { result: "green", checks, detail: "", closed: false };
+        if (redChecks(checks).length) {
+          deadline = Date.now() + WAIT_MINUTES * 60_000;
+          if (!held) {
+            const logged = checks.map(({ name, bucket }) => ({ name, bucket }));
+            this.log.write(key, "wait", "held", { commit, pr: url, checks: logged, detail: "The hold label is on. The loop waits until it is removed." });
+          }
+          held = true;
+        } else {
+          const passed = checks.length > 0 && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
+          if (passed && !autoMerge) return { result: "green", checks, detail: "", closed: false };
+        }
       }
       if (Date.now() >= deadline) return { result: "timeout", checks, detail: `The checks ran past ${WAIT_MINUTES} min.`, closed: false };
       await sleep(this.options.pollSeconds);

@@ -1,7 +1,7 @@
 // The fake `claude`. It speaks the stream-json protocol the Claude Agent SDK drives, and plays the steps of
 // FAKE_DIR/plan.json for the ticket of the run folder. A ticket with no plan writes one file and commits.
 //
-// A step holds `write` ({path: text}) and `commit` (the message), `status` ("done" or "blocked"), and `reason`.
+// A step holds `write` ({path: text}) and `commit` (the message), `status` ("done" or "blocked"), `reason`, and `decisions`.
 // `{}` returns done with no change. `limit` ({resetsIn: seconds}) ends the run at a usage limit that resets
 // that long from now, with no change. `meet` (a ticket key) waits until that ticket's agent runs too. `meter`
 // ({window: [start, end]}) reads the plan meter twice, at the start and the end of the run, and `pause`
@@ -104,7 +104,7 @@ async function play(prompt) {
     total_cost_usd: 0.5,
     usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
     modelUsage: { [flag("model")]: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.5 } },
-    structured_output: { status: now.status ?? "done", reason: now.reason ?? "Built it.", decisions: [] },
+    structured_output: { status: now.status ?? "done", reason: now.reason ?? "Built it.", decisions: now.decisions ?? [] },
   });
 }
 

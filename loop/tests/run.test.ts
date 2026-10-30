@@ -109,7 +109,64 @@ test("a check that reports late keeps the loop waiting until the pull request me
   expect(world.steps()).toContain("DEMO-3 merge merged");
 });
 
-test("the ticket goes to In Progress at start and In Review when the pull request opens", async () => {
+test("a failing hold check is a pause the loop waits out, not a red gate", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.prs().length === 1, "the pull request");
+  world.setChecks("DEMO-2", { "gate / check": "pass", hold: "fail" });
+  await world.until(() => world.steps().includes("DEMO-2 wait held"), "the held wait");
+  const polls = world.ghCalls().length;
+  await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
+  expect(world.prs()[0]!.state).toBe("OPEN");
+  expect(world.calls()).toHaveLength(1);
+  expect(world.steps().filter((step) => /DEMO-2 (build|wait|merge)/.test(step))).toEqual(["DEMO-2 build started", "DEMO-2 build pass", "DEMO-2 wait held"]);
+  world.setChecks("DEMO-2", { hold: "pass" });
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.prs()[0]!.state).toBe("MERGED");
+  expect(world.calls()).toHaveLength(1);
+  expect(world.steps().filter((step) => step.startsWith("DEMO-2 wait"))).toEqual(["DEMO-2 wait held", "DEMO-2 wait green"]);
+  expect(world.decisions().find((line) => line.step === "wait" && line.result === "held")).toMatchObject({
+    pr: world.prs()[0]!.url,
+    checks: [
+      { name: "gate / check", bucket: "pass" },
+      { name: "hold", bucket: "fail" },
+    ],
+  });
+});
+
+test("the pull request body holds the ticket text and names the spec, and no list of decisions", async () => {
+  const spec = "https://github.com/kcgbarbosa/demo/blob/main/docs/specs/login.md";
+  world.jira.issues.get(EPIC)!.body = [`Spec: ${spec}`];
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC, body: ["Goal. A user signs in.", "Spec. docs/specs/login.md, Sign-in."] });
+  world.verdicts({ "DEMO-2": "pass" });
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" }, reason: "Added the page.", decisions: ["Which provider signs the user in?"] }] });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const [pr] = world.prs();
+  expect(pr!.body).toContain(`[DEMO-2](${world.jira.url}/browse/DEMO-2): Add the login page. Spec: [docs/specs/login.md](${spec})`);
+  expect(pr!.body).toContain("Added the page.");
+  expect(pr!.body).toContain("## Ticket\n\nGoal. A user signs in.\n\nSpec. docs/specs/login.md, Sign-in.");
+  expect(pr!.body).not.toContain("Decisions");
+  expect(pr!.body).not.toContain("Which provider");
+  expect(world.decisions().find((line) => line.step === "pr")!.decisions).toEqual(["Which provider signs the user in?"]);
+});
+
+test("a ticket with no Epic names the spec from its own text", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { body: ["Spec. docs/specs/login.md, Sign-in."] });
+  world.verdicts({ "DEMO-2": "pass" });
+
+  const ran = await world.loop("run", "DEMO-2");
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.prs()[0]!.body).toContain("Add the login page. Spec: docs/specs/login.md\n");
+});
+
+test("the ticket goes to In Progress at start and In Review when the pull request opens, and the tracker sets Done at merge", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.jira.add("DEMO-3", "Already in progress", { parent: EPIC, status: "In Progress" });
   world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
@@ -122,6 +179,9 @@ test("the ticket goes to In Progress at start and In Review when the pull reques
   const steps = world.steps().filter((step) => step.startsWith("DEMO-2"));
   expect(steps.indexOf("DEMO-2 tracker-status ok")).toBeLessThan(steps.indexOf("DEMO-2 build started"));
   expect(steps.lastIndexOf("DEMO-2 tracker-status ok")).toBe(steps.indexOf("DEMO-2 pr open") + 1);
+  // Jira Automation moves the ticket to Done at the merge, so the loop sets nothing after it.
+  expect(steps.lastIndexOf("DEMO-2 tracker-status ok")).toBeLessThan(steps.indexOf("DEMO-2 merge merged"));
+  expect(world.jira.issues.get("DEMO-2")!.status).toBe("In Review");
 });
 
 test("a ticket whose pull request merged before the run counts as done, and its dependent builds", async () => {

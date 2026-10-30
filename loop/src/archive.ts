@@ -15,15 +15,18 @@ const SHA = /^[0-9a-f]{40}$/;
 
 export type Archived = { result: "pr-open" | "archived" | "no-spec"; detail: string; pr: string | null };
 
-type Link = { url: string; prefix: string; ref: string; path: string };
+export type Link = { url: string; prefix: string; ref: string; path: string };
+
+/** The links to a Markdown file of a GitHub repo, each once, in the order the text gives them. */
+export function mdLinks(text: string): Link[] {
+  const found = new Map<string, Link>();
+  for (const [url, prefix, ref, path] of text.matchAll(LINK)) found.set(url!, { url: url!, prefix: prefix!, ref: ref!, path: path! });
+  return [...found.values()];
+}
 
 /** The links of the repo to a Markdown file, each once. A link to another repo is not its spec. */
 export function specLinks(text: string, repoUrl: string): Link[] {
-  const found = new Map<string, Link>();
-  for (const [url, prefix, ref, path] of text.matchAll(LINK)) {
-    if (prefix === repoUrl) found.set(url!, { url: url!, prefix: prefix!, ref: ref!, path: path! });
-  }
-  return [...found.values()];
+  return mdLinks(text).filter((link) => link.prefix === repoUrl);
 }
 
 export async function archive(config: Config, jira: Jira, epic: Ticket, repoUrl: string, home: string): Promise<Archived> {

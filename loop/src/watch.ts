@@ -834,13 +834,15 @@ function currentStep(lines: Line[], hasPullRequest: boolean, paused: boolean): S
   return name ? { name, since: last.time, paused } : null;
 }
 
-/** The step a step line opens, or null when it opens none. A red wait goes back to build, as a fix round. */
+/** The step a step line opens, or null when it opens none. A red wait goes back to build, as a fix round. A
+ * held wait, with the hold label on, stays in wait.
+ */
 function stepOpenedBy(line: Line, hasPullRequest: boolean): string | null {
   const { step, result } = line;
   if (step === "build" && result === "started") return "build";
   if (step === "build" && result === "pass") return "push";
   if (step === "push" && result === "ok") return hasPullRequest ? "wait" : "pr";
-  if (step === "pr" && result === "open") return "wait";
+  if ((step === "pr" && result === "open") || (step === "wait" && result === "held")) return "wait";
   if ((step === "wait" && result === "green") || (step === "base" && result === "main")) return "merge";
   if (step === "wait" && result === "red") return "build";
   if (step === "stuck" && result === "started") return "stuck";
