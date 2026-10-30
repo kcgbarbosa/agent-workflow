@@ -71,7 +71,14 @@ test("the loop waits for the pull request's checks and merges on green", async (
   expect(world.prs()[0]!.state).toBe("MERGED");
   const wait = world.decisions().find((line) => line.step === "wait");
   expect(wait).toMatchObject({ result: "green", pr: world.prs()[0]!.url, checks: [{ name: "gate / check", bucket: "pass" }] });
-  expect(world.steps().slice(-3)).toEqual(["DEMO-2 merge merged", "DEMO-1 finish ok", "DEMO-1 notify ok"]);
+  expect(world.steps().slice(-6)).toEqual([
+    "DEMO-2 merge merged",
+    "DEMO-1 archive no-spec",
+    "DEMO-1 complete ok",
+    "DEMO-1 notify ok",
+    "DEMO-1 finish ok",
+    "DEMO-1 notify ok",
+  ]);
 });
 
 test("a check that reports late keeps the loop waiting until the pull request merges", async () => {
@@ -190,6 +197,9 @@ test("the decisions log has one line per step, and no gate, review, land, or Epi
     "DEMO-2 tracker-status ok",
     "DEMO-2 wait green",
     "DEMO-2 merge merged",
+    "DEMO-1 archive no-spec",
+    "DEMO-1 complete ok",
+    "DEMO-1 notify ok",
     "DEMO-1 finish ok",
     "DEMO-1 notify ok",
   ]);

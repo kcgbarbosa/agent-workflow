@@ -64,6 +64,14 @@ export class Jira {
     }
   }
 
+  /** Replaces the text in the description, in its text and its link targets. */
+  async replaceInDescription(key: string, old: string, text: string): Promise<void> {
+    const data = await this.request("GET", `/rest/api/3/issue/${key}?fields=description`);
+    const raw = JSON.stringify(data.fields?.description ?? null);
+    if (!raw.includes(old)) return;
+    await this.request("PUT", `/rest/api/3/issue/${key}`, { fields: { description: JSON.parse(raw.replaceAll(old, text)) } });
+  }
+
   /** Moves the ticket to the status of that name, through the transition that leads there. */
   async transition(key: string, status: string): Promise<void> {
     const path = `/rest/api/3/issue/${key}/transitions`;

@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { ask, type Meter, runSetup, type Session } from "./agent.ts";
+import { archive } from "./archive.ts";
 import type { Config } from "./config.ts";
 import { git, slug } from "./git.ts";
 import * as github from "./github.ts";
@@ -38,6 +39,9 @@ const PUBLISHED_PORT = /:(\d+)(?:-(\d+))?->/g;
 const USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work.";
 
 const STUCK_COMMENT = "The loop stopped this ticket.";
+
+/** The status an Epic takes when its last ticket merges. */
+const EPIC_DONE = "Done";
 
 export type Target = { key: string } | { filter: string };
 
@@ -73,6 +77,8 @@ export class Run {
   /** The summary of the Epic or ticket the run started with, for the watch page. */
   private summary: string | null = null;
   private readonly merged = new Set<string>();
+  /** The address of each merged pull request, which names the repo on GitHub. */
+  private readonly mergedUrls: string[] = [];
   private readonly byKey = new Map<string, Ticket>();
   /** The pull request each ticket opened in this run and that has not merged, which a dependent stacks on. */
   private readonly open = new Map<string, { url: string; branch: string }>();
@@ -113,7 +119,10 @@ export class Run {
       const pr = prs.find((item) => item.state === "MERGED");
       if (pr) mergedBefore.set(ticket.key, pr);
     }
-    for (const key of mergedBefore.keys()) this.merged.add(key);
+    for (const [key, pr] of mergedBefore) {
+      this.merged.add(key);
+      this.mergedUrls.push(pr.url);
+    }
     const states = new Map(tickets.map((ticket) => [ticket.key, this.state(ticket)]));
     this.log.write(this.name, "frontier", "ok", {
       detail: tickets.map((ticket) => `${ticket.key} ${states.get(ticket.key)}`).join(", "),
@@ -174,12 +183,43 @@ export class Run {
     if (stopped.length) parts.push(`stopped: ${stopped.join(", ")}`);
     if (left.length) parts.push(`waiting on a blocker: ${left.map((ticket) => ticket.key).join(", ")}`);
     if (this.halt) parts.push(`the loop stopped at the ${this.halt}`);
+    if (await this.completeEpic(tickets)) parts.push(`${this.epic} is complete`);
     const detail = parts.join(". ");
     const failed = stopped.length > 0 || this.halt !== null;
     this.log.write(this.name, "finish", failed ? "stopped" : "ok", { detail });
     await this.notify(`${this.name} finished. ${detail}`);
     return failed ? 1 : 0;
   }
+  /**
+   * When every ticket of the Epic has merged or is done, archives the Epic's spec, then marks the Epic done. A
+   * run that finds the Epic done does nothing, and an archive that fails leaves it open, so the next run goes on.
+   */
+  private async completeEpic(tickets: Ticket[]): Promise<boolean> {
+    if (!this.epic) return false;
+    try {
+      const epic = await this.jira.ticket(this.epic);
+      if (epic.done) return false;
+      const children = this.name === this.epic ? tickets : await this.jira.search(`parent = ${this.epic} ORDER BY key ASC`);
+      if (!children.length || !children.every((child) => this.merged.has(child.key) || child.done)) return false;
+      const [url] = this.mergedUrls;
+      if (!url) throw new Error(`No pull request of ${this.epic} merged, so the loop does not know the repo on GitHub.`);
+      const archived = await archive(this.config, this.jira, epic, url.split("/pull/")[0]!, this.home);
+      this.log.write(this.name, "archive", archived.result, { detail: archived.detail, pr: archived.pr });
+    } catch (error) {
+      this.log.write(this.name, "archive", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
+      return false;
+    }
+    try {
+      await this.jira.transition(this.epic, EPIC_DONE);
+      this.log.write(this.name, "complete", "ok", { detail: `${this.epic} is ${EPIC_DONE}.` });
+    } catch (error) {
+      this.log.write(this.name, "complete", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
+      return false;
+    }
+    await this.notify(`${this.epic} complete`);
+    return true;
+  }
+
   /** The tickets of an Epic, the one ticket of a key, or the tickets a filter finds. */
   private async tickets(): Promise<Ticket[]> {
     if ("filter" in this.target) return this.jira.search(this.target.filter);
@@ -329,6 +369,7 @@ export class Run {
     }
     this.log.write(key, "merge", "merged", { commit: merged, pr: url });
     this.merged.add(key);
+    this.mergedUrls.push(url);
     this.open.delete(key);
     await this.retarget(key, branch, (await github.view(repo, url)).baseRefName);
     return "merged";
