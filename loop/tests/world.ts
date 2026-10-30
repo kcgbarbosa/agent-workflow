@@ -312,10 +312,14 @@ ${extra}`;
     });
   }
 
-  /** Converts the ticket's pull request to a draft, or back. */
+  /** Converts the ticket's pull request to a draft, which turns auto-merge off as GitHub does, or marks it ready. */
   draft(key: string, on: boolean): void {
     this.github((state) => {
-      for (const pr of state.prs) if (pr.headRefName.includes(`/${key}-`)) pr.isDraft = on;
+      for (const pr of state.prs) {
+        if (!pr.headRefName.includes(`/${key}-`)) continue;
+        pr.isDraft = on;
+        if (on) pr.autoMerge = null;
+      }
     });
   }
 

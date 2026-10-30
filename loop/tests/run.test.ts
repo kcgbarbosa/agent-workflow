@@ -161,7 +161,8 @@ test("a draft pull request is a pause the loop waits out, as the hold label is",
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
 
   const running = world.loop("run", EPIC);
-  await world.until(() => world.prs().length === 1, "the pull request");
+  // Once auto-merge is on, as a person would find the pull request.
+  await world.until(() => world.steps().includes("DEMO-2 pr open"), "the pull request with auto-merge on");
   world.draft("DEMO-2", true);
   world.setCheck("DEMO-2", "pass");
   await world.until(() => world.steps().includes("DEMO-2 wait held"), "the held wait");
@@ -170,7 +171,8 @@ test("a draft pull request is a pause the loop waits out, as the hold label is",
   const ran = await running;
 
   expect(ran.code, ran.stderr).toBe(0);
-  expect(world.prs()[0]!.state).toBe("MERGED");
+  expect(world.prs()[0]).toMatchObject({ state: "MERGED", autoMerge: { mergeMethod: "SQUASH" } });
+  expect(world.ghCalls().filter((args) => args[1] === "merge" && args.includes("--auto"))).toHaveLength(2);
   expect(world.steps().filter((step) => step.startsWith("DEMO-2 wait"))).toEqual(["DEMO-2 wait held", "DEMO-2 wait green"]);
 });
 

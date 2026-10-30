@@ -7,9 +7,9 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { ask, type Meter, runSetup, type Session } from "./agent.ts";
-import { archive, mdLinks } from "./archive.ts";
+import { archive, mdLinks, specLinks } from "./archive.ts";
 import type { Config } from "./config.ts";
-import { git, slug } from "./git.ts";
+import { git, originUrl, slug } from "./git.ts";
 import * as github from "./github.ts";
 import { endAll, run } from "./spawn.ts";
 import { type Ticket, Jira } from "./jira.ts";
@@ -674,16 +674,19 @@ export class Run {
   }
 
   /**
-   * The `Spec:` line of the pull request body: the Markdown file that the Spec line of the Epic's description
-   * links, else the first one the description links, else the first Markdown path on a line of the ticket that
-   * names the spec, else none.
+   * The `Spec:` line of the pull request body: the Markdown file of this repo that the Spec line of the Epic's
+   * description links, else the first one of this repo the description links, else the first Markdown path on
+   * a line of the ticket that names the spec, else none. The repo is the one of a merged pull request, or the
+   * origin remote; when neither names a GitHub repo, a link to any repo counts.
    */
   private async specLine(ticket: Ticket): Promise<string> {
     if (this.epic) {
       this.epicText ??= this.jira.ticket(this.epic).then((epic) => epic.text);
       const text = await this.epicText.catch(() => "");
+      const repoUrl = this.mergedUrls[0]?.split("/pull/")[0] ?? (await originUrl(this.config.repo));
+      const links = (part: string) => (repoUrl ? specLinks(part, repoUrl) : mdLinks(part));
       const specLine = text.split("\n").find((line) => /^\s*\**spec\**[.:]/i.test(line)) ?? "";
-      const [link] = [...mdLinks(specLine), ...mdLinks(text)];
+      const [link] = [...links(specLine), ...links(text)];
       if (link) return `Spec: [${link.path}](${link.url})`;
     }
     const named = ticket.text.split("\n").find((line) => /\bspec\b/i.test(line) && MD_PATH.test(line));
@@ -735,6 +738,10 @@ export class Run {
           }
           held = true;
         } else {
+          if (held && autoMerge) {
+            // GitHub turns auto-merge off on a draft and does not turn it back on. When that fails, the loop merges.
+            [autoMerge] = await this.autoMerge(url);
+          }
           held = false;
           const passed = checks.length > 0 && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
           if (passed && !autoMerge) return { result: "green", checks, detail: "", closed: false };
