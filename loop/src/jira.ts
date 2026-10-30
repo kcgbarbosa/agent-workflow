@@ -73,6 +73,17 @@ export class Jira {
     await this.request("POST", path, { transition: { id: match.id } });
   }
 
+  /** Sets the Flagged field, the loop's mark of a stuck ticket. */
+  async flag(key: string): Promise<void> {
+    const field = await this.flaggedField();
+    await this.request("PUT", `/rest/api/3/issue/${key}`, { fields: { [field]: [{ value: "Impediment" }] } });
+  }
+
+  async comment(key: string, text: string): Promise<void> {
+    const content = text.split("\n").map((line) => ({ type: "paragraph", content: line ? [{ type: "text", text: line }] : [] }));
+    await this.request("POST", `/rest/api/3/issue/${key}/comment`, { body: { type: "doc", version: 1, content } });
+  }
+
   private async fields(): Promise<string[]> {
     return ["summary", "status", "issuetype", "description", "issuelinks", "parent", await this.flaggedField()];
   }
