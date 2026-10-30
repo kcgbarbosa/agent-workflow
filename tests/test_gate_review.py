@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,19 @@ def test_minor_findings_pass_and_an_unreported_cost_is_unknown(pr: FakeGitHub) -
     [review] = pr.state["reviews"]
     assert review["event"] == "COMMENT"
     assert review["body"].splitlines()[-1] == "review api cost: unknown"
+
+
+def test_the_log_shows_each_tool_call_while_the_review_runs(pr: FakeGitHub) -> None:
+    step = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "git diff abc HEAD"}}]}}
+    pr.reply(json.dumps(step) + "\n" + json.dumps(result(finding("a.py", 3, "minor", "Name it."))))
+
+    run = pr.run(REVIEW, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert "review: Bash git diff abc HEAD" in run.stdout
+    [call] = pr.claude_calls
+    assert call["argv"][call["argv"].index("--output-format") + 1] == "stream-json"
+    assert len(pr.state["reviews"]) == 1
 
 
 def test_a_later_push_reviews_only_the_commits_since_the_last_review(pr: FakeGitHub) -> None:

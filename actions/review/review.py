@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -165,28 +166,59 @@ def prompt(number: str, since: str, merged: bool, pr_file: Path, earlier_file: P
     return "\n\n".join(parts)
 
 
+def progress(event: dict) -> None:
+    """One log line for each tool call, so a long review shows what it does while it runs."""
+    if event.get("type") != "assistant":
+        return
+    for block in event.get("message", {}).get("content", []):
+        if block.get("type") == "tool_use":
+            inputs = block.get("input") or {}
+            detail = next((str(inputs[key]) for key in ("command", "file_path", "pattern", "description", "skill") if key in inputs), "")
+            print(f"review: {block.get('name')} {detail[:160]}".rstrip(), flush=True)
+
+
 def run_claude(text: str, config: Settings) -> dict:
     claude = shutil.which("claude")
     command = [claude] if claude else ["npx", "-y", "@anthropic-ai/claude-code"]
     env = {key: value for key, value in os.environ.items() if key not in ("GH_TOKEN", "GITHUB_TOKEN")}
-    result = subprocess.run(
+    # stderr goes to a file, so a full stderr pipe cannot stall the run while stdout streams.
+    errors = tempfile.TemporaryFile("w+")
+    process = subprocess.Popen(
         [
             *command,
             "-p",
             text,
             "--model", config.model,
             "--effort", config.effort,
-            "--output-format", "json",
+            "--output-format", "stream-json",
+            "--verbose",
             "--json-schema", json.dumps(SCHEMA),
             "--allowedTools", *TOOLS,
         ],  # fmt: skip
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=errors,
         text=True,
         env=env,
     )
-    if result.returncode != 0:
-        sys.exit(f"Claude Code failed:\n{result.stderr}{result.stdout[-2000:]}")
-    return json.loads(result.stdout)
+    assert process.stdout is not None
+    output, tail = None, []
+    for line in process.stdout:
+        tail = (tail + [line])[-20:]
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        progress(event)
+        if event.get("type") == "result":
+            output = event
+    process.wait()
+    errors.seek(0)
+    stderr = errors.read()
+    if process.returncode != 0 or output is None:
+        sys.exit(f"Claude Code failed:\n{stderr}{''.join(tail)[-2000:]}")
+    return output
 
 
 def findings_of(output: dict) -> list[dict]:
