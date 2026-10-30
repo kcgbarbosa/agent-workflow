@@ -11,7 +11,7 @@ Each skill holds its own steps. Where a skill publishes something, `docs/agents/
 | 2   | Spec             | `to-spec`, then `to-prd` with a PRD | The spec and the Epic, then the PRD in the Epic description            | `docs/specs/<feature>.md`, the Jira Epic |
 | 3   | Tickets          | `to-tickets`                        | Tasks with blocking links                                              | Jira, under the Epic                     |
 | 4   | Planning         | None                                | The hand-set fields on each ticket                                     | Jira                                     |
-| 5   | Build            | `implement` or the loop             | Commits on a branch, with an acceptance test for each line             | Git                                      |
+| 5   | Build            | `implement` or the loop             | Commits on a branch, with an acceptance test for each line, and a pull request | Git                                      |
 | 6   | Review and merge | `code-review`                       | A pull request, then one commit on the default branch                  | The git host                             |
 | 7   | Acceptance       | None                                | The deployed result checked against each ticket's "What the user sees" | Jira                                     |
 
