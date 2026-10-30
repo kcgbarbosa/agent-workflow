@@ -177,6 +177,18 @@ def test_a_model_answer_with_no_findings_list_exits_out_of_shape(pr: FakeGitHub)
     assert pr.state["reviews"] == []
 
 
+def test_a_model_answer_in_prose_exits_with_the_text_and_how_the_run_ended(pr: FakeGitHub) -> None:
+    pr.reply({"type": "result", "subtype": "error_max_turns", "num_turns": 40, "result": "I reviewed the change and found nothing."})
+
+    run = pr.run(REVIEW, **INPUTS)
+
+    assert run.returncode == 1
+    assert "returned text in place of the findings" in run.stderr
+    assert "subtype 'error_max_turns' after 40 turns" in run.stderr
+    assert "I reviewed the change" in run.stderr
+    assert pr.state["reviews"] == []
+
+
 def test_the_review_runs_on_an_api_key_with_no_plan_token(pr: FakeGitHub) -> None:
     pr.reply(result(finding("a.py", 3, "minor", "Name it.")))
 

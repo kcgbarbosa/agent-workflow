@@ -190,12 +190,18 @@ def run_claude(text: str, config: Settings) -> dict:
 
 
 def findings_of(output: dict) -> list[dict]:
+    """The findings list, or a clear exit that shows how the answer went out of shape and how the run ended."""
+    ended = f"The run ended with subtype {output.get('subtype')!r} after {output.get('num_turns')} turns."
     answer = output.get("structured_output")
     if answer is None:
-        answer = json.loads(output.get("result") or "null")
+        result = output.get("result") or "null"
+        try:
+            answer = json.loads(result)
+        except json.JSONDecodeError:
+            sys.exit(f"code-review returned text in place of the findings. {ended} It starts:\n{str(result)[:1500]}")
     findings = answer["findings"] if isinstance(answer, dict) else answer
     if not isinstance(findings, list):
-        sys.exit(f"code-review returned no list of findings: {answer!r}")
+        sys.exit(f"code-review returned no list of findings: {answer!r} {ended}")
     for finding in findings:
         if (
             not isinstance(finding.get("path"), str)
