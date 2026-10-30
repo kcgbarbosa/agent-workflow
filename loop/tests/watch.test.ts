@@ -34,7 +34,7 @@ const FRONTIER = {
 /** A run whose DEMO-2 went red, took a fix, and pushed it, so it waits for its checks again. */
 function redThenFixed(pid: number): object[] {
   return [
-    { ticket: EPIC, step: "start", result: "ok", pid, setup: { model: "claude-opus-5-5" } },
+    { ticket: EPIC, step: "start", result: "ok", pid, setup: { agent: "claude-opus-5-5 high" } },
     FRONTIER,
     { ticket: "DEMO-2", step: "start", result: "new", detail: "feat/DEMO-2-add-the-login-page", slot: 0 },
     { ticket: "DEMO-2", step: "build", result: "started", attempt: 1 },
@@ -151,13 +151,13 @@ function twoRuns(): object[] {
     { ticket, step: "merge", result: "merged", pr: `${PR}${ticket}` },
   ];
   return [
-    { ticket: EPIC, step: "start", result: "ok", pid: 1, setup: { model: "claude-opus-5-5", effort: "high", parallel: 1 } },
+    { ticket: EPIC, step: "start", result: "ok", pid: 1, setup: { claude: "2.1.301", agent: "claude-opus-5-5 high" } },
     FRONTIER,
     ...merged("DEMO-2", "green"),
     agent("DEMO-2", "s1", 2, { five_hour: { start: 0.1, end: 0.2, resets_at: 1 } }),
     { ticket: "DEMO-3", step: "stuck", result: "ok", detail: "Still red." },
     { ticket: EPIC, step: "finish", result: "ok" },
-    { ticket: EPIC, step: "start", result: "ok", pid: 1, setup: { model: "claude-opus-5-5", effort: "max", parallel: 2 } },
+    { ticket: EPIC, step: "start", result: "ok", pid: 1, setup: { claude: "2.1.301", agent: "claude-opus-5-5 max" } },
     FRONTIER,
     ...merged("DEMO-3", "red", "green"),
     agent("DEMO-3", "s2", 3, { five_hour: { start: 0.2, end: 0.3, resets_at: 1 } }),
@@ -180,7 +180,7 @@ test("the cost report breaks the latest run down by the plan meter and compares 
   const row = (label: string) => rows.find((item: { label: string }) => item.label === label);
   expect(row("Tickets merged")).toMatchObject({ previous: 1, current: 2, change: 100 });
   expect(row("Red checks")).toMatchObject({ previous: 0, current: 1 });
-  expect(row("effort")).toMatchObject({ previous: "high", current: "max", change: "changed" });
+  expect(row("agent")).toMatchObject({ previous: "claude-opus-5-5 high", current: "claude-opus-5-5 max", change: "changed" });
 
   const printed = await world.loop("report", EPIC);
   expect(printed.stdout).toContain("list price (API)");
@@ -200,7 +200,9 @@ test("the page serves the report, and the plan meter is the newest reading on th
 
 test("a real run logs the plan meter and the usage the report reads", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
-  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" }, meter: { five_hour: [0.1, 0.25] } }] });
+  // The second reading comes before the meter's time is up, so it waits for it and goes out then.
+  world.env.LOOP_METER_SECONDS = "0.3";
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" }, meter: { five_hour: [0.1, 0.25] }, pause: 1000 }] });
   world.verdicts({ "DEMO-2": "pass" });
   expect((await world.loop("start", EPIC)).code).toBe(0);
 
@@ -208,7 +210,14 @@ test("a real run logs the plan meter and the usage the report reads", async () =
 
   const { current } = JSON.parse(ran.stdout);
   expect(current).toMatchObject({ merged: 1, cost: 0.5, plan_used: { five_hour: 15 }, models: { "claude-opus-5-5": { costUSD: 0.5 } } });
-  expect(current.setup).toMatchObject({ model: "claude-opus-5-5" });
+  const meters = world.decisions().filter((line) => line.step === "meter");
+  expect(meters.map((line) => (line.meter as { five_hour: { utilization: number } }).five_hour.utilization)).toEqual([0.1, 0.25]);
+  expect(current.setup).toEqual({
+    claude: "2.1.999",
+    agent: "claude-opus-5-5 high",
+    tiers: expect.objectContaining({ scout: "claude-haiku-5-5 medium" }),
+    review: "the gate's model the gate's effort",
+  });
 });
 
 test("the forecast reads the merges of each run from the log and the open work from Jira", async () => {
