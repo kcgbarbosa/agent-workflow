@@ -202,3 +202,11 @@ test("a ticket with no free slot is stuck with the container that holds its port
   expect(issue.comments[0]).toContain("Port 3020 is held by the container other-web-1. No spare slot has its ports free.");
   expect(issue.comments[0]).not.toContain("The pull request is");
 });
+
+test("a run that fails in the loop itself logs loop-error and notifies", async () => {
+  const ran = await world.loop("run", "DEMO-99");
+
+  expect(ran.code).toBe(1);
+  expect(world.steps("DEMO-99")).toContain("DEMO-99 stop loop-error");
+  expect(world.jira.notifications).toContain("DEMO-99 stopped");
+});

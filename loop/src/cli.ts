@@ -106,7 +106,7 @@ async function run(target: Target, repoArg: string | undefined): Promise<number>
   try {
     code = await loop.run();
   } catch (error) {
-    loop.log.write(loop.log.run, "stop", "loop-error", { detail: (error as Error).message });
+    await loop.failed(error as Error);
     code = 1;
   }
   // A stop ends the agents, so the run can return before the stop has notified. The stop ends the process.
