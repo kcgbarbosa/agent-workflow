@@ -35,6 +35,7 @@ const DENIED = "denied by the Claude Code auto mode classifier";
 const MIN_SECRET = 8;
 // The steps that say nothing new on the page.
 const QUIET = new Set(["tracker-status", "meter"]);
+const WARNED = new Set(["retarget", "worktree"]);
 // The results of an agent that waits for a usage limit to reset.
 const LIMITED = ["usage-limit", "usage-pause"];
 const RECENT_ITEMS = 3;
@@ -62,7 +63,7 @@ const IMAGE_TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
-export type Check = { name: string; bucket: string };
+export type Check = { name: string; bucket: string; link?: string };
 export type PullRequest = { url: string; result: string; checks: Check[] };
 type Last = { step: string; result: string; time: string };
 type Agent = { number: number; updated: string };
@@ -82,6 +83,7 @@ export type EventView = {
   cost?: unknown;
   turns?: unknown;
   log?: string;
+  warning?: true;
 };
 
 export type QueueItem = { key: string; state: string; waits_on: string[] };
@@ -101,6 +103,7 @@ export type TicketView = {
   recent: Item[];
   files: string[];
   pr: PullRequest | null;
+  auto_merge: string | null;
   stacked_on: { branch: string; pr: string | null } | null;
   red: number;
 };
@@ -380,6 +383,7 @@ export function epicView(stateDir: string, epic: string, running?: boolean): Epi
       recent: isLive ? recentActivity(home, ticket.key, runDir, agents) : [],
       files: runFiles(home, runDir),
       pr: pr && column === "merged" ? { ...pr, result: "merged" } : pr,
+      auto_merge: autoMergeOff(everything),
       stacked_on: stackedOn(own),
       red: own.filter((line) => line.step === "wait" && line.result === "red").length,
     });
@@ -578,6 +582,8 @@ function eventOf(home: string, line: Line): EventView {
     result: line.result,
     detail: detail.replaceAll(`${home}/`, ""),
   };
+  // A merged ticket's clean-up that failed is left to KC, so the steps list warns of it.
+  if (WARNED.has(line.step) && line.result === "fail") event.warning = true;
   const usage = isRecord(line.usage) ? line.usage : {};
   if (usage.total_cost_usd !== undefined && usage.total_cost_usd !== null) {
     event.cost = usage.total_cost_usd;
@@ -779,8 +785,19 @@ function eventsOf(data: Buffer): Record<string, unknown>[] {
   return found;
 }
 
+/** The checks of a wait line. A check logged before the loop kept its link has none. */
 function checksOf(line: Line | undefined): Check[] {
-  return line && Array.isArray(line.checks) ? (line.checks as Check[]) : [];
+  if (!line || !Array.isArray(line.checks)) return [];
+  return (line.checks as Check[]).map(({ name, bucket, link }) => (typeof link === "string" && link ? { name, bucket, link } : { name, bucket }));
+}
+
+/** Why auto-merge is off on the ticket's latest pull request, from an auto-merge line after its latest
+ * open, or null. The loop merges that pull request itself on green.
+ */
+function autoMergeOff(lines: Line[]): string | null {
+  const opened = lines.findLastIndex((line) => line.step === "pr" && line.result === "open");
+  const failed = lines.slice(opened + 1).findLast((line) => line.step === "auto-merge" && line.result === "fail");
+  return failed ? String(failed.detail ?? "") : null;
 }
 
 /** The pull request a line names, or null when it names none. */

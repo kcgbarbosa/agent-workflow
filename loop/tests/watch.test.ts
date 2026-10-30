@@ -123,6 +123,102 @@ test("the page shows the checks of a red pull request, masks each secret, and an
   expect((await watching.get(`/api/agent/${EPIC}/DEMO-2/1?offset=-1&project=demo`)).status).not.toBe(500);
 });
 
+test("a real run's wait lines carry each check's link, and the page gives it", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": ["fail", "pass"] });
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { write: { "login.txt": "fixed\n" }, commit: "fix(DEMO-2): fix the login" }] });
+  const ran = await world.loop("run", EPIC);
+  expect(ran.code, ran.stderr).toBe(0);
+
+  watching = await world.watch();
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  const waits = world.decisions().filter((line) => line.step === "wait");
+  for (const wait of waits) {
+    for (const check of wait.checks as { link?: string }[]) expect(check.link).toMatch(/^https:\/\/github\.com\/kcgbarbosa\/demo\/actions\/runs\//);
+  }
+  const ticket = view.tickets.find((item: { key: string }) => item.key === "DEMO-2");
+  expect(ticket.pr.checks).toEqual(waits.at(-1)!.checks);
+  expect(ticket.pr.checks[0]).toMatchObject({ name: "gate / check", bucket: "pass", link: expect.stringContaining("/actions/runs/") });
+});
+
+test("a log with checks that have no link shows them with none", async () => {
+  world.record(redThenFixed(deadPid()).slice(0, 8));
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.tickets[0].pr.checks).toEqual([
+    { name: "gate / check", bucket: "fail" },
+    { name: "gate / review", bucket: "pass" },
+  ]);
+});
+
+test("a held pull request's result is held", async () => {
+  world.record([
+    ...redThenFixed(process.pid).slice(0, 7),
+    { ticket: "DEMO-2", step: "wait", result: "held", pr: PR, checks: [{ name: "hold", bucket: "fail" }], detail: "The hold label is on. The loop waits until it is not." },
+  ]);
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.tickets[0].pr.result).toBe("held");
+});
+
+test("a ticket whose auto-merge failed carries its reason, and merges", async () => {
+  world.noAutoMerge();
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
+  const ran = await world.loop("run", EPIC);
+  expect(ran.code, ran.stderr).toBe(0);
+
+  watching = await world.watch();
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  const [ticket] = view.tickets;
+  expect(ticket.column).toBe("merged");
+  expect(ticket.auto_merge).toContain("Auto-merge is not allowed");
+});
+
+test("a ticket with auto-merge on has no auto-merge reason", async () => {
+  world.record([
+    ...redThenFixed(process.pid).slice(0, 7),
+    { ticket: "DEMO-2", step: "auto-merge", result: "fail", pr: PR, detail: "Auto-merge is off: no." },
+    { ticket: "DEMO-2", step: "pr", result: "open", pr: PR, auto_merge: true },
+  ]);
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.tickets[0].auto_merge).toBeNull();
+});
+
+test("the steps list holds retarget and worktree lines, and a failed one is a warning", async () => {
+  const worktree = `${world.state}/${EPIC}/worktrees/DEMO-2`;
+  world.record([
+    ...redThenFixed(deadPid()).slice(0, 7),
+    { ticket: "DEMO-2", step: "merge", result: "merged", pr: PR },
+    { ticket: "DEMO-3", step: "retarget", result: "ok", pr: `${PR}0`, detail: "feat/DEMO-2-add-the-login-page merged, so it targets main." },
+    { ticket: "DEMO-4", step: "retarget", result: "fail", pr: `${PR}1`, detail: "GraphQL: Base branch was modified." },
+    { ticket: "DEMO-2", step: "worktree", result: "removed", detail: worktree },
+    { ticket: "DEMO-2", step: "worktree", result: "fail", detail: "fatal: cannot remove a locked working tree" },
+  ]);
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  const steps = view.events
+    .filter((event: { step: string }) => event.step === "retarget" || event.step === "worktree")
+    .map(({ ticket, step, result, detail, warning }: Record<string, unknown>) => ({ ticket, step, result, detail, warning }));
+  expect(steps).toEqual([
+    { ticket: "DEMO-3", step: "retarget", result: "ok", detail: "feat/DEMO-2-add-the-login-page merged, so it targets main.", warning: undefined },
+    { ticket: "DEMO-4", step: "retarget", result: "fail", detail: "GraphQL: Base branch was modified.", warning: true },
+    { ticket: "DEMO-2", step: "worktree", result: "removed", detail: "worktrees/DEMO-2", warning: undefined },
+    { ticket: "DEMO-2", step: "worktree", result: "fail", detail: "fatal: cannot remove a locked working tree", warning: true },
+  ]);
+});
+
 /** Two runs of the Epic: the first merges one ticket, the second merges two after a red check. */
 function twoRuns(): object[] {
   const agent = (ticket: string, session: string, cost: number, plan: object) => ({

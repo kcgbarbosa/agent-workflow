@@ -37,7 +37,7 @@ Not used. The repo has no stack, and the tests run against fakes.
 
 ### UI review
 
-Not used. The only screen is the `loop watch` page, and KC checks a change to it by eye.
+Not used. The only screen is the `loop watch` page, and KC checks a change to it by eye. `node loop/tests/seed.ts [port]` serves the page over a seeded run, at port 8791 by default, so a review opens each panel at phone width with no real run.
 
 ### Agent
 

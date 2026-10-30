@@ -85,6 +85,11 @@ function typeOf(ticket: Ticket): string {
   return ticket.issueType === "Bug" ? "fix" : "feat";
 }
 
+/** A check as a `wait` line keeps it: its name, its bucket, and the link to its run. */
+function logged({ name, bucket, link }: github.Check): { name: string; bucket: string; link?: string } {
+  return link ? { name, bucket, link } : { name, bucket };
+}
+
 /** The checks that make the gate red. */
 function redChecks(checks: github.Check[]): github.Check[] {
   return checks.filter((check) => check.bucket === "fail" || check.bucket === "cancel");
@@ -363,7 +368,8 @@ export class Run {
           return "stopped";
         }
         let detail = "";
-        if ((await github.view(repo, url)).baseRefName === main) {
+        const onMain = (await github.view(repo, url)).baseRefName === main;
+        if (onMain) {
           [autoMerge, detail] = await this.autoMerge(url);
         } else {
           detail = `It stacks on ${base}, so auto-merge waits until it targets ${main}.`;
@@ -371,6 +377,7 @@ export class Run {
         // An open question of the agent goes in the log, not in the body, where it would read as a blocker.
         const decisions = session.output?.decisions ?? [];
         this.log.write(key, "pr", "open", { commit, pr: url, auto_merge: autoMerge, detail, ...(decisions.length ? { decisions } : {}) });
+        if (onMain && !autoMerge) this.log.write(key, "auto-merge", "fail", { pr: url, detail });
         this.open.set(key, { url, branch });
         this.wake();
         await this.status(key, this.config.inReview);
@@ -385,7 +392,7 @@ export class Run {
         this.log.write(key, "wait", checks.result, {
           commit,
           pr: url,
-          checks: checks.checks.map(({ name, bucket }) => ({ name, bucket })),
+          checks: checks.checks.map(logged),
           detail: checks.detail,
         });
         if (checks.result !== "green" || autoMerge || !stack) break;
@@ -769,9 +776,8 @@ export class Run {
         if (holdOn || pr.isDraft) {
           deadline = Date.now() + WAIT_MINUTES * 60_000;
           if (!held) {
-            const logged = checks.map(({ name, bucket }) => ({ name, bucket }));
             const why = pr.isDraft ? "The pull request is a draft." : "The hold label is on.";
-            this.log.write(key, "wait", "held", { commit, pr: url, checks: logged, detail: `${why} The loop waits until it is not.` });
+            this.log.write(key, "wait", "held", { commit, pr: url, checks: checks.map(logged), detail: `${why} The loop waits until it is not.` });
           }
           held = true;
         } else {
