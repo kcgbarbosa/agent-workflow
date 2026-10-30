@@ -283,16 +283,18 @@ pre.detail { margin: 8px 0 2px; padding: 10px 12px; background: var(--ground); b
 .meter .row1 b { font-weight: 550; }
 .meter .when { margin-top: 6px; color: var(--text-muted); font-size: 13px; }
 .fine { margin-top: 16px; color: var(--text-muted); font-size: 13px; }
-/* The capacity forecast: a closed panel, opened when you plan, so the usage summary above stays as it is. */
-details.forecast > summary { list-style: none; cursor: pointer; padding-bottom: 20px; }
-details.forecast > summary::-webkit-details-marker { display: none; }
-details.forecast > summary h2::before { content: "▸ "; color: var(--text-muted); }
-details.forecast[open] > summary { padding-bottom: 0; }
-details.forecast[open] > summary h2::before { content: "▾ "; }
+/* This run's share of the 5-hour window per merged ticket against the typical share, under the meter bars. */
+.share { margin-top: 20px; font-variant-numeric: tabular-nums; }
+.share.warn { color: var(--warn); font-weight: 550; }
+/* The rest of the usage view: one closed fold, opened when you plan, so the view stays short. */
+details.fold > summary { list-style: none; cursor: pointer; padding: 8px 0; color: var(--text-muted); font-weight: 500; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: "▸ "; }
+details.fold[open] > summary::before { content: "▾ "; }
+details.fold > .usage-grid { margin-top: 8px; }
 .forecast h3 { margin: 24px 0 8px; font-size: 14px; font-weight: 500; color: var(--text-muted); }
 .forecast .scroll { overflow-x: auto; }
 .forecast .scroll td:first-child { min-width: 150px; }
-@media (max-width: 1023px) { details.forecast > summary { padding-bottom: 16px; } }
 
 </style>
 </head>
@@ -358,7 +360,7 @@ const RUNS_SHOWN = 5;
 const ui = {
   project: null, epic: null, page: "", ticket: null, tab: null, agent: null, follow: true, version: null, drawn: null,
   projects: [], epics: [], view: null, usage: {}, feed: null, report: null, reportWrap: null,
-  forecast: null, forecastWrap: null, forecastOpen: false, outputOpen: null, home: [], homeOpen: new Set(),
+  forecast: null, forecastWrap: null, moreOpen: false, outputOpen: null, home: [], homeOpen: new Set(),
 };
 // --- Helpers ---
 function h(tag, props, ...children) {
@@ -489,7 +491,7 @@ async function refresh() {
   }
   try { ui.view = await getJson(api(`/api/epic/${ui.epic}`)); } catch { return; }
   if (ui.page === "usage") loadReport();
-  if (ui.page === "usage" && ui.forecastOpen) loadForecast();
+  if (ui.page === "usage" && ui.moreOpen) loadForecast();
   const drawn = JSON.stringify([ui.view, ui.usage, ui.page, ui.ticket, Math.floor(Date.now() / AGE_MS)]);
   if (drawn !== ui.drawn) { ui.drawn = drawn; render(); }
   else if (ui.feed && ui.feed.live) pollFeed();
@@ -849,7 +851,7 @@ function stepsView(events) {
         e.log ? h("a", { href: fileUrl(e.log), target: "_blank" }, "log") : "", " ", e.log ? "" : (e.detail || "").slice(0, 400)))))));
 }
 
-// --- Usage: the plan meter in full, what the run delivered, and the API list price ---
+// --- Usage: the plan meter and this run's share against the typical one, the rest under More ---
 function usageView(v) {
   const p = v.plan;
   const s = v.stats;
@@ -879,21 +881,25 @@ function usageView(v) {
   fillReport();
   ui.forecastWrap = h("div", { class: "pbody" });
   fillForecast();
+  const run = p.per_merged.five_hour;
+  const share = `${run === undefined ? "This run: no share yet." : `This run: ${pct(run)} of the 5-hour window per merged ticket.`} ${p.typical === null ? "No typical share yet." : `Typical: ${pct(p.typical)}.`}`;
   return h("div", { class: "usage-grid" },
-    h("section", { class: "panel" }, h("div", { class: "phead" }, h("h2", {}, "Plan meter")), h("div", { class: "pbody" }, meters,
+    h("section", { class: "panel", style: "grid-column:1/-1" }, h("div", { class: "phead" }, h("h2", {}, "Plan meter")), h("div", { class: "pbody" }, meters,
+      h("div", { class: p.warn ? "share warn" : "share" }, share),
       h("div", { class: "fine" }, "The meter belongs to the account, so the loop and your own sessions move it together. This is the newest reading on this host."))),
-    h("section", { class: "panel" }, h("div", { class: "phead" }, h("h2", {}, "This run")), h("div", { class: "pbody" },
-      figs.length ? h("div", { class: "figs" }, figs) : h("div", { class: "muted" }, "No agent of this run has finished with a meter reading yet."),
-      h("div", { class: "figs" }, delivery))),
-    h("section", { class: "panel", style: "grid-column:1/-1" }, h("div", { class: "phead" }, h("h2", {}, "Against the run before")), ui.reportWrap),
-    h("details", { class: "panel forecast", style: "grid-column:1/-1", open: ui.forecastOpen,
-      // A redraw opens a new panel, which fires a toggle that changes nothing.
-      ontoggle: (e) => { if (e.target.open === ui.forecastOpen) return; ui.forecastOpen = e.target.open; if (ui.forecastOpen) loadForecast(true); } },
-      h("summary", { class: "phead" }, h("h2", {}, "Capacity forecast")),
-      ui.forecastWrap));
+    h("details", { class: "fold", style: "grid-column:1/-1", open: ui.moreOpen,
+      // A redraw opens a new fold, which fires a toggle that changes nothing.
+      ontoggle: (e) => { if (e.target.open === ui.moreOpen) return; ui.moreOpen = e.target.open; if (ui.moreOpen) loadForecast(true); } },
+      h("summary", {}, "More"),
+      h("div", { class: "usage-grid" },
+        h("section", { class: "panel" }, h("div", { class: "phead" }, h("h2", {}, "This run")), h("div", { class: "pbody" },
+          figs.length ? h("div", { class: "figs" }, figs) : h("div", { class: "muted" }, "No agent of this run has finished with a meter reading yet."))),
+        h("section", { class: "panel" }, h("div", { class: "phead" }, h("h2", {}, "Delivered")), h("div", { class: "pbody" }, h("div", { class: "figs" }, delivery))),
+        h("section", { class: "panel", style: "grid-column:1/-1" }, h("div", { class: "phead" }, h("h2", {}, "Against the run before")), ui.reportWrap),
+        h("section", { class: "panel forecast", style: "grid-column:1/-1" }, h("div", { class: "phead" }, h("h2", {}, "Capacity forecast")), ui.forecastWrap))));
 }
 
-// --- Usage: the capacity forecast, read only while its panel is open, at most every 30 seconds ---
+// --- Usage: the capacity forecast, read only while More is open, at most every 30 seconds ---
 function loadForecast(now) {
   if (!now && ui.forecast && Date.now() - ui.forecast.at < 30000) return;
   const asked = Date.now();
