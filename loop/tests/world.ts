@@ -26,6 +26,7 @@ export type PullRequest = {
   url: string;
   headRefName: string;
   baseRefName: string;
+  isDraft?: boolean;
   title: string;
   body: string;
   state: string;
@@ -308,6 +309,13 @@ ${extra}`;
           else pr.checks.push(check);
         }
       }
+    });
+  }
+
+  /** Converts the ticket's pull request to a draft, or back. */
+  draft(key: string, on: boolean): void {
+    this.github((state) => {
+      for (const pr of state.prs) if (pr.headRefName.includes(`/${key}-`)) pr.isDraft = on;
     });
   }
 

@@ -5,7 +5,8 @@
 // kept. With no verdict, the check stays pending until a test sets it. A failed job's log is
 // FAKE_DIR/job-log.txt. GitHub retargets the pull requests on a merged branch to its base, unless
 // FAKE_DIR/no-retarget exists. A new pull request gets the review of FAKE_DIR/reviews.json by ticket key, in
-// the shape the gate's review posts: the findings in the diff as comments, and the others in the body.
+// the shape the gate's review posts: the findings in the diff as comments, and the others in the body. A draft
+// pull request does not merge, as on GitHub.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -95,7 +96,7 @@ for (const pr of state.prs) {
   }
 }
 for (const pr of state.prs) {
-  if (pr.state === "OPEN" && pr.autoMerge && green(pr)) {
+  if (pr.state === "OPEN" && pr.autoMerge && !pr.isDraft && green(pr)) {
     squash(pr);
     settled = true;
   }
@@ -154,6 +155,7 @@ if (verb === "list") {
     title: option("title"),
     body: readFileSync(option("body-file"), "utf8"),
     state: "OPEN",
+    isDraft: false,
     autoMerge: null,
     mergeCommit: null,
     headRefOid: git("rev-parse", `refs/heads/${head}`),
@@ -172,7 +174,7 @@ if (verb === "list") {
   if (args.includes("--auto")) pr.autoMerge = { mergeMethod: args.includes("--squash") ? "SQUASH" : "MERGE" };
   else if (green(pr)) squash(pr);
   else fail(`Pull request #${pr.number} is not mergeable: the base branch policy prohibits the merge.`);
-  if (pr.autoMerge && green(pr)) squash(pr);
+  if (pr.autoMerge && !pr.isDraft && green(pr)) squash(pr);
   save();
 } else if (verb === "edit") {
   const pr = find(args[2]);

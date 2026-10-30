@@ -109,7 +109,7 @@ test("a check that reports late keeps the loop waiting until the pull request me
   expect(world.steps()).toContain("DEMO-3 merge merged");
 });
 
-test("a failing hold check is a pause the loop waits out, not a red gate", async () => {
+test("a failing hold check is a pause the loop waits out, not a red gate, and the fix message leaves it out", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
 
   const running = world.loop("run", EPIC);
@@ -130,11 +130,48 @@ test("a failing hold check is a pause the loop waits out, not a red gate", async
   expect(world.steps().filter((step) => step.startsWith("DEMO-2 wait"))).toEqual(["DEMO-2 wait held", "DEMO-2 wait green"]);
   expect(world.decisions().find((line) => line.step === "wait" && line.result === "held")).toMatchObject({
     pr: world.prs()[0]!.url,
+    detail: "The hold label is on. The loop waits until it is not.",
     checks: [
       { name: "gate / check", bucket: "pass" },
       { name: "hold", bucket: "fail" },
     ],
   });
+});
+
+test("a red check under the hold label resumes the agent with that check alone", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { write: { "login.txt": "fixed\n" }, commit: "fix(DEMO-2): fix the login" }] });
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.prs().length === 1, "the pull request");
+  world.setChecks("DEMO-2", { "gate / check": "fail", hold: "fail" });
+  await world.until(() => world.calls().length === 2, "the fix attempt");
+  await world.until(() => world.prs()[0]!.checks.every((check) => check.bucket === "pending"), "the checks of the fix");
+  world.setCheck("DEMO-2", "pass");
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const [, fix] = world.calls();
+  expect(fix!.prompt).toContain("## gate / check");
+  expect(fix!.prompt).not.toContain("## hold");
+  expect(world.decisions().find((line) => line.step === "wait" && line.result === "red")!.detail).toBe("Failed: gate / check");
+});
+
+test("a draft pull request is a pause the loop waits out, as the hold label is", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.prs().length === 1, "the pull request");
+  world.draft("DEMO-2", true);
+  world.setCheck("DEMO-2", "pass");
+  await world.until(() => world.steps().includes("DEMO-2 wait held"), "the held wait");
+  expect(world.decisions().find((line) => line.step === "wait" && line.result === "held")!.detail).toBe("The pull request is a draft. The loop waits until it is not.");
+  world.draft("DEMO-2", false);
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.prs()[0]!.state).toBe("MERGED");
+  expect(world.steps().filter((step) => step.startsWith("DEMO-2 wait"))).toEqual(["DEMO-2 wait held", "DEMO-2 wait green"]);
 });
 
 test("the pull request body holds the ticket text and names the spec, and no list of decisions", async () => {
@@ -166,7 +203,7 @@ test("a ticket with no Epic names the spec from its own text", async () => {
   expect(world.prs()[0]!.body).toContain("Add the login page. Spec: docs/specs/login.md\n");
 });
 
-test("the ticket goes to In Progress at start and In Review when the pull request opens, and the tracker sets Done at merge", async () => {
+test("the ticket goes to In Progress at start and In Review when the pull request opens, and the loop sets nothing after the merge", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.jira.add("DEMO-3", "Already in progress", { parent: EPIC, status: "In Progress" });
   world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });

@@ -43,7 +43,7 @@ const STUCK_COMMENT = "The loop stopped this ticket.";
 /** The status an Epic takes when its last ticket merges. */
 const EPIC_DONE = "Done";
 
-/** The required check that fails while the pull request has the hold label. It is a pause, not a red gate. */
+/** The required check that fails while the pull request has the hold label. It is a pause, not a red gate, as a draft is. */
 const HOLD_CHECK = "hold";
 
 /** The types of a ticket's branch and commit scope: `fix` for a Bug, `feat` for the rest. */
@@ -523,7 +523,7 @@ export class Run {
   private async fixPrompt(url: string, checks: github.Check[]): Promise<string> {
     const repo = this.config.repo;
     let text = `The merge gate is red on ${url}. Fix the cause and commit the fix. Do not push: the loop pushes, and the gate runs again.\n`;
-    for (const check of redChecks(checks)) {
+    for (const check of redChecks(checks).filter((item) => item.name !== HOLD_CHECK)) {
       text += `\n## ${check.name}\n\n`;
       try {
         const log = await github.failedLog(repo, check.link, LOG_TAIL_LINES);
@@ -674,13 +674,16 @@ export class Run {
   }
 
   /**
-   * The `Spec:` line of the pull request body: the first Markdown file the Epic's description links, as its
-   * Spec line does, else the first Markdown path on a line of the ticket that names the spec, else none.
+   * The `Spec:` line of the pull request body: the Markdown file that the Spec line of the Epic's description
+   * links, else the first one the description links, else the first Markdown path on a line of the ticket that
+   * names the spec, else none.
    */
   private async specLine(ticket: Ticket): Promise<string> {
     if (this.epic) {
       this.epicText ??= this.jira.ticket(this.epic).then((epic) => epic.text);
-      const [link] = mdLinks(await this.epicText.catch(() => ""));
+      const text = await this.epicText.catch(() => "");
+      const specLine = text.split("\n").find((line) => /^\s*\**spec\**[.:]/i.test(line)) ?? "";
+      const [link] = [...mdLinks(specLine), ...mdLinks(text)];
       if (link) return `Spec: [${link.path}](${link.url})`;
     }
     const named = ticket.text.split("\n").find((line) => /\bspec\b/i.test(line) && MD_PATH.test(line));
@@ -693,8 +696,8 @@ export class Run {
    * merges once every required check passes, so a check that has not reported yet keeps the loop waiting.
    * With auto-merge off, every check reported so far passing is green, and the loop merges. The checks count
    * once the pull request's head is the pushed commit, so the checks of the commit before a fix never do. The
-   * `hold` check fails while the hold label is on: that is a pause the loop waits out, not a red gate, and the
-   * wait's limit does not run while it lasts.
+   * `hold` check fails while the hold label is on, and GitHub turns auto-merge off on a draft: each is a pause
+   * the loop waits out, not a red gate, and the wait's limit does not run while it lasts.
    */
   private async wait(
     key: string,
@@ -722,14 +725,17 @@ export class Run {
         }
         const red = redChecks(checks).filter((check) => check.name !== HOLD_CHECK);
         if (red.length) return { result: "red", checks, detail: `Failed: ${red.map((check) => check.name).join(", ")}`, closed: false };
-        if (redChecks(checks).length) {
+        const holdOn = redChecks(checks).some((check) => check.name === HOLD_CHECK);
+        if (holdOn || pr.isDraft) {
           deadline = Date.now() + WAIT_MINUTES * 60_000;
           if (!held) {
             const logged = checks.map(({ name, bucket }) => ({ name, bucket }));
-            this.log.write(key, "wait", "held", { commit, pr: url, checks: logged, detail: "The hold label is on. The loop waits until it is removed." });
+            const why = pr.isDraft ? "The pull request is a draft." : "The hold label is on.";
+            this.log.write(key, "wait", "held", { commit, pr: url, checks: logged, detail: `${why} The loop waits until it is not.` });
           }
           held = true;
         } else {
+          held = false;
           const passed = checks.length > 0 && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
           if (passed && !autoMerge) return { result: "green", checks, detail: "", closed: false };
         }

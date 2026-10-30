@@ -10,6 +10,7 @@ export type PullRequest = {
   headRefName: string;
   baseRefName: string;
   headRefOid: string;
+  isDraft: boolean;
   title: string;
   mergeCommit: { oid: string } | null;
 };
@@ -25,7 +26,7 @@ async function gh(cwd: string, args: string[], ok: (code: number) => boolean = (
   return done;
 }
 
-const FIELDS = "number,url,state,headRefName,baseRefName,headRefOid,title,mergeCommit";
+const FIELDS = "number,url,state,headRefName,baseRefName,headRefOid,isDraft,title,mergeCommit";
 
 /**
  * The ticket's pull requests in any state, on any branch whose name starts with one of the prefixes. A
