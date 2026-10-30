@@ -116,6 +116,28 @@ test.each([
   expect(world.mainLog().slice(0, 2)).toEqual(["feat(DEMO-3): Add the logout button (#101)", "feat(DEMO-2): Add the login page (#100)"]);
 });
 
+test("a stacked ticket waits on its checks again after the retarget, and a late red check gets a fix attempt", async () => {
+  world.writeConfig("[limits]\nparallel = 2\n");
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
+  world.verdicts({ "DEMO-3": ["pass", "pass"] });
+  world.plan({ "DEMO-3": [{ write: { "logout.txt": "logout\n" } }, { write: { "logout.txt": "fixed\n" }, commit: "fix(DEMO-3): fix the logout" }] });
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.steps().includes("DEMO-3 wait green"), "the stacked pull request's green checks");
+  // The review reports after the first wait saw green, as when it is still running at the retarget.
+  world.setChecks("DEMO-3", { "gate / review": "fail" });
+  world.setCheck("DEMO-2", "pass");
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const waits = world.steps().filter((step) => step.startsWith("DEMO-3 wait"));
+  expect(waits.slice(0, 2)).toEqual(["DEMO-3 wait green", "DEMO-3 wait red"]);
+  expect(world.calls().filter((call) => call.key === "DEMO-3")).toHaveLength(2);
+  expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED", "MERGED"]);
+  expect(world.git(world.origin, "show", "main:logout.txt")).toBe("fixed");
+});
+
 test("a usage limit pauses the run, and the run resumes the session when the limit resets", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });

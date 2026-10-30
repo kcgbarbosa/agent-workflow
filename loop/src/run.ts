@@ -388,11 +388,14 @@ export class Run {
           detail: checks.detail,
         });
         if (checks.result !== "green" || autoMerge || !stack) break;
-        if ((await github.view(repo, url)).baseRefName === main) break;
-        const result = await this.untilMain(url, stack.key);
-        this.log.write(key, "base", result, { pr: url, detail: result === "main" ? `${stack.key} merged.` : `${stack.key} did not merge.` });
-        if (result !== "main") return "stopped";
+        if ((await github.view(repo, url)).baseRefName !== main) {
+          const result = await this.untilMain(url, stack.key);
+          this.log.write(key, "base", result, { pr: url, detail: result === "main" ? `${stack.key} merged.` : `${stack.key} did not merge.` });
+          if (result !== "main") return "stopped";
+        }
+        // Green so far may predate the review, so the next wait lasts until GitHub merges or a check fails.
         [autoMerge] = await this.autoMerge(url);
+        if (!autoMerge) break;
       }
       if (checks.result === "green") break;
       if (checks.result !== "red" || checks.closed) return "stopped";
