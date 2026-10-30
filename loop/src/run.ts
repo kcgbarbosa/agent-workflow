@@ -298,7 +298,8 @@ export class Run {
     const worktree = join(this.home, "worktrees", key);
     const runDir = join(this.home, "runs", key);
     mkdirSync(runDir, { recursive: true });
-    const restart = this.log.lines().some((line) => line.ticket === key && line.step === "start" && line.result !== "merged-before");
+    // Only a ticket's own start lines. A run on one ticket logs its start under the same key, with the result ok.
+    const restart = this.log.lines().some((line) => line.ticket === key && line.step === "start" && (line.result === "new" || line.result === "restart"));
     await git(repo, "fetch", "--prune", "--quiet", "origin");
     const stack = this.stackOn(ticket);
     const base = stack?.branch ?? main;
@@ -375,29 +376,28 @@ export class Run {
         await this.status(key, this.config.inReview);
       }
 
-      // Wait
-      const checks = await this.wait(key, url, autoMerge, commit);
-      this.log.write(key, "wait", checks.result, {
-        commit,
-        pr: url,
-        checks: checks.checks.map(({ name, bucket }) => ({ name, bucket })),
-        detail: checks.detail,
-      });
-      if (checks.result === "green") break;
-      if (checks.result !== "red" || checks.closed) return "stopped";
-      red = checks.detail;
-      prompt = await this.fixPrompt(url, checks.checks);
-    }
-
-    // A stacked pull request merges once its base has merged and it targets main.
-    if (!autoMerge) {
-      const pr = await github.view(repo, url);
-      if (pr.baseRefName !== main && stack) {
+      // Wait. A stacked pull request that is green waits for its base to merge, then waits on its checks
+      // again with auto-merge on, so a check that turns red after the retarget still gets a fix attempt.
+      let checks: Awaited<ReturnType<Run["wait"]>>;
+      for (;;) {
+        checks = await this.wait(key, url, autoMerge, commit);
+        this.log.write(key, "wait", checks.result, {
+          commit,
+          pr: url,
+          checks: checks.checks.map(({ name, bucket }) => ({ name, bucket })),
+          detail: checks.detail,
+        });
+        if (checks.result !== "green" || autoMerge || !stack) break;
+        if ((await github.view(repo, url)).baseRefName === main) break;
         const result = await this.untilMain(url, stack.key);
         this.log.write(key, "base", result, { pr: url, detail: result === "main" ? `${stack.key} merged.` : `${stack.key} did not merge.` });
         if (result !== "main") return "stopped";
         [autoMerge] = await this.autoMerge(url);
       }
+      if (checks.result === "green") break;
+      if (checks.result !== "red" || checks.closed) return "stopped";
+      red = checks.detail;
+      prompt = await this.fixPrompt(url, checks.checks);
     }
 
     // Merge
