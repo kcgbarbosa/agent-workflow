@@ -13,7 +13,7 @@ On t14: `cd ~/dev/agent-workflow && loop start <Epic key>`, which fast-forwards 
 ### Tracker
 
 Jira, project `AW`. `loop.toml` gives the site. Children are `parent = <Epic key>`. Edges are the "Blocks" link type, which `to-tickets` writes.
-`name_landed_keys_only` is on. The loop reads and checks the key and uses it for nothing, as the design's Tracker section gives. If a merged pull request leaves its ticket open, an agent moves it to Done through the Jira API.
+`name_landed_keys_only` is on. The design's Tracker section gives what the loop does with it. If a merged pull request leaves its ticket open, an agent moves it to Done through the Jira API.
 
 ### Status and stuck marker
 
