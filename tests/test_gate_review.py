@@ -167,8 +167,9 @@ def test_a_merge_of_main_does_not_count_against_the_skip_paths(pr: FakeGitHub) -
     assert len(pr.claude_calls) == 1
 
 
-def test_a_model_answer_with_no_findings_list_exits_out_of_shape(pr: FakeGitHub) -> None:
-    pr.reply({"type": "result", "result": "null"})
+@pytest.mark.parametrize("answer", ["null", '{"verdict": "fine"}'])
+def test_a_model_answer_with_no_findings_list_exits_out_of_shape(pr: FakeGitHub, answer: str) -> None:
+    pr.reply({"type": "result", "result": answer})
 
     run = pr.run(REVIEW, **INPUTS)
 

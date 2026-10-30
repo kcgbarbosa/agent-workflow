@@ -199,7 +199,7 @@ def findings_of(output: dict) -> list[dict]:
             answer = json.loads(result)
         except json.JSONDecodeError:
             sys.exit(f"code-review returned text in place of the findings. {ended} It starts:\n{str(result)[:1500]}")
-    findings = answer["findings"] if isinstance(answer, dict) else answer
+    findings = answer.get("findings") if isinstance(answer, dict) else answer
     if not isinstance(findings, list):
         sys.exit(f"code-review returned no list of findings: {answer!r} {ended}")
     for finding in findings:
