@@ -64,7 +64,8 @@ export class Run {
     const mergedBefore = new Map<string, string>();
     for (const ticket of tickets) {
       const { branch } = await this.branchOf(ticket);
-      const pr = (await github.pullRequestsOf(this.config.repo, branch)).find((item) => item.state === "MERGED");
+      const prs = await github.pullRequestsOf(this.config.repo, ticket.key, branch, branchPrefixes(ticket.key));
+      const pr = prs.find((item) => item.state === "MERGED");
       if (pr) mergedBefore.set(ticket.key, pr.url);
     }
     for (const key of mergedBefore.keys()) this.merged.add(key);
@@ -278,7 +279,7 @@ export class Run {
   /** The open pull request of the branch, or a new one whose title becomes the squash commit on main. */
   private async pullRequest(ticket: Ticket, branch: string, runDir: string, reason: string, decisions: string[]): Promise<string> {
     const repo = this.config.repo;
-    const open = (await github.pullRequestsOf(repo, branch)).find((pr) => pr.state === "OPEN");
+    const open = (await github.pullRequestsOf(repo, ticket.key, branch, branchPrefixes(ticket.key))).find((pr) => pr.state === "OPEN");
     if (open) return open.url;
     const bodyFile = join(runDir, "pr-body.md");
     if (!existsSync(bodyFile)) {

@@ -186,7 +186,7 @@ ${extra}`;
   }
 
   /** A pull request merged before the run, with its branch named as the loop names it. */
-  mergedBefore(key: string, branch: string): void {
+  mergedBefore(key: string, branch: string, title = `feat(${key}): earlier`): void {
     const path = join(this.fakes, "github.json");
     const state = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { prs: [] };
     state.prs.push({
@@ -194,7 +194,7 @@ ${extra}`;
       url: `https://github.com/kcgbarbosa/demo/pull/${100 + state.prs.length}`,
       headRefName: branch,
       baseRefName: "main",
-      title: `feat(${key}): earlier`,
+      title,
       body: "",
       state: "MERGED",
       autoMerge: null,

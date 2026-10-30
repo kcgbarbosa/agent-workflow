@@ -21,11 +21,22 @@ async function gh(cwd: string, args: string[], ok: (code: number) => boolean = (
   return done;
 }
 
-/** The pull requests of one head branch, in any state, so no count of older ones can push it out. */
-export async function pullRequestsOf(cwd: string, branch: string): Promise<PullRequest[]> {
-  const fields = "number,url,state,headRefName,baseRefName,title,mergeCommit";
-  const done = await gh(cwd, ["pr", "list", "--head", branch, "--state", "all", "--json", fields]);
-  return JSON.parse(done.stdout || "[]") as PullRequest[];
+const FIELDS = "number,url,state,headRefName,baseRefName,title,mergeCommit";
+
+/**
+ * The ticket's pull requests in any state, on any branch whose name starts with one of the prefixes. A
+ * search for the key in the title finds one whose branch was deleted and named from an older summary, and
+ * the head branch finds one the search index has not taken in yet. Neither has a count that older pull
+ * requests of the repo could fill.
+ */
+export async function pullRequestsOf(cwd: string, key: string, branch: string, prefixes: string[]): Promise<PullRequest[]> {
+  const searched = await gh(cwd, ["pr", "list", "--state", "all", "--search", `"${key}" in:title`, "--limit", "100", "--json", FIELDS]);
+  const headed = await gh(cwd, ["pr", "list", "--head", branch, "--state", "all", "--json", FIELDS]);
+  const found = new Map<number, PullRequest>();
+  for (const pr of [...JSON.parse(searched.stdout || "[]"), ...JSON.parse(headed.stdout || "[]")] as PullRequest[]) {
+    if (prefixes.some((prefix) => pr.headRefName.startsWith(prefix))) found.set(pr.number, pr);
+  }
+  return [...found.values()];
 }
 
 export async function view(cwd: string, url: string): Promise<PullRequest> {
