@@ -14,7 +14,7 @@ The start page still has a Sessions section with a Remote Control switch per rep
 
 ## Solution
 
-The switchboard moves to TypeScript beside the loop in agent-workflow, with the same behaviour that PR #94 gave it, so ElevenLabs sees no change. The start page and machine-status move to TypeScript in machines, each one file that Node runs directly. The start page drops Sessions, and a T3 Code tile comes first. `claude-rc@agent-workflow` stays on as the fallback door, and a chat there starts any other repo's server.
+The switchboard moves to TypeScript beside the loop in agent-workflow, with the behaviour it has today, from PR #94 and AW-17, so ElevenLabs sees no change. The start page and machine-status move to TypeScript in machines, each one file that Node runs directly. The start page drops Sessions, and a T3 Code tile comes first. `claude-rc@agent-workflow` stays on as the fallback door, and a chat there starts any other repo's server.
 
 One `mise.toml` in machines pins the tools on both computers, and chezmoi applies it as the global mise config. Each repo keeps its own mise file for its own code, as the gate spec writes it.
 
@@ -38,8 +38,9 @@ US-7. As KC, I want the session to resume its conversation after a restart from 
 US-8. As KC, I want a request without the token refused with 401, and `/health` to answer with no token and say nothing more, so that the public Funnel address shows nothing.
 US-9. As KC, I want `/api/status` with the token to give whether the session runs, when I last talked, and how many replies wait, so that the start page tile keeps working.
 US-10. As KC, I want a request that ElevenLabs hung up on to end with no error in the journal, so that the journal shows only real faults.
-US-11. As KC, I want the TypeScript switchboard on the same port, unit name, Funnel address, token, model ID, and session name, so that nothing changes in ElevenLabs, Twilio, or the other sessions that message it.
+US-11. As KC, I want the TypeScript switchboard on the same port, unit name, Funnel address, token, model ID, session name, and bypass mode, so that nothing changes in ElevenLabs, Twilio, or the other sessions that message it.
 US-51. As KC on a call, I want a stop or restart of the switchboard to refuse new requests and wait for the asks that run to end before it exits, so that an agent can restart it at any time and no call drops.
+US-54. As KC on a call, I want the switchboard to list, read, message, and start T3 Code threads by title through the `t3` command, and to read the loop's status, so that the call reaches the work where it runs.
 
 ### The start page and machine-status in TypeScript (Must)
 
@@ -127,7 +128,7 @@ US-50. As KC, I want GitHub Actions to read secrets with OIDC and no stored toke
 ### The switchboard
 
 - A package beside the loop, with the loop's TypeScript, oxlint, and Vitest setup from the gate spec. No new runtime dependency: the HTTP server is `node:http`.
-- It keeps spawning `claude -p` in stream-json mode with the flags of today: auto mode, the name `switchboard`, replayed user messages, the appended prompt, and an optional model. It does not move to the Agent SDK, because the `[voice:<n>]` tag on replayed user messages is how it tells which turn answers which ask, and the SDK's support for the session name and the replay is not confirmed.
+- It keeps spawning `claude -p` in stream-json mode with the flags of today: bypass mode, the mode of T3 Code threads, the name `switchboard`, replayed user messages, the appended prompt, and an optional model. It does not move to the Agent SDK, because the `[voice:<n>]` tag on replayed user messages is how it tells which turn answers which ask, and the SDK's support for the session name and the replay is not confirmed.
 - The timings are constants with today's values: 1 second to the filler, 10 seconds between updates, 30 seconds for a retry to join, 45 seconds in all.
 - The response headers and the first empty chunk go out before the ask starts, as today, so ElevenLabs gets bytes at once.
 - `switchboard.service` runs Node on the package entry from the main checkout. The unit name, the port 8796, the env file, and the Funnel node stay. The pages registry row and `80-switchboard` change only where they name `uv`.
@@ -209,6 +210,7 @@ The ported tests keep today's margins, such as a 0.5 second filler against a 2 s
 | A request without the token is refused, and the status needs the token                                            | US-8, US-9                        |
 | A request that hangs up mid-answer leaves no error in the output                                                  | US-10                             |
 | A `SIGTERM` during an ask answers new requests with 503 and exits after the ask ends                              | US-51                             |
+| The session starts in bypass mode, as `switchboard`, with a prompt that sends through `t3 thread send`            | US-11, US-54                      |
 | The 20-run repeat of the switchboard suite                                                                        | US-43                             |
 | Each ported start page test: routes and tiles, with the T3 Code tile first. The Sessions tests are deleted        | US-12, US-16, US-44, US-53        |
 | Each ported pages test: unit, port, serve mapping, checkout and copy drift                                        | US-12, US-44                      |
