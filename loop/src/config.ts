@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parse } from "smol-toml";
+import { parse, TomlDate } from "smol-toml";
 
 export const FILE = "loop.toml";
 export const REQUIRED_SECRETS = ["JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC"] as const;
@@ -43,7 +43,8 @@ export type Config = {
   uiBlocking: string[];
   review: { enabled: boolean; model: string | null; effort: string | null; skip: string[] };
   ntfyUrl: string;
-  plans: { plan: string; since: string }[];
+  /** `exact` is false for a `since` with a date only. */
+  plans: { plan: string; since: string; exact: boolean }[];
   secrets: Record<string, Secret>;
   stateDir: string;
   warnings: string[];
@@ -126,6 +127,12 @@ class Table {
   }
 
   /** A date or a date and time, as TOML writes it or as text. */
+  /** Whether the date of a key has a time, so that a date alone can leave its whole day unclear. */
+  hasTime(key: string): boolean {
+    const value = this.get(key);
+    return value instanceof TomlDate ? !value.isDate() : !/^\d{4}-\d{2}-\d{2}$/.test(String(value));
+  }
+
   date(key: string): string {
     const value = this.get(key);
     if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
@@ -212,8 +219,9 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     const plan = entry.text("plan");
     if (!PLAN_KEYS.includes(plan)) throw new ConfigError(`watch.plans: plan must be one of ${PLAN_KEYS.join(", ")}`);
     const since = entry.date("since");
+    const exact = entry.hasTime("since");
     entry.done(warnings);
-    return { plan, since };
+    return { plan, since, exact };
   });
 
   const config: Config = {

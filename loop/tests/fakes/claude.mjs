@@ -3,7 +3,9 @@
 //
 // A step holds `write` ({path: text}) and `commit` (the message), `status` ("done" or "blocked"), and `reason`.
 // `{}` returns done with no change. `limit` ({resetsIn: seconds}) ends the run at a usage limit that resets
-// that long from now, with no change. `meet` (a ticket key) waits until that ticket's agent runs too.
+// that long from now, with no change. `meet` (a ticket key) waits until that ticket's agent runs too. `meter`
+// ({window: [start, end]}) reads the plan meter twice, at the start and the end of the run, and `pause`
+// (milliseconds) waits after the readings.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -84,6 +86,13 @@ async function play(prompt) {
     execFileSync("git", ["commit", "--quiet", "-m", now.commit ?? `feat(${key}): change`]);
   }
   out({ type: "system", subtype: "init", session_id: session, cwd: process.cwd(), tools: [], model: flag("model") });
+  for (const at of [0, 1]) {
+    for (const [window, values] of Object.entries(now.meter ?? {})) {
+      const info = { status: "allowed", rateLimitType: window, utilization: values[at], resetsAt: 2_000_000_000 };
+      out({ type: "rate_limit_event", rate_limit_info: info, uuid: randomUUID(), session_id: session });
+    }
+  }
+  await new Promise((resolve) => setTimeout(resolve, now.pause ?? 0));
   out({
     type: "result",
     subtype: "success",
@@ -94,8 +103,14 @@ async function play(prompt) {
     result: "",
     total_cost_usd: 0.5,
     usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    modelUsage: { [flag("model")]: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.5 } },
     structured_output: { status: now.status ?? "done", reason: now.reason ?? "Built it.", decisions: [] },
   });
+}
+
+if (process.argv.includes("--version")) {
+  process.stdout.write("2.1.999 (Claude Code)\n");
+  process.exit(0);
 }
 
 for await (const line of readline.createInterface({ input: process.stdin })) {
