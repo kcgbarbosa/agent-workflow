@@ -14,7 +14,7 @@ Tickets live in Jira, project `AW`. They are not files in this repo.
 
 The spec is the source of truth for the build, the tests and the tickets. A ticket names the spec by its repo path, as text with no link, and cites story IDs. It does not copy the spec. Only the Epic links the spec.
 
-When the Epic merges, a pull request deletes the spec. The owner then changes the Spec line of the Epic to link the spec at the Epic's merge commit, which git keeps. That line is the one hand edit the Epic takes, and no ticket changes. With the loop, the Archive spec button on the `loop watch` page opens that pull request and changes the Spec line. The Logs section of `~/.claude/skills/setup-loop/loop.md` says how.
+When the Epic merges, a pull request deletes the spec, and the Spec line of the Epic changes to link the spec at the head of the default branch at that point, a commit git keeps. With the loop, the archive step does both when the last ticket of the Epic merges, as rule 10 of `~/.claude/skills/setup-loop/loop.md` gives. Without the loop, the owner does both by hand. The Spec line is the one line of the Epic that changes after it is written, and no ticket changes.
 
 ## The board
 
