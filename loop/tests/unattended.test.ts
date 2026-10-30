@@ -172,3 +172,33 @@ test("two tickets build at the same time, each on its own stack slot", async () 
   ]);
   expect(world.decisions().filter((line) => line.step === "start" && line.ticket !== EPIC).map((line) => line.slot)).toEqual([2, 3]);
 });
+
+test("a slot whose port another Compose project holds moves to a spare slot", async () => {
+  world.writeConfig("[stack]\nports = { PORT = 3000 }\nport_step = 10\n");
+  world.containers(["other\tother-web-1\t0.0.0.0:3020->3000/tcp", "demo-demo-2\tdemo-demo-2-web-1\t0.0.0.0:3030->3000/tcp"]);
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
+
+  const ran = await world.loop("start", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.calls().map((call) => call.port)).toEqual(["3030"]);
+  const moved = world.decisions().find((line) => line.step === "slot")!;
+  expect(moved).toMatchObject({ ticket: "DEMO-2", result: "moved" });
+  expect(moved.detail).toBe("Port 3020 is held by the container other-web-1. The stack moved to slot 3.");
+});
+
+test("a ticket with no free slot is stuck with the container that holds its port", async () => {
+  world.writeConfig("[stack]\nports = { PORT = 3000 }\nport_step = 10\n");
+  world.containers(["other\tother-web-1\t0.0.0.0:3000-3200->3000-3200/tcp"]);
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+
+  const ran = await world.loop("start", EPIC);
+
+  expect(ran.code).toBe(1);
+  expect(world.calls()).toEqual([]);
+  const issue = world.jira.issues.get("DEMO-2")!;
+  expect(issue.flagged).toBe(true);
+  expect(issue.comments[0]).toContain("Port 3020 is held by the container other-web-1. No spare slot has its ports free.");
+  expect(issue.comments[0]).not.toContain("The pull request is");
+});
