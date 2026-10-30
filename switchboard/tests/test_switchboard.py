@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from switchboard.cli import command
 from switchboard.server import server
 from switchboard.session import FILLER, STILL, Session
 
@@ -117,3 +118,10 @@ def test_a_long_turn_keeps_saying_it_is_still_working(tmp_path: Path) -> None:
         assert said_[0] == FILLER and STILL in said_ and said_[-1] == "**echo** slow one"
     finally:
         session.stop()
+
+
+def test_the_session_runs_in_the_mode_of_the_t3_threads_so_messages_are_not_held() -> None:
+    line = command(None)
+    assert line[line.index("--permission-mode") + 1] == "bypassPermissions"
+    assert line[line.index("--name") + 1] == "switchboard"
+    assert "t3 thread send" in line[line.index("--append-system-prompt") + 1]

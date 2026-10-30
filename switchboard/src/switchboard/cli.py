@@ -17,8 +17,8 @@ def command(model: str | None) -> list[str]:
     command = [
         "claude", "-p", "--verbose",
         "--input-format", "stream-json", "--output-format", "stream-json", "--replay-user-messages",
-        # The mode of KC's Remote Control sessions. A message from another mode waits for approval.
-        "--permission-mode", "auto",
+        # The mode of T3 Code threads. A message from another mode waits for approval.
+        "--permission-mode", "bypassPermissions",
         # The name other sessions message it by.
         "--name", "switchboard",
         "--append-system-prompt", PROMPT.read_text(),
