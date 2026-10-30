@@ -51,11 +51,11 @@ json.dump(state, open(state_path, "w"))
 """
 
 CLAUDE = """
-import json, sys
+import json, os, sys
 calls_path, replies_path = {calls!r}, {replies!r}
 stdin = "" if sys.stdin.isatty() else sys.stdin.read()
 calls = json.load(open(calls_path))
-calls.append({{"argv": sys.argv[1:], "stdin": stdin}})
+calls.append({{"argv": sys.argv[1:], "stdin": stdin, "api_key": os.environ.get("ANTHROPIC_API_KEY")}})
 json.dump(calls, open(calls_path, "w"))
 replies = json.load(open(replies_path))
 print(replies.pop(0))

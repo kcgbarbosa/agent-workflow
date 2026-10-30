@@ -194,6 +194,8 @@ def findings_of(output: dict) -> list[dict]:
     if answer is None:
         answer = json.loads(output.get("result") or "null")
     findings = answer["findings"] if isinstance(answer, dict) else answer
+    if not isinstance(findings, list):
+        sys.exit(f"code-review returned no list of findings: {answer!r}")
     for finding in findings:
         if (
             not isinstance(finding.get("path"), str)
@@ -234,8 +236,8 @@ def main() -> int:
         if blocking:
             print(f"The last review at {last.head[:7]} has {blocking} blocking findings.")
         return 1 if blocking else 0
-    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        sys.exit("gate / review needs the CLAUDE_CODE_OAUTH_TOKEN secret, or `enabled = false` in loop.toml [review].")
+    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") and not os.environ.get("ANTHROPIC_API_KEY"):
+        sys.exit("gate / review needs the CLAUDE_CODE_OAUTH_TOKEN or the ANTHROPIC_API_KEY secret, or `enabled = false` in loop.toml [review].")
 
     temp = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
     pr = json.loads(subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"], capture_output=True, text=True, check=True).stdout)

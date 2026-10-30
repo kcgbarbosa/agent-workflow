@@ -33,9 +33,13 @@ on:
         description: Path globs the review skips, split on whitespace. loop.toml [review] `skip` overrides them.
         type: string
         default: "*.md docs/* *.lock package-lock.json pnpm-lock.yaml yarn.lock"
+    # The review and the judge bill one of the two: a Claude plan through CLAUDE_CODE_OAUTH_TOKEN, or the API through ANTHROPIC_API_KEY.
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
-        description: The Claude Code token the review and the judge bill.
+        description: The Claude Code token of the plan the review and the judge bill.
+        required: false
+      ANTHROPIC_API_KEY:
+        description: The API key the review and the judge bill instead of a plan.
         required: false
 
 jobs:
@@ -101,6 +105,7 @@ jobs:
       - uses: ./.gate/actions/review
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           model: ${{ inputs.review-model }}
           effort: ${{ inputs.review-effort }}
           skip: ${{ inputs.review-skip }}
@@ -130,3 +135,4 @@ jobs:
       - uses: ./.gate/actions/judge
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}

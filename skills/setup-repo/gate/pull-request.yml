@@ -9,9 +9,10 @@ concurrency:
 jobs:
   gate:
     uses: kcgbarbosa/agent-workflow/.github/workflows/gate.yml@main
-    # The review and the judge comment on the pull request, and bill the Claude plan of the token.
+    # The review and the judge comment on the pull request, and bill the plan of the token or the API of the key.
     permissions:
       contents: read
       pull-requests: write
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

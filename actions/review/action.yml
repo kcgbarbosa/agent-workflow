@@ -6,8 +6,11 @@ description: >-
   `skip`, a list of path globs. A diff of skip paths only runs no model.
 inputs:
   claude_code_oauth_token:
-    description: The token Claude Code bills, so the review runs on that Claude plan.
-    required: true
+    description: The Claude Code token of the plan the review bills. One of the two tokens is needed.
+    required: false
+  anthropic_api_key:
+    description: The API key the review bills instead of a plan.
+    required: false
   model:
     description: The model, unless loop.toml [review] names one.
     required: true
@@ -31,6 +34,7 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}

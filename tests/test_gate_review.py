@@ -165,3 +165,23 @@ def test_a_merge_of_main_does_not_count_against_the_skip_paths(pr: FakeGitHub) -
 
     assert run.returncode == 1
     assert len(pr.claude_calls) == 1
+
+
+def test_a_model_answer_with_no_findings_list_exits_out_of_shape(pr: FakeGitHub) -> None:
+    pr.reply({"type": "result", "result": "null"})
+
+    run = pr.run(REVIEW, **INPUTS)
+
+    assert run.returncode == 1
+    assert "no list of findings" in run.stderr
+    assert pr.state["reviews"] == []
+
+
+def test_the_review_runs_on_an_api_key_with_no_plan_token(pr: FakeGitHub) -> None:
+    pr.reply(result(finding("a.py", 3, "minor", "Name it.")))
+
+    run = pr.run(REVIEW, **INPUTS, CLAUDE_CODE_OAUTH_TOKEN="", ANTHROPIC_API_KEY="key")
+
+    assert run.returncode == 0, run.stderr
+    [call] = pr.claude_calls
+    assert call["api_key"] == "key"
