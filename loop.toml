@@ -3,7 +3,7 @@
 name = "agent-workflow"
 main_branch = "main"
 tools = ["make", "uv", "npm"]
-agent_hint = "The gate is `make check` once the Makefile exists, and the root, loop, and switchboard checks before that. Run shellcheck as `uvx --from shellcheck-py shellcheck`."
+agent_hint = "The gate is `make check`. Run shellcheck as `uvx --from shellcheck-py shellcheck`."
 
 [tracker]
 kind = "jira"
@@ -15,12 +15,6 @@ name_landed_keys_only = true
 [agent]
 model = "claude-opus-5-5"
 effort = "high"
-
-[gates]
-# One command before and after the repo has a Makefile. The loop runs a gate with no shell, hence `bash -c`.
-ticket = ["bash", "-c", "if [ -f Makefile ]; then make check; else uv run --no-project --with pytest pytest tests && (cd loop && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest) && (cd switchboard && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest) && uvx --from shellcheck-py shellcheck install.sh .github/scripts/*.sh; fi"]
-merge = ["bash", "-c", "if [ -f Makefile ]; then make check; else uv run --no-project --with pytest pytest tests && (cd loop && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest) && (cd switchboard && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest) && uvx --from shellcheck-py shellcheck install.sh .github/scripts/*.sh; fi"]
-timeout_minutes = 15
 
 [limits]
 parallel = 1

@@ -1,7 +1,7 @@
 {
   "name": "loop",
   "private": true,
-  "description": "The TypeScript loop: each ticket becomes one pull request that merges itself when the gate is green. The Python loop beside it runs until the cutover.",
+  "description": "The loop: each ticket becomes one pull request that merges itself when the gate is green.",
   "type": "module",
   "bin": {
     "loop": "bin/loop"

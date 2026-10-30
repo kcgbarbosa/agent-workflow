@@ -18,7 +18,7 @@ import { Log } from "./log.ts";
 /** The longest the loop waits for the checks of one pull request. */
 const WAIT_MINUTES = 120;
 
-/** The lines of a failed job's log that a fix attempt gets, as the Python loop gives a failed gate's. */
+/** The lines of a failed job's log that a fix attempt gets. */
 const LOG_TAIL_LINES = 80;
 
 /** A usage limit that resets later than this stops the run. */
@@ -27,7 +27,7 @@ const MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60;
 /** The run resumes this long after the reset, so the first call after it meets no limit. */
 const PAST_RESET_SECONDS = 60;
 
-/** The Python loop's Epic slot. The tickets take the slots after it, so both loops give a ticket the same ports. */
+/** The slot the old loop gave the Epic branch. The tickets take the slots after it, so a repo's ports stay as they were. */
 const EPIC_SLOT = 1;
 
 /** The slots after the ticket slots that a ticket's stack moves to when another project holds its ports. */
@@ -141,7 +141,7 @@ export class Run {
       await this.retarget(key, pr.headRefName, pr.baseRefName);
     }
 
-    // Slot 0 is the main checkout and slot 1 the Epic's, as in the Python loop, so the tickets take 2 and up.
+    // Slot 0 is the main checkout and slot 1 stays free, so the tickets take 2 and up.
     const slots = Array.from({ length: this.config.parallel }, (_, index) => EPIC_SLOT + 1 + index);
     const finished = new Map<string, Finished>();
     const running = new Map<string, Promise<void>>();
@@ -696,7 +696,7 @@ export class Run {
     return { ...env, ...this.secrets, LOOP_RUN_DIR: runDir, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
   }
 
-  /** The env of the slot's stack, on its ports, as the Python loop sets them. A repo with no stack has none. */
+  /** The env of the slot's stack, on its ports. A repo with no stack has none. */
   private slotEnv(slot: number, key: string): Record<string, string> {
     const stack = this.config.stack!;
     const env: Record<string, string> = {};
@@ -709,7 +709,7 @@ export class Run {
   /**
    * The env of the slot's stack, on ports that no other Compose project holds. When another project, such as
    * a stack from a session outside the loop, holds one, the slot moves to a free spare slot for the rest of the
-   * run, as in the Python loop. With no spare slot free, it throws PortsTaken.
+   * run. With no spare slot free, it throws PortsTaken.
    */
   private async stackEnv(key: string, slot: number): Promise<Record<string, string>> {
     if (!this.config.stack) return {};
