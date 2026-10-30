@@ -1031,6 +1031,11 @@ async function tailnet(): Promise<Tailnet | null> {
   }
 }
 
+/** The page of a run, at this host's tailnet address when it has one, which opens on any device in the tailnet. */
+export async function pageUrl(project: string, run: string): Promise<string> {
+  return `http://${addresses(await tailnet()).at(-1)}:${WATCH_PORT}/#/${project}/${run}`;
+}
+
 /** Localhost, and this host's tailnet address when it has one. No other network reaches the page. */
 function addresses(found: Tailnet | null): string[] {
   return found ? ["127.0.0.1", found.address] : ["127.0.0.1"];

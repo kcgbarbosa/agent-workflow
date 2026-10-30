@@ -16,7 +16,7 @@ test("a ticket becomes a worktree, a branch from main, an agent run, a push, and
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   const [pr] = world.prs();
@@ -42,7 +42,7 @@ test("an Epic key, a ticket key, and a filter build the same frontier shape", as
       one.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
       one.jira.filters.set("labels = loop", ["DEMO-2"]);
       one.verdicts({ "DEMO-2": "pass" });
-      const ran = await one.loop("start", ...args);
+      const ran = await one.loop("run", ...args);
       expect(ran.code, ran.stderr).toBe(0);
       const run = args[0] === "--filter" ? readdirSync(one.state).find((name) => name.startsWith("filter-"))! : args[0]!;
       const frontier = one.decisions(run).find((line) => line.step === "frontier");
@@ -60,7 +60,7 @@ test("an Epic key, a ticket key, and a filter build the same frontier shape", as
 test("the loop waits for the pull request's checks and merges on green", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
 
-  const running = world.loop("start", EPIC);
+  const running = world.loop("run", EPIC);
   await world.until(() => world.prs().length === 1 && world.ghCalls().filter((args) => args[1] === "checks").length >= 3, "the loop to poll the checks");
   expect(world.prs()[0]!.state).toBe("OPEN");
   expect(world.steps()).not.toContain("DEMO-2 merge merged");
@@ -79,7 +79,7 @@ test("a check that reports late keeps the loop waiting until the pull request me
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
   world.verdicts({ "DEMO-3": "pass" });
 
-  const running = world.loop("start", EPIC);
+  const running = world.loop("run", EPIC);
   await world.until(() => world.prs().length === 1, "the pull request");
   world.setChecks("DEMO-2", { "gate / check": "pending", "gate / review": "pending" });
   world.setChecks("DEMO-2", { "gate / check": "pass" });
@@ -107,7 +107,7 @@ test("the ticket goes to In Progress at start and In Review when the pull reques
   world.jira.add("DEMO-3", "Already in progress", { parent: EPIC, status: "In Progress" });
   world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual(["In Progress", "In Review"]);
@@ -127,7 +127,7 @@ test("a ticket whose pull request merged before the run counts as done, and its 
   for (let number = 0; number < 250; number++) world.mergedBefore(`OTHER-${number}`, `feat/OTHER-${number}-work`);
   world.verdicts({ "DEMO-3": "pass" });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   expect(world.calls().map((call) => call.key)).toEqual(["DEMO-3"]);
@@ -141,9 +141,9 @@ test("a ticket whose pull request merged before the run counts as done, and its 
 test("a restart does not rebuild a ticket the first run merged", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });
-  expect((await world.loop("start", EPIC)).code).toBe(0);
+  expect((await world.loop("run", EPIC)).code).toBe(0);
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   expect(world.calls()).toHaveLength(1);
@@ -156,7 +156,7 @@ test("a ticket blocked by another builds after the blocker merges, from a main t
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
   world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   const steps = world.steps();
@@ -174,7 +174,7 @@ test("the decisions log has one line per step, and no gate, review, land, or Epi
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   expect(world.steps()).toEqual([
@@ -206,7 +206,7 @@ test("a blocked agent opens no pull request", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.plan({ "DEMO-2": [{ status: "blocked", reason: "The spec leaves the login provider open." }] });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code).toBe(1);
   expect(world.prs()).toEqual([]);
@@ -239,7 +239,7 @@ url = "http://localhost:3000"
 enabled = true
 `);
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   const warnings = ran.stderr.split("\n").filter((line) => line.includes("is no longer read"));
@@ -255,14 +255,14 @@ test("an unknown loop.toml key refuses the run", async () => {
 paralel = 2
 `);
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("run", EPIC);
 
   expect(ran.code).toBe(2);
   expect(ran.stderr).toContain("unknown key limits.paralel");
 });
 
 test("the loop needs a key or a filter", async () => {
-  const ran = await world.loop("start");
+  const ran = await world.loop("run");
 
   expect(ran.code).toBe(2);
   expect(ran.stderr).toContain("Usage");

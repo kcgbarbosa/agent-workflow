@@ -1,23 +1,32 @@
-// `loop start <KEY>` or `loop start --filter <JQL>` updates the loop's own checkout, then runs. KEY is an Epic
-// or a ticket. `loop run` runs with no update. `loop watch` serves the page of the runs on this host, and
-// `loop report [<KEY>]` breaks down what the latest run cost against the run before it.
-import { existsSync, readFileSync } from "node:fs";
+// `loop start <KEY>` or `loop start --filter <JQL>` updates the loop's own checkout, then starts `loop run`
+// as a systemd user unit, and the watch page as another. KEY is an Epic or a ticket. `loop stop` stops the run's
+// unit. `loop run` is the run itself, which the unit runs. `loop secrets` copies the secrets from Bitwarden to
+// this host. `loop watch` serves the page of the runs on this host, and `loop report [<KEY>]` breaks down what
+// the latest run cost against the run before it.
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { claudePath } from "./agent.ts";
-import { type Config, ConfigError, load, REQUIRED_SECRETS } from "./config.ts";
+import { ConfigError, load, peek, stateDirOf } from "./config.ts";
 import { git } from "./git.ts";
 import { Forecaster } from "./forecast.ts";
 import { text } from "./report.ts";
-import { Run, type Target } from "./run.ts";
-import { endAll, endGroup, spawnGroup } from "./spawn.ts";
+import { Run, runName, type Target } from "./run.ts";
+import { copySecrets, NO_SECRETS, readSecrets, secretsPath } from "./secrets.ts";
+import { endAll } from "./spawn.ts";
+import { awake, runs, runUnit, startRun, startWatch, stopRun, UnitError } from "./units.ts";
 import { sourceCheckout, update, UpdateError } from "./update.ts";
-import { comparison, serve, WATCH_PORT } from "./watch.ts";
+import { comparison, pageUrl, serve, WATCH_PORT } from "./watch.ts";
 
 const KEY = /^[A-Z][A-Z0-9]*-\d+$/;
+/** A filter run is named by a hash of its JQL, as `runName` gives it. */
+const FILTER_RUN = /^filter-[0-9a-f]{8}$/;
 const USAGE = [
   "Usage: loop start|run <KEY> [--repo <path>]",
   "       loop start|run --filter <JQL> [--repo <path>]",
+  "       loop stop <KEY>|--filter <JQL> [--repo <path>]",
+  "       loop secrets [--repo <path>]",
   "       loop watch [--repo <path>]",
   "       loop report [<KEY>] [--against <KEY>] [--json] [--repo <path>]",
 ].join("\n");
@@ -32,42 +41,60 @@ async function mainCheckout(folder: string): Promise<string> {
   return dirname(await git(folder, "rev-parse", "--path-format=absolute", "--git-common-dir"));
 }
 
-function readSecrets(config: Config): Record<string, string> {
-  const path = join(config.stateDir, "secrets.json");
-  if (!existsSync(path)) throw new ConfigError(`${path} is missing. Run \`loop secrets\` once to write it.`);
-  const secrets = JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
-  const missing = REQUIRED_SECRETS.filter((name) => !secrets[name]);
-  if (missing.length) throw new ConfigError(`${path} has no ${missing.join(", ")}. Run \`loop secrets\` again.`);
-  return secrets;
-}
-
-function missingTools(): string[] {
+function missingTools(needed: string[]): string[] {
   const path = process.env.PATH ?? "";
   const found = (tool: string) => path.split(":").some((folder) => existsSync(join(folder, tool)));
-  return ["git", "gh"].filter((tool) => !found(tool)).concat(claudePath(path) ? [] : ["claude"]);
+  const tools = [...new Set(["git", "gh", "systemd-inhibit", ...needed])].filter((tool) => !found(tool));
+  return claudePath(path) ? tools : ["claude", ...tools];
 }
 
-/** Runs the new code of a checkout that just took commits, as the code in this process is the old one. */
-function rerun(args: string[]): Promise<number> {
-  const child = spawnGroup(process.execPath, [...process.execArgv, process.argv[1]!, "run", ...args], {
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  const stop = () => void endGroup(child);
-  process.once("SIGTERM", stop);
-  process.once("SIGINT", stop);
-  return new Promise((done) => child.once("close", (code) => done(code ?? 1)));
+/** Starts the run in its unit, and the watch page in its own, then returns. The run checks the rest itself. */
+async function start(target: Target, repoArg: string | undefined, newCode: boolean): Promise<number> {
+  const repo = await mainCheckout(resolve(repoArg ?? process.cwd()));
+  const project = peek(repo);
+  if (!existsSync(secretsPath(stateDirOf(project)))) throw new ConfigError(`This host has no secrets file. ${NO_SECRETS}`);
+  const [active] = await runs(project);
+  if (active) throw new UnitError(`A run is active: ${runUnit(project, active)}. \`loop stop ${active}\` stops it.`);
+  const name = runName(target);
+  const unit = await startRun(repo, project, name, "key" in target ? [target.key] : ["--filter", target.filter]);
+  await startWatch(repo, newCode);
+  openOnScreen(`http://127.0.0.1:${WATCH_PORT}/#/${project}/${name}`);
+  console.log(`The loop is building ${name}. Watch it at ${await pageUrl(project, name)}, or with \`journalctl --user -fu ${unit}\`.`);
+  return 0;
+}
+
+/** Opens the page on this host's screen, when it has one. The loop does not wait for the browser. */
+function openOnScreen(url: string): void {
+  if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return;
+  if (!(process.env.PATH ?? "").split(":").some((folder) => existsSync(join(folder, "xdg-open")))) return;
+  spawn("xdg-open", [url], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
+}
+
+async function stop(name: string, repoArg: string | undefined): Promise<number> {
+  const project = peek(await mainCheckout(resolve(repoArg ?? process.cwd())));
+  if (!(await stopRun(project, name))) {
+    console.error(`No run of ${name} is active.`);
+    return 1;
+  }
+  console.log(`The loop stopped ${name}. \`loop start ${name.startsWith("filter-") ? "--filter <JQL>" : name}\` goes on with the same tickets.`);
+  return 0;
+}
+
+async function secrets(repoArg: string | undefined): Promise<number> {
+  console.log(await copySecrets(load(await mainCheckout(resolve(repoArg ?? process.cwd())))));
+  return 0;
 }
 
 async function run(target: Target, repoArg: string | undefined): Promise<number> {
-  const missing = missingTools();
+  const config = load(await mainCheckout(resolve(repoArg ?? process.cwd())));
+  for (const warning of config.warnings) console.error(warning);
+  const missing = missingTools([...config.tools, ...(config.stack ? ["docker"] : [])]);
   if (missing.length) {
     console.error(`The loop refuses to run: ${missing.join(", ")} not on the PATH.`);
     return 2;
   }
-  const config = load(await mainCheckout(resolve(repoArg ?? process.cwd())));
-  for (const warning of config.warnings) console.error(warning);
   const secrets = readSecrets(config);
+  await awake(config.name, runName(target));
   const loop = new Run(config, secrets, target, { pollSeconds: POLL_SECONDS, meterSeconds: METER_SECONDS });
   const stop = async () => {
     loop.log.write(loop.log.run, "stop", "stopped");
@@ -136,41 +163,37 @@ export async function main(argv: string[]): Promise<number> {
   }
   const [command, key, ...rest] = parsed.positionals;
   const { filter, against, json, repo } = parsed.values;
+  const bare = !key && !filter && !against && !json;
   const reportArgs = !filter && !rest.length && (!key || KEY.test(key)) && (!against || KEY.test(against));
+  const targetArgs = !rest.length && !against && !json && (filter ? !key : key && KEY.test(key));
+  const target: Target = filter ? { filter } : { key: key ?? "" };
   try {
-    if (command === "watch" && !key && !filter && !against && !json) return await watch(repo);
+    if (command === "watch" && bare) return await watch(repo);
+    if (command === "secrets" && bare) return await secrets(repo);
     if (command === "report" && reportArgs) return await report(key, against, json ?? false, repo);
-  } catch (error) {
-    if (error instanceof ConfigError) {
-      console.error(error.message);
-      return 2;
-    }
-    throw error;
-  }
-  const valid =
-    (command === "start" || command === "run") && !rest.length && !against && !json && (filter ? !key : key && KEY.test(key));
-  if (!valid) {
-    console.error(USAGE);
-    return 2;
-  }
-  const target: Target = filter ? { filter } : { key: key! };
-  try {
-    if (command === "start") {
+    // `loop stop` also takes the name of a filter run, which `loop start` prints when one is active.
+    const runArg = !filter && !rest.length && !against && !json && key && FILTER_RUN.test(key);
+    if (command === "stop" && (targetArgs || runArg)) return await stop(runArg ? key! : runName(target), repo);
+    if (command === "run" && targetArgs) return await run(target, repo);
+    if (command === "start" && targetArgs) {
       const checkout = sourceCheckout();
+      let newCode = false;
       if (checkout) {
         const { message, updated } = await update(checkout);
         console.log(message);
-        if (updated) return await rerun(argv.slice(1));
+        newCode = updated;
       }
+      return await start(target, repo, newCode);
     }
-    return await run(target, repo);
   } catch (error) {
-    if (error instanceof ConfigError || error instanceof UpdateError) {
+    if (error instanceof ConfigError || error instanceof UpdateError || error instanceof UnitError) {
       console.error(error.message);
       return 2;
     }
     throw error;
   }
+  console.error(USAGE);
+  return 2;
 }
 
 const code = await main(process.argv.slice(2));
