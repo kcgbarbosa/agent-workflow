@@ -9,6 +9,7 @@ import { serve } from "../src/watch.ts";
 
 const EPIC = "DEMO-1";
 const KILLED = "DEMO-20";
+const PLANNED = "DEMO-40";
 const REPO = "https://github.com/kcgbarbosa/demo";
 const pr = (n: number) => `${REPO}/pull/${n}`;
 const link = (run: number) => `${REPO}/actions/runs/${run}/job/${run}0`;
@@ -74,6 +75,7 @@ function lines(home: string): object[] {
         { name: "gate / review", bucket: "pass", link: link(12) },
       ],
     },
+    { ticket: "DEMO-2", step: "agent", result: "done", session: "DEMO-2", plan: { five_hour: { start: 0.2, end: 0.41, resets_at: 1 } } },
     { ticket: "DEMO-2", step: "merge", result: "merged", commit: "m1", pr: pr(1) },
     { ticket: "DEMO-3", step: "start", result: "new", detail: "feat/DEMO-3-add-the-logout-button", slot: 1, base: "feat/DEMO-2-add-the-login-page", pr: pr(1) },
     { ticket: "DEMO-3", step: "retarget", result: "ok", pr: pr(2), detail: "feat/DEMO-2-add-the-login-page merged, so it targets main." },
@@ -161,6 +163,26 @@ function killed(): object[] {
   ];
 }
 
+/** Seven earlier runs of a third Epic: six that merged a ticket at a share of the 5-hour window, so the typical
+ * share is the median of the last 5 and skips the oldest, and a last one that merged nothing.
+ */
+function planned(): object[] {
+  return [9, 3, 4, 5, 6, 4, null].flatMap((share, index) => {
+    const key = `DEMO-${41 + index}`;
+    return [
+      { ticket: PLANNED, step: "start", result: "ok", pid: 1, input: PLANNED },
+      ...(share === null
+        ? [{ ticket: key, step: "stuck", result: "ok", detail: "The checks stayed red." }]
+        : [
+            { ticket: key, step: "start", result: "new", detail: `feat/${key}`, slot: 0 },
+            { ticket: key, step: "agent", result: "done", session: key, plan: { five_hour: { start: 0, end: share / 100, resets_at: 1 } } },
+            { ticket: key, step: "merge", result: "merged", pr: pr(40 + index) },
+          ]),
+      { ticket: PLANNED, step: "finish", result: "ok" },
+    ];
+  });
+}
+
 /** Writes a run's decisions log, its last line `end` minutes ago. */
 function write(epic: string, seeded: (home: string) => object[], end: number): void {
   const home = join(stateDir, epic);
@@ -175,6 +197,7 @@ function write(epic: string, seeded: (home: string) => object[], end: number): v
 }
 
 const stateDir = join(mkdtempSync(join(tmpdir(), "seed-")), "demo-loop");
+write(PLANNED, planned, 600);
 write(KILLED, killed, 180);
 write(EPIC, lines, 0);
 

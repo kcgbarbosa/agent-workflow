@@ -19,6 +19,8 @@ import {
   planMeter,
   projects,
   readLines,
+  roundHalfEven,
+  type Run,
   runHomes,
   ticketKey,
 } from "./report.ts";
@@ -39,6 +41,10 @@ const WARNED = new Set(["retarget", "worktree"]);
 // The results of an agent that waits for a usage limit to reset.
 const LIMITED = ["usage-limit", "usage-pause"];
 const RECENT_ITEMS = 3;
+// The typical share of the 5-hour window per merged ticket is the median of this many earlier runs.
+const TYPICAL_RUNS = 5;
+// A run whose share is above this many times the typical share is marked warn.
+const WARN_RATIO = 1.5;
 const TAIL_BYTES = 256_000;
 const SUMMARY_CHARS = 160;
 const DETAIL_CHARS = 4000;
@@ -119,6 +125,8 @@ export type PlanView = {
   used: Record<string, number>;
   per_merged: Record<string, number>;
   fits: Record<string, number>;
+  typical: number | null;
+  warn: boolean;
 };
 
 export type EpicView = {
@@ -238,9 +246,10 @@ function alive(pid: number): boolean {
 export function hostView(stateDir: string): HostProject[] {
   return [...projects(stateDir)].map(([name, home]) => {
     const epics = runHomes(home).sort((a, b) => mtime(join(b, DECISIONS)) - mtime(join(a, DECISIONS)));
+    const history = allRuns(home);
     const runs = epics.map((epic): HostRun => {
       const key = basename(epic);
-      const view = epicView(home, key, isRunning(readLines(join(epic, DECISIONS)), key));
+      const view = epicView(home, key, isRunning(readLines(join(epic, DECISIONS)), key), history);
       return {
         key,
         summary: view.summary,
@@ -273,9 +282,10 @@ export function comparison(stateDir: string, epic?: string, against?: string) {
 }
 
 /** The state of one Epic's latest run: the run, the tickets in columns, and the steps. `running` is whether
- * the run's pid is alive, which the view checks when the caller does not know.
+ * the run's pid is alive, which the view checks when the caller does not know. `history` is every run of the
+ * project, which a caller that views each Epic reads once.
  */
-export function epicView(stateDir: string, epic: string, running?: boolean): EpicView {
+export function epicView(stateDir: string, epic: string, running?: boolean, history = allRuns(stateDir)): EpicView {
   const home = join(stateDir, epic);
   const lines = readLines(join(home, DECISIONS));
   const live = running ?? isRunning(lines, epic);
@@ -423,7 +433,7 @@ export function epicView(stateDir: string, epic: string, running?: boolean): Epi
     updated: runLines.length ? runLines[runLines.length - 1].time : null,
     tickets: columns,
     stats: ticketStats(columns, byTicket),
-    plan: planView(totals),
+    plan: planView(totals, typicalShare(history, runLines.length ? runLines[0].time : null)),
     events,
     epic_files: runFiles(home, join(home, "runs", epic)),
     epic_agents: agentLogs(join(home, "runs", epic)).map(({ number, updated }) => ({ number, updated })),
@@ -554,16 +564,32 @@ function ticketStats(columns: TicketView[], byTicket: Map<string, Line[]>): Epic
 
 /** The share of each window the run used, per merged ticket too, and how many more tickets fit in the
  * rest of each window at that share. A meter whose window has reset since the run read it gives no
- * estimate.
+ * estimate. The run is warn when its share of the 5-hour window per merged ticket is well above the typical one.
  */
-function planView(totals: Breakdown): PlanView {
+function planView(totals: Breakdown, typical: number | null): PlanView {
   const fits: Record<string, number> = {};
   for (const [window, value] of Object.entries(totals.meter)) {
     const past = typeof value.resets_at === "number" && value.resets_at < Date.now() / 1000;
     const each = totals.plan_per_merged[window];
     if (each && !past) fits[window] = Math.max(0, Math.floor((100 - value.utilization * 100) / each + 1e-9));
   }
-  return { used: totals.plan_used, per_merged: totals.plan_per_merged, fits };
+  const share = totals.plan_per_merged.five_hour;
+  const warn = share !== undefined && typical !== null && share > WARN_RATIO * typical;
+  return { used: totals.plan_used, per_merged: totals.plan_per_merged, fits, typical, warn };
+}
+
+/** The median share of the 5-hour window per merged ticket over the project's last runs that started before
+ * `started` and have one, or null when none has. A run that merged nothing under a meter reading has no share.
+ */
+function typicalShare(history: Run[], started: string | null): number | null {
+  const shares: number[] = [];
+  for (const [run, lines] of history.toReversed()) {
+    if (shares.length === TYPICAL_RUNS) break;
+    if (started !== null && lines[0].time >= started) continue;
+    const share = breakdown(run, lines).plan_per_merged.five_hour;
+    if (share !== undefined) shares.push(share);
+  }
+  return shares.length ? roundHalfEven(median(shares), 1) : null;
 }
 
 /** The last tool calls and messages of the ticket's newest agent log, read from its end. */

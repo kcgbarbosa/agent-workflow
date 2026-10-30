@@ -595,7 +595,7 @@ function stripSuffix(name: string): string {
  * Python's `round`: a half goes to the even digit, so 2.5 gives 2, 3.5 gives 4, and 2.25 gives 2.2. The check reads
  * the binary value's exact digits, so only a true tie takes the even digit.
  */
-function roundHalfEven(value: number, digits = 0): number {
+export function roundHalfEven(value: number, digits = 0): number {
   const exact = Math.abs(value).toFixed(100);
   const point = exact.indexOf(".");
   const kept = Number(exact.slice(0, point) + exact.slice(point + 1, point + 1 + digits));

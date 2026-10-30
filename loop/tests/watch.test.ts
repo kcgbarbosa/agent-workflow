@@ -451,3 +451,65 @@ test("the forecast reads the merges of each run from the log and the open work f
   expect(forecast.periods[0]).toMatchObject({ plan: "max-5x", runs: 2, merged: 3, stuck: 1 });
   expect(forecast.open.epics).toEqual([expect.objectContaining({ key: EPIC, left: 1 })]);
 });
+
+/** One run of an Epic that merges one ticket at the given share of the 5-hour window, or merges none. */
+function shareRun(epic: string, ticket: string, share: number | null): object[] {
+  return [
+    { ticket: epic, step: "start", result: "ok", pid: 1 },
+    ...(share === null
+      ? [{ ticket, step: "stuck", result: "ok", detail: "Still red." }]
+      : [
+          { ticket, step: "start", result: "new", detail: `feat/${ticket}-work`, slot: 0 },
+          { ticket, step: "agent", result: "done", session: ticket, plan: { five_hour: { start: 0, end: share / 100, resets_at: 1 } } },
+          { ticket, step: "merge", result: "merged", pr: `${PR}${ticket}` },
+        ]),
+    { ticket: epic, step: "finish", result: "ok" },
+  ];
+}
+
+/** Two runs of another Epic of the project, the day before, at 100% and 12% per merged ticket. */
+function otherEpic(): void {
+  const day = Date.parse("2026-10-19T10:00:00Z");
+  const lines = [...shareRun("DEMO-20", "DEMO-21", 100), ...shareRun("DEMO-20", "DEMO-22", 12)];
+  const at = (index: number) => new Date(day + index * 60_000).toISOString().replace(/\.\d+Z$/, "+00:00");
+  world.record(lines.map((line, index) => ({ ...line, time: at(index) })), "DEMO-20");
+}
+
+/** Five earlier runs of the Epic, the last with no share, then this run at the given share. With the other Epic's,
+ * the median of the last 5 earlier runs with a share is 4. Counting the run with none as zero gives 3, and taking
+ * all six gives 7.
+ */
+function epicRuns(current: number): object[] {
+  return [2, 3, 4, 10, null, current].flatMap((share, index) => shareRun(EPIC, `DEMO-${30 + index}`, share));
+}
+
+test("the typical share is the median of the project's last 5 earlier runs that have one", async () => {
+  otherEpic();
+  world.record(epicRuns(6));
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+  const { body: other } = await watching.get(`/api/epic/DEMO-20?project=demo`);
+
+  expect(view.plan).toMatchObject({ per_merged: { five_hour: 6 }, typical: 4, warn: false });
+  expect(other.plan).toMatchObject({ per_merged: { five_hour: 12 }, typical: 100, warn: false });
+});
+
+test("a run above 1.5 times the typical share is marked warn", async () => {
+  otherEpic();
+  world.record(epicRuns(6.1));
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.plan).toMatchObject({ per_merged: { five_hour: 6.1 }, typical: 4, warn: true });
+});
+
+test("a project with no earlier figure has no typical share", async () => {
+  world.record([...shareRun(EPIC, "DEMO-30", null), ...shareRun(EPIC, "DEMO-31", 5)]);
+  watching = await world.watch();
+
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(view.plan).toMatchObject({ per_merged: { five_hour: 5 }, typical: null, warn: false });
+});
