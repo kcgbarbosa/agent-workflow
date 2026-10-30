@@ -1,0 +1,18 @@
+# Puts this repo on the shared merge gate. setup-repo writes it from skills/setup-repo/gate/ in agent-workflow.
+name: pull-request
+# Pull requests only, so a merge to main runs no second gate.
+on: pull_request
+# A newer push to a pull request cancels its older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    uses: ./.github/workflows/gate.yml
+    # The review and the judge comment on the pull request, and bill the plan of the token or the API of the key.
+    permissions:
+      contents: read
+      pull-requests: write
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

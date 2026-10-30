@@ -5,14 +5,17 @@ Skills, the loop, and KC's global instructions. `~/.claude` links into a clone o
 ```
 skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
 agents/<name>.md a subagent tier on a cheaper model. The loop gives its agents the same files
-loop/            the loop command, which builds an Epic unattended. Its design is skills/setup-loop/loop.md
+loop/            the loop command, which turns each ticket of an Epic into a pull request, unattended. Its design is skills/setup-loop/loop.md
 switchboard/     a phone line to the Claude Code sessions on the T14, for the car. Its README is the setup
 config/          the shared Claude Code files settings.json, statusline.sh, keybindings.json and notify.sh. install.sh links them into ~/.claude
 docs/            project-skills.md, the registry of skills that live in project repos
 config/CLAUDE.md the global instructions, linked to ~/.claude/CLAUDE.md, the name Claude Code reads
 AGENTS.md        this repo's own instructions
 install.sh       makes the links and installs the loop command. Safe to run again
-tests/           the repo-level checks that .github/workflows/repo.yml runs. Run them with uv run --no-project --with pytest pytest tests
+tests/           the repo-level checks. make check runs them with the loop, switchboard and shellcheck checks
+.github/         the shared merge gate, workflows/gate.yml, which every repo calls, and this repo's own call to it
+actions/         the gate's review and UI judge, composite actions that the gate runs after the check
+Makefile         make check, the gate's check for this repo
 licenses/        upstream licenses. Keep
 ```
 

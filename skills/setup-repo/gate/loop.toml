@@ -1,0 +1,4 @@
+# The shared gate's settings. actions/review/action.yml in agent-workflow gives the [review] keys, and
+# actions/judge/action.yml gives `blocking`, which goes in the repo's [ui] table.
+[review]
+enabled = true

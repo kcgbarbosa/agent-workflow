@@ -1,6 +1,6 @@
 """install.sh links the repo into a fresh home and is safe to run again.
 
-Every run gets a temp HOME, a fake uv, and a fake claude, so nothing is installed for real and the checkout is never touched.
+Every run gets a temp HOME, a fake uv, a fake npm, and a fake claude, so nothing is installed for real and the checkout is never touched.
 The real claude would write through the settings.json link into config/ in the checkout.
 """
 
@@ -29,9 +29,12 @@ def run(tmp_path: Path, home: Path, repo: Path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     uv = bin_dir / "uv"
-    # Records its arguments, so the test can see the loop command would be installed.
     uv.write_text(f'#!/bin/sh\necho "$@" >> "{tmp_path / "uv.log"}"\n')
     uv.chmod(0o755)
+    npm = bin_dir / "npm"
+    # Records its arguments, so the test can see the loop's packages would be installed.
+    npm.write_text(f'#!/bin/sh\necho "$@" >> "{tmp_path / "npm.log"}"\n')
+    npm.chmod(0o755)
     claude = bin_dir / "claude"
     # Records its arguments. `mcp get` finds only a server that an earlier `mcp add` added.
     claude.write_text(
@@ -84,7 +87,9 @@ def test_links_every_skill_tier_and_agents_md(run, home: Path, repo: Path, tmp_p
         assert link.is_symlink() and link.resolve() == tier.resolve(), tier.name
     assert (claude / "CLAUDE.md").is_symlink()
     assert (claude / "CLAUDE.md").resolve() == (repo / "config" / "CLAUDE.md").resolve()
-    assert f"tool install --quiet --editable {repo}/loop" in (tmp_path / "uv.log").read_text()
+    assert f"ci --prefix {repo}/loop" in (tmp_path / "npm.log").read_text()
+    loop = home / ".local" / "bin" / "loop"
+    assert loop.is_symlink() and loop.resolve() == (repo / "loop" / "bin" / "loop").resolve()
 
 
 def test_adds_each_mcp_server_once(run, tmp_path: Path) -> None:
