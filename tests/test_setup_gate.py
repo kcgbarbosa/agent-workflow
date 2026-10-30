@@ -73,7 +73,8 @@ def test_write_puts_a_repo_on_the_shared_gate(python_repo: Path, env: dict[str, 
     caller = (python_repo / ".github" / "workflows" / "pull-request.yml").read_text()
     assert SHARED_GATE in caller
     assert "CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" in caller
-    assert len(caller.splitlines()) <= 18
+    assert "CHECK_ENV: ${{ secrets.CHECK_ENV }}" in caller
+    assert len(caller.splitlines()) <= 19
     assert "hold" in (python_repo / ".github" / "workflows" / "hold.yml").read_text()
     assert (python_repo / "mise.toml").read_text() == '[tools]\nnode = "22.4.0"\nuv = "0.9.1"\n'
     assert "[review]\nenabled = true\n" in (python_repo / "loop.toml").read_text()
