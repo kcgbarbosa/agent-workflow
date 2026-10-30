@@ -10,6 +10,7 @@ import { ask, type Session } from "./agent.ts";
 import type { Config } from "./config.ts";
 import { git, slug } from "./git.ts";
 import * as github from "./github.ts";
+import { run } from "./spawn.ts";
 import { type Ticket, Jira } from "./jira.ts";
 import { Log } from "./log.ts";
 
@@ -28,6 +29,12 @@ const PAST_RESET_SECONDS = 60;
 /** The Python loop's Epic slot. The tickets take the slots after it, so both loops give a ticket the same ports. */
 const EPIC_SLOT = 1;
 
+/** The slots after the ticket slots that a ticket's stack moves to when another project holds its ports. */
+const SPARE_SLOTS = 8;
+
+/** A host port that `docker ps` lists as published, alone or as a range. */
+const PUBLISHED_PORT = /:(\d+)(?:-(\d+))?->/g;
+
 const USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work.";
 
 const STUCK_COMMENT = "The loop stopped this ticket.";
@@ -39,6 +46,8 @@ export type Options = { pollSeconds: number };
 type State = "merged" | "done" | "flagged" | "ready" | "waiting";
 
 type Finished = "merged" | "stopped" | "stuck";
+
+class PortsTaken extends Error {}
 
 export function runName(target: Target): string {
   if ("key" in target) return target.key;
@@ -71,6 +80,8 @@ export class Run {
   /** Until when, in epoch milliseconds, the run waits for a usage limit to reset. */
   private pausedUntil = 0;
   private wake: () => void = () => {};
+  /** The spare slot each ticket slot moved to for the rest of the run, because another project held a port. */
+  private readonly slotMoves = new Map<number, number>();
 
   constructor(config: Config, secrets: Record<string, string>, target: Target, options: Options) {
     this.config = config;
@@ -218,13 +229,20 @@ export class Run {
     let red = "";
     for (let attempt = 1; ; attempt++) {
       if (attempt > 1 && this.fixes(key) >= this.config.fixAttempts) {
-        return this.stuck(key, `The gate stayed red after ${this.config.fixAttempts} fix attempts. ${red}`, url!);
+        return this.stuck(key, `The gate stayed red after ${this.config.fixAttempts} fix attempts. ${red}`, url);
       }
 
       // Build, or a fix attempt that resumes the session with what the gate found
       const before = await git(worktree, "rev-parse", "HEAD");
       this.log.write(key, "build", "started", { commit: before, attempt, ...(attempt > 1 ? { detail: red } : {}) });
-      const session = await this.agent(key, prompt, worktree, runDir, slot);
+      let session: Session;
+      try {
+        session = await this.agent(key, prompt, worktree, runDir, slot);
+      } catch (error) {
+        if (!(error instanceof PortsTaken)) throw error;
+        this.log.write(key, "build", "fail", { commit: before, detail: error.message });
+        return this.stuck(key, error.message, url);
+      }
       const commit = await git(worktree, "rev-parse", "HEAD");
       if (session.result !== "done") {
         this.log.write(key, "build", session.result === "blocked" ? "blocked" : "fail", { commit, session: session.session, detail: session.detail });
@@ -313,6 +331,7 @@ export class Run {
   private async agent(key: string, prompt: string, worktree: string, runDir: string, slot: number): Promise<Session> {
     for (;;) {
       await this.untilResumed();
+      const stack = await this.stackEnv(key, slot);
       const resume = this.log.lines().findLast((line) => line.ticket === key && line.step === "agent" && line.session)?.session;
       const session = await ask({
         prompt,
@@ -320,7 +339,7 @@ export class Run {
         resume: resume ?? null,
         model: this.config.agentModel,
         effort: this.config.agentEffort,
-        env: this.agentEnv(key, runDir, slot),
+        env: { ...this.agentEnv(runDir), ...stack },
         log: nextLog(runDir),
         minutes: this.config.agentTimeoutMinutes,
         stateDir: this.config.stateDir,
@@ -403,8 +422,9 @@ export class Run {
   }
 
   /** Flags the ticket, comments the reason and the pull request, and notifies. Its pull request stays open. */
-  private async stuck(key: string, reason: string, url: string): Promise<Finished> {
-    const comment = `${STUCK_COMMENT}\n${reason}\nThe pull request is ${url}.\nThe log is ${this.log.path} on ${hostname()}.`;
+  private async stuck(key: string, reason: string, url: string | null): Promise<Finished> {
+    const pr = url ? `The pull request is ${url}.\n` : "";
+    const comment = `${STUCK_COMMENT}\n${reason}\n${pr}The log is ${this.log.path} on ${hostname()}.`;
     this.log.write(key, "stuck", "started", { pr: url, detail: reason, comment });
     try {
       if (!(await this.jira.comments(key)).includes(comment)) await this.jira.comment(key, comment);
@@ -586,17 +606,68 @@ export class Run {
     }
   }
 
-  /** The agent's env, with the ports of its stack slot when the repo has a stack, as the Python loop sets them. */
-  private agentEnv(key: string, runDir: string, slot: number): Record<string, string> {
+  private agentEnv(runDir: string): Record<string, string> {
     const env: Record<string, string> = {};
     for (const [name, value] of Object.entries(process.env)) if (value !== undefined && name !== "BW_SESSION") env[name] = value;
-    const stack: Record<string, string> = {};
-    if (this.config.stack) {
-      for (const [port, base] of Object.entries(this.config.stack.ports)) stack[port] = String(base + this.config.stack.portStep * slot);
-      // Compose accepts lowercase project names only.
-      stack.COMPOSE_PROJECT_NAME = `${this.config.name}-${key.toLowerCase()}`;
+    return { ...env, ...this.secrets, LOOP_RUN_DIR: runDir, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
+  }
+
+  /** The env of the slot's stack, on its ports, as the Python loop sets them. A repo with no stack has none. */
+  private slotEnv(slot: number, key: string): Record<string, string> {
+    const stack = this.config.stack!;
+    const env: Record<string, string> = {};
+    for (const [port, base] of Object.entries(stack.ports)) env[port] = String(base + stack.portStep * slot);
+    // Compose accepts lowercase project names only.
+    env.COMPOSE_PROJECT_NAME = `${this.config.name}-${key.toLowerCase()}`;
+    return env;
+  }
+
+  /**
+   * The env of the slot's stack, on ports that no other Compose project holds. When another project, such as
+   * a stack from a session outside the loop, holds one, the slot moves to a free spare slot for the rest of the
+   * run, as in the Python loop. With no spare slot free, it throws PortsTaken.
+   */
+  private async stackEnv(key: string, slot: number): Promise<Record<string, string>> {
+    if (!this.config.stack) return {};
+    const env = this.slotEnv(this.slotMoves.get(slot) ?? slot, key);
+    const held = await this.heldPorts(env.COMPOSE_PROJECT_NAME!);
+    // No await from here on, so two tickets never take the same spare slot.
+    const taken = this.taken(env, held);
+    if (!taken) return env;
+    const first = EPIC_SLOT + this.config.parallel + 1;
+    for (let spare = first; spare < first + SPARE_SLOTS; spare++) {
+      const moved = this.slotEnv(spare, key);
+      if (![...this.slotMoves.values()].includes(spare) && !this.taken(moved, held)) {
+        this.slotMoves.set(slot, spare);
+        this.log.write(key, "slot", "moved", { detail: `${taken} The stack moved to slot ${spare}.` });
+        return moved;
+      }
     }
-    return { ...env, ...this.secrets, ...stack, LOOP_RUN_DIR: runDir, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
+    throw new PortsTaken(`${taken} No spare slot has its ports free.`);
+  }
+
+  /** Which of the stack's ports another project holds, as a sentence, or "" when none is held. */
+  private taken(env: Record<string, string>, held: Map<number, string>): string {
+    return Object.keys(this.config.stack!.ports)
+      .map((name) => Number(env[name]))
+      .filter((port) => held.has(port))
+      .map((port) => `Port ${port} is held by the container ${held.get(port)}.`)
+      .join(" ");
+  }
+
+  /** The host ports that the running containers of other Compose projects publish, with the container of each. */
+  private async heldPorts(project: string): Promise<Map<number, string>> {
+    const format = '{{.Label "com.docker.compose.project"}}\t{{.Names}}\t{{.Ports}}';
+    const listed = await run("docker", ["ps", "--format", format], { cwd: this.home, seconds: 60 });
+    const held = new Map<number, string>();
+    for (const line of listed.code === 0 ? listed.stdout.split("\n") : []) {
+      const [owner, container, published] = line.split("\t");
+      if (!container || owner === project) continue;
+      for (const [, low, high] of (published ?? "").matchAll(PUBLISHED_PORT)) {
+        for (let port = Number(low); port <= Number(high ?? low); port++) held.set(port, container);
+      }
+    }
+    return held;
   }
 
   /** An ntfy message holds the run and its result only. */

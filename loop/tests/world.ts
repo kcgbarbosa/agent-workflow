@@ -145,6 +145,11 @@ ${extra}`;
     writeFileSync(join(this.fakes, "no-retarget"), "");
   }
 
+  /** The running containers that `docker ps` lists: project, name, and ports, tab-separated, one per line. */
+  containers(lines: string[]): void {
+    writeFileSync(join(this.fakes, "containers.txt"), lines.map((line) => line + "\n").join(""));
+  }
+
   /** Runs the loop to its end. */
   loop(...args: string[]): Promise<Ran> {
     return new Promise((done) => {
