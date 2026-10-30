@@ -23,6 +23,8 @@ const USAGE = [
 ].join("\n");
 // The seconds between two polls of a pull request. The tests set a short one.
 const POLL_SECONDS = Number(process.env.LOOP_POLL_SECONDS ?? 30);
+// The least seconds between two plan meter lines of a running agent. The tests set a short one.
+const METER_SECONDS = Number(process.env.LOOP_METER_SECONDS ?? 60);
 // The tests take any free port.
 const PORT = Number(process.env.LOOP_WATCH_PORT ?? WATCH_PORT);
 
@@ -66,7 +68,7 @@ async function run(target: Target, repoArg: string | undefined): Promise<number>
   const config = load(await mainCheckout(resolve(repoArg ?? process.cwd())));
   for (const warning of config.warnings) console.error(warning);
   const secrets = readSecrets(config);
-  const loop = new Run(config, secrets, target, { pollSeconds: POLL_SECONDS });
+  const loop = new Run(config, secrets, target, { pollSeconds: POLL_SECONDS, meterSeconds: METER_SECONDS });
   const stop = async () => {
     loop.log.write(loop.log.run, "stop", "stopped");
     await endAll();

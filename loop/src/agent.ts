@@ -1,9 +1,10 @@
 // One agent session through the Claude Agent SDK. The SDK starts `claude` through the loop's spawn function,
 // so a stop ends the session's whole process group, and each event goes to the agent log as one JSON line.
-import { accessSync, appendFileSync, constants, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, constants, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { query, type SpawnedProcess, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
-import { endGroup, signalGroup, spawnGroup } from "./spawn.ts";
+import type { Config } from "./config.ts";
+import { endGroup, run, signalGroup, spawnGroup } from "./spawn.ts";
 
 const DISPATCH = new URL("./loop/dispatch.md", import.meta.url);
 
@@ -102,6 +103,30 @@ function usageOf(result: Record<string, unknown>, peak: number): Usage {
         )
       : null,
     peak_context: peak,
+  };
+}
+
+// The subagent tiers, one Markdown file each in the agents folder of this checkout.
+const TIERS = new URL("../../agents/", import.meta.url);
+
+/**
+ * What the agents of a run run on: the `claude` version, and the model and effort of the head agent, of each
+ * subagent tier, and of the gate's review. The start line keeps it, so `loop report` can tell two runs apart.
+ */
+export async function runSetup(config: Config): Promise<Record<string, unknown>> {
+  const executable = claudePath();
+  const printed = executable ? (await run(executable, ["--version"], { seconds: 30 })).stdout : "";
+  const tiers: Record<string, string> = {};
+  for (const file of readdirSync(TIERS).filter((name) => name.endsWith(".md")).sort()) {
+    const front = /^---\n([\s\S]*?)\n---/.exec(readFileSync(new URL(file, TIERS), "utf8"))?.[1] ?? "";
+    const field = (key: string) => new RegExp(`^${key}: *(.+)$`, "m").exec(front)?.[1]?.trim() ?? "";
+    tiers[field("name") || file.replace(/\.md$/, "")] = `${field("model")} ${field("effort")}`;
+  }
+  return {
+    claude: /\d+\.\d+\.\d+/.exec(printed)?.[0] ?? "",
+    agent: `${config.agentModel} ${config.agentEffort}`,
+    tiers,
+    review: `${config.review.model ?? "the gate's model"} ${config.review.effort ?? "the gate's effort"}`,
   };
 }
 

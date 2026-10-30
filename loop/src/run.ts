@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { ask, type Meter, type Session } from "./agent.ts";
+import { ask, type Meter, runSetup, type Session } from "./agent.ts";
 import type { Config } from "./config.ts";
 import { git, slug } from "./git.ts";
 import * as github from "./github.ts";
@@ -36,14 +36,13 @@ const SPARE_SLOTS = 8;
 const PUBLISHED_PORT = /:(\d+)(?:-(\d+))?->/g;
 
 const USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work.";
-// The plan meter line of a running agent comes at most this often.
-const METER_MS = 60_000;
 
 const STUCK_COMMENT = "The loop stopped this ticket.";
 
 export type Target = { key: string } | { filter: string };
 
-export type Options = { pollSeconds: number };
+/** `meterSeconds` is the least time between two plan meter lines of a running agent. */
+export type Options = { pollSeconds: number; meterSeconds: number };
 
 type State = "merged" | "done" | "flagged" | "ready" | "waiting";
 
@@ -102,7 +101,7 @@ export class Run {
   async run(): Promise<number> {
     const input = "key" in this.target ? this.target.key : `--filter ${this.target.filter}`;
     // The watch page tells a running run from the pid, and two runs apart from the setup.
-    const setup = { model: this.config.agentModel, effort: this.config.agentEffort, parallel: this.config.parallel };
+    const setup = await runSetup(this.config);
     this.log.write(this.name, "start", "ok", { detail: this.config.mainBranch, input, pid: process.pid, setup });
     const tickets = await this.tickets();
     for (const ticket of tickets) this.byKey.set(ticket.key, ticket);
@@ -341,6 +340,7 @@ export class Run {
       await this.untilResumed();
       const stack = await this.stackEnv(key, slot);
       const resume = this.log.lines().findLast((line) => line.ticket === key && line.step === "agent" && line.session)?.session;
+      const meter = this.meterLogger(key);
       const session = await ask({
         prompt,
         cwd: worktree,
@@ -351,8 +351,8 @@ export class Run {
         log: nextLog(runDir),
         minutes: this.config.agentTimeoutMinutes,
         stateDir: this.config.stateDir,
-        meter: this.meterLogger(key),
-      });
+        meter: meter.take,
+      }).finally(meter.stop);
       this.log.write(key, "agent", session.result, {
         commit: await git(worktree, "rev-parse", "HEAD"),
         session: session.session,
@@ -366,16 +366,36 @@ export class Run {
     }
   }
 
-  /** Logs the plan meter while an agent runs, when the reading changed, at most once a minute. */
-  private meterLogger(key: string): (reading: Meter) => void {
+  /**
+   * Logs the plan meter while an agent runs, when the reading changed, at most once in `meterSeconds`. A
+   * reading that comes sooner waits for the time, and goes out then unless a newer one replaced it. At the
+   * session's end, the agent line's `plan` holds the last reading, so `stop` drops one that still waits.
+   */
+  private meterLogger(key: string): { take: (reading: Meter) => void; stop: () => void } {
     let last = "";
     let at = 0;
-    return (reading) => {
-      const text = JSON.stringify(reading);
-      if (text === last || Date.now() - at < METER_MS) return;
+    let held: Meter | null = null;
+    let timer: NodeJS.Timeout | undefined;
+    const write = () => {
+      timer = undefined;
+      if (!held) return;
+      const text = JSON.stringify(held);
+      if (text !== last) this.log.write(key, "meter", "read", { meter: held });
       last = text;
       at = Date.now();
-      this.log.write(key, "meter", "read", { meter: reading });
+      held = null;
+    };
+    return {
+      take: (reading) => {
+        held = reading;
+        const wait = at + this.options.meterSeconds * 1000 - Date.now();
+        if (wait <= 0) write();
+        else timer ??= setTimeout(write, wait);
+      },
+      stop: () => {
+        clearTimeout(timer);
+        held = null;
+      },
     };
   }
 
