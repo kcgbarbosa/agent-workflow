@@ -164,14 +164,25 @@ ${extra}`;
     return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")).prs as PullRequest[]) : [];
   }
 
-  /** Sets the check of the ticket's pull request, as the gate would. */
-  setCheck(key: string, bucket: "pass" | "fail"): void {
+  /** Sets the checks of the ticket's pull request, as the gate would. Each named check takes its bucket. */
+  setChecks(key: string, buckets: Record<string, "pass" | "fail" | "pending">): void {
     const path = join(this.fakes, "github.json");
     const state = JSON.parse(readFileSync(path, "utf8"));
+    const states = { pass: "SUCCESS", fail: "FAILURE", pending: "PENDING" };
     for (const pr of state.prs) {
-      if (pr.headRefName.includes(`/${key}-`)) pr.checks = [{ name: "gate / check", bucket, state: bucket === "pass" ? "SUCCESS" : "FAILURE" }];
+      if (!pr.headRefName.includes(`/${key}-`)) continue;
+      for (const [name, bucket] of Object.entries(buckets)) {
+        const check = { name, bucket, state: states[bucket] };
+        const index = pr.checks.findIndex((item: { name: string }) => item.name === name);
+        if (index >= 0) pr.checks[index] = check;
+        else pr.checks.push(check);
+      }
     }
     writeFileSync(path, JSON.stringify(state, null, 2));
+  }
+
+  setCheck(key: string, bucket: "pass" | "fail"): void {
+    this.setChecks(key, { "gate / check": bucket });
   }
 
   /** A pull request merged before the run, with its branch named as the loop names it. */

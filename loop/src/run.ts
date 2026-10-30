@@ -31,9 +31,6 @@ function branchPrefixes(key: string): string[] {
   return [`feat/${key}-`, `fix/${key}-`];
 }
 
-function ownsBranch(key: string, branch: string): boolean {
-  return branchPrefixes(key).some((prefix) => branch.startsWith(prefix));
-}
 
 export class Run {
   private readonly config: Config;
@@ -64,10 +61,13 @@ export class Run {
     this.log.write(this.name, "start", "ok", { detail: this.config.mainBranch, input });
     const tickets = await this.tickets();
     await git(this.config.repo, "fetch", "--prune", "--quiet", "origin");
-    const prs = await github.pullRequests(this.config.repo);
+    const mergedBefore = new Map<string, string>();
     for (const ticket of tickets) {
-      if (prs.some((pr) => pr.state === "MERGED" && ownsBranch(ticket.key, pr.headRefName))) this.merged.add(ticket.key);
+      const { branch } = await this.branchOf(ticket);
+      const pr = (await github.pullRequestsOf(this.config.repo, branch)).find((item) => item.state === "MERGED");
+      if (pr) mergedBefore.set(ticket.key, pr.url);
     }
+    for (const key of mergedBefore.keys()) this.merged.add(key);
     const states = new Map(tickets.map((ticket) => [ticket.key, this.state(ticket)]));
     this.log.write(this.name, "frontier", "ok", {
       detail: tickets.map((ticket) => `${ticket.key} ${states.get(ticket.key)}`).join(", "),
@@ -79,11 +79,8 @@ export class Run {
         blockers: ticket.blockers.map((blocker) => blocker.key),
       })),
     });
-    for (const ticket of tickets) {
-      if (this.merged.has(ticket.key)) {
-        const pr = prs.find((item) => item.state === "MERGED" && ownsBranch(ticket.key, item.headRefName));
-        this.log.write(ticket.key, "start", "merged-before", { pr: pr?.url, detail: "Its pull request merged before this run." });
-      }
+    for (const [key, pr] of mergedBefore) {
+      this.log.write(key, "start", "merged-before", { pr, detail: "Its pull request merged before this run." });
     }
 
     const finished = new Map<string, Finished>();
@@ -216,7 +213,7 @@ export class Run {
     await this.status(key, this.config.inReview);
 
     // Wait
-    const checks = await this.wait(url);
+    const checks = await this.wait(url, autoMerge);
     this.log.write(key, "wait", checks.result, { commit, pr: url, checks: checks.checks, detail: checks.detail });
     if (checks.result !== "green") return "stopped";
 
@@ -231,11 +228,10 @@ export class Run {
     return "merged";
   }
 
-  /** Reuses the ticket's branch and worktree from an earlier run, or branches from main. */
-  private async worktree(ticket: Ticket, path: string): Promise<string> {
-    const repo = this.config.repo;
+  /** The ticket's branch from an earlier run, here or on origin, else the name the loop gives a new one. */
+  private async branchOf(ticket: Ticket): Promise<{ branch: string; local: boolean; remote: boolean }> {
     const refs = await git(
-      repo,
+      this.config.repo,
       "for-each-ref",
       "--format=%(refname)",
       ...branchPrefixes(ticket.key).flatMap((prefix) => [`refs/heads/${prefix}*`, `refs/remotes/origin/${prefix}*`]),
@@ -245,6 +241,13 @@ export class Run {
     const remote = found.find((ref) => ref.startsWith("refs/remotes/origin/"));
     const type = ticket.issueType === "Bug" ? "fix" : "feat";
     const branch = local?.slice("refs/heads/".length) ?? remote?.slice("refs/remotes/origin/".length) ?? `${type}/${ticket.key}-${slug(ticket.summary)}`;
+    return { branch, local: local !== undefined, remote: remote !== undefined };
+  }
+
+  /** Reuses the ticket's branch and worktree from an earlier run, or branches from main. */
+  private async worktree(ticket: Ticket, path: string): Promise<string> {
+    const repo = this.config.repo;
+    const { branch, local, remote } = await this.branchOf(ticket);
     await git(repo, "worktree", "prune");
     if (existsSync(path)) return branch;
     if (local) await git(repo, "worktree", "add", "--quiet", path, branch);
@@ -275,7 +278,7 @@ export class Run {
   /** The open pull request of the branch, or a new one whose title becomes the squash commit on main. */
   private async pullRequest(ticket: Ticket, branch: string, runDir: string, reason: string, decisions: string[]): Promise<string> {
     const repo = this.config.repo;
-    const open = (await github.pullRequests(repo)).find((pr) => pr.state === "OPEN" && pr.headRefName === branch);
+    const open = (await github.pullRequestsOf(repo, branch)).find((pr) => pr.state === "OPEN");
     if (open) return open.url;
     const bodyFile = join(runDir, "pr-body.md");
     if (!existsSync(bodyFile)) {
@@ -288,8 +291,15 @@ export class Run {
     return github.create(repo, branch, this.config.mainBranch, `${type}(${ticket.key}): ${ticket.summary}`, bodyFile);
   }
 
-  /** Polls the check runs until one fails, all pass, or the wait runs out. */
-  private async wait(url: string): Promise<{ result: "green" | "red" | "timeout"; checks: { name: string; bucket: string }[]; detail: string }> {
+  /**
+   * Polls until a check fails, the pull request merges, or the wait runs out. With auto-merge on, GitHub
+   * merges once every required check passes, so a check that has not reported yet keeps the loop waiting.
+   * With auto-merge off, every check reported so far passing is green, and the loop merges.
+   */
+  private async wait(
+    url: string,
+    autoMerge: boolean,
+  ): Promise<{ result: "green" | "red" | "timeout"; checks: { name: string; bucket: string }[]; detail: string }> {
     const deadline = Date.now() + WAIT_MINUTES * 60_000;
     let checks: { name: string; bucket: string }[] = [];
     for (;;) {
@@ -300,15 +310,21 @@ export class Run {
       }
       const red = checks.filter((check) => check.bucket === "fail" || check.bucket === "cancel");
       if (red.length) return { result: "red", checks, detail: `Failed: ${red.map((check) => check.name).join(", ")}` };
-      if (checks.length && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping")) {
-        return { result: "green", checks, detail: "" };
+      const passed = checks.length > 0 && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
+      if (passed && !autoMerge) return { result: "green", checks, detail: "" };
+      const state = await github.view(this.config.repo, url).then((pr) => pr.state, () => null);
+      if (state === "MERGED") {
+        // The checks as they were when GitHub merged, which the poll before the merge may not have seen.
+        const last = await github.checks(this.config.repo, url).catch(() => null);
+        return { result: "green", checks: last ? last.map(({ name, bucket }) => ({ name, bucket })) : checks, detail: "" };
       }
+      if (state === "CLOSED") return { result: "red", checks, detail: "The pull request was closed." };
       if (Date.now() >= deadline) return { result: "timeout", checks, detail: `The checks ran past ${WAIT_MINUTES} min.` };
       await sleep(this.options.pollSeconds);
     }
   }
 
-  /** Auto-merge merges a green pull request. The loop merges it when GitHub has not yet, and returns the commit. */
+  /** Auto-merge merges a green pull request. The loop merges it when auto-merge is off, and returns the commit. */
   private async merge(url: string): Promise<string | null> {
     const repo = this.config.repo;
     for (let attempt = 0; attempt < 5; attempt++) {
