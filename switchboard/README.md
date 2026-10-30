@@ -9,7 +9,7 @@ iPhone (CarPlay) -> Twilio number -> ElevenLabs agent -> Tailscale Funnel (switc
 ```
 
 - ElevenLabs does the speech both ways. Its agent's LLM is a custom LLM: this server, which speaks the OpenAI chat completions API and streams Server-Sent Events.
-- The server keeps one `claude -p` running in stream-json mode, named `switchboard`, in auto mode like the Remote Control sessions. Only the last thing KC said goes in, since the session already holds the conversation. It lives across calls, and a restart resumes it from the ID in `~/.local/state/switchboard/session`.
+- The server keeps one `claude -p` running in stream-json mode, named `switchboard`, in auto mode. Only the last thing KC said goes in, since the session already holds the conversation. It lives across calls, and a restart resumes it from the ID in `~/.local/state/switchboard/session`.
 - Other sessions reach it with `SendMessage` to `switchboard`. A reply wakes it for a turn of its own. What it says then is read out at the start of KC's next turn on the call.
 - ElevenLabs gives up on a custom LLM that sends nothing for about 4 seconds and sends the same request again, sometimes two at once. So the call hears "One moment..." after 1 second of silence, then "Still working on it..." every 10 seconds. A request with the same words within 30 seconds joins the ask already running instead of starting a second turn. After 45 seconds the call hears that the rest comes when KC asks, and the rest waits for the next turn.
 - `src/switchboard/prompt.md` is what the session is told about the call: how to talk, what it may do, and what waits for a screen.
@@ -36,5 +36,5 @@ Done once, by KC, in the two dashboards.
 ## Limits
 
 - Messages from the call land in a session as a message from another session, not as KC typing. The session treats them as a colleague's request.
-- A session in another permission mode holds the message for approval. Remote Control sessions run in auto mode, as the switchboard does.
+- A session in another permission mode holds the message for approval. The switchboard and the loop's agents run in auto mode. Other sessions start in the default mode of `config/settings.json`.
 - Every call costs ElevenLabs agent minutes and Twilio minutes, and every turn costs Claude usage.
