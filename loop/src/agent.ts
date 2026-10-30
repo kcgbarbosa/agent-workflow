@@ -6,7 +6,7 @@ import { query, type SpawnedProcess, type SpawnOptions } from "@anthropic-ai/cla
 import type { Config } from "./config.ts";
 import { endGroup, run, signalGroup, spawnGroup } from "./spawn.ts";
 
-const DISPATCH = new URL("./loop/dispatch.md", import.meta.url);
+const DISPATCH = new URL("./dispatch.md", import.meta.url);
 
 // A session ends at its status, so nothing wakes it for a later turn. These tools wait for one.
 const WAIT_TOOLS = ["ScheduleWakeup", "CronCreate", "CronDelete", "CronList", "RemoteTrigger", "Monitor", "Workflow"];
@@ -130,7 +130,7 @@ export async function runSetup(config: Config): Promise<Record<string, unknown>>
   };
 }
 
-/** The text of a failed run that names a usage limit, as the Python loop matches it. */
+/** The text of a failed run that names a usage limit. */
 const USAGE_LIMIT = /usage limit|hit your limit|limit reached|rate.?limit/i;
 
 export type Ask = {
@@ -147,7 +147,7 @@ export type Ask = {
   meter?: (reading: Meter) => void;
 };
 
-/** The `claude` on the PATH, as the Python loop runs it, so the tests' fake agent stands in for it. */
+/** The `claude` on the PATH, so the tests' fake agent stands in for it. */
 export function claudePath(path = process.env.PATH ?? ""): string | null {
   for (const folder of path.split(delimiter)) {
     const candidate = join(folder, "claude");
