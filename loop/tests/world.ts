@@ -1,7 +1,7 @@
 // One scenario's world: a git repo with a bare origin, the fake Jira, the fake `gh`, the fake `claude`, and
 // the loop's own checkout with an origin of its own, all in a temporary folder with no network.
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Line } from "../src/log.ts";
@@ -125,9 +125,29 @@ ${extra}`;
     writeFileSync(join(this.fakes, "plan.json"), JSON.stringify(plans));
   }
 
-  /** The bucket each new pull request's check starts with, by ticket key. */
-  verdicts(verdicts: Record<string, string>): void {
+  /** The bucket of each pull request's check, by ticket key: one for every push, or one per push. */
+  verdicts(verdicts: Record<string, string | string[]>): void {
     writeFileSync(join(this.fakes, "verdicts.json"), JSON.stringify(verdicts));
+  }
+
+  /** The findings of the gate's review of each new pull request, by ticket key. */
+  reviews(reviews: Record<string, { path: string; line: number; severity: "blocking" | "minor"; sentence: string; outside?: boolean }[]>): void {
+    writeFileSync(join(this.fakes, "reviews.json"), JSON.stringify(reviews));
+  }
+
+  /** The log of each failed job. */
+  jobLog(text: string): void {
+    writeFileSync(join(this.fakes, "job-log.txt"), text);
+  }
+
+  /** GitHub leaves the pull requests on a merged branch where they are, as when the repo keeps merged branches. */
+  noRetarget(): void {
+    writeFileSync(join(this.fakes, "no-retarget"), "");
+  }
+
+  /** The running containers that `docker ps` lists: project, name, and ports, tab-separated, one per line. */
+  containers(lines: string[]): void {
+    writeFileSync(join(this.fakes, "containers.txt"), lines.map((line) => line + "\n").join(""));
   }
 
   /** Runs the loop to its end. */
@@ -164,21 +184,41 @@ ${extra}`;
     return existsSync(path) ? (JSON.parse(readFileSync(path, "utf8")).prs as PullRequest[]) : [];
   }
 
-  /** Sets the checks of the ticket's pull request, as the gate would. Each named check takes its bucket. */
-  setChecks(key: string, buckets: Record<string, "pass" | "fail" | "pending">): void {
-    const path = join(this.fakes, "github.json");
-    const state = JSON.parse(readFileSync(path, "utf8"));
-    const states = { pass: "SUCCESS", fail: "FAILURE", pending: "PENDING" };
-    for (const pr of state.prs) {
-      if (!pr.headRefName.includes(`/${key}-`)) continue;
-      for (const [name, bucket] of Object.entries(buckets)) {
-        const check = { name, bucket, state: states[bucket] };
-        const index = pr.checks.findIndex((item: { name: string }) => item.name === name);
-        if (index >= 0) pr.checks[index] = check;
-        else pr.checks.push(check);
+  /** Changes the fake GitHub's state under the lock the fake `gh` takes, so neither loses the other's write. */
+  private github(change: (state: { prs: any[] }) => void): void {
+    const lock = join(this.fakes, "github.lock");
+    for (;;) {
+      try {
+        mkdirSync(lock);
+        break;
+      } catch {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
       }
     }
-    writeFileSync(path, JSON.stringify(state, null, 2));
+    try {
+      const path = join(this.fakes, "github.json");
+      const state = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { prs: [] };
+      change(state);
+      writeFileSync(path, JSON.stringify(state, null, 2));
+    } finally {
+      rmdirSync(lock);
+    }
+  }
+
+  /** Sets the checks of the ticket's pull request, as the gate would. Each named check takes its bucket. */
+  setChecks(key: string, buckets: Record<string, "pass" | "fail" | "pending">): void {
+    const states = { pass: "SUCCESS", fail: "FAILURE", pending: "PENDING" };
+    this.github((state) => {
+      for (const pr of state.prs) {
+        if (!pr.headRefName.includes(`/${key}-`)) continue;
+        for (const [name, bucket] of Object.entries(buckets)) {
+          const check = { name, bucket, state: states[bucket] };
+          const index = pr.checks.findIndex((item: { name: string }) => item.name === name);
+          if (index >= 0) pr.checks[index] = check;
+          else pr.checks.push(check);
+        }
+      }
+    });
   }
 
   setCheck(key: string, bucket: "pass" | "fail"): void {
@@ -187,9 +227,7 @@ ${extra}`;
 
   /** A pull request merged before the run, with its branch named as the loop names it. */
   mergedBefore(key: string, branch: string, title = `feat(${key}): earlier`): void {
-    const path = join(this.fakes, "github.json");
-    const state = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { prs: [] };
-    state.prs.push({
+    this.github((state) => state.prs.push({
       number: 100 + state.prs.length,
       url: `https://github.com/kcgbarbosa/demo/pull/${100 + state.prs.length}`,
       headRefName: branch,
@@ -200,11 +238,19 @@ ${extra}`;
       autoMerge: null,
       mergeCommit: { oid: "0".repeat(40) },
       checks: [{ name: "gate / check", bucket: "pass", state: "SUCCESS" }],
-    });
-    writeFileSync(path, JSON.stringify(state, null, 2));
+    }));
   }
 
-  calls(): { key: string; prompt: string; resume: string | null; cwd: string; bw_session: string | null }[] {
+  calls(): {
+    key: string;
+    prompt: string;
+    resume: string | null;
+    cwd: string;
+    bw_session: string | null;
+    port: string | null;
+    compose: string | null;
+    met: boolean;
+  }[] {
     const path = join(this.fakes, "calls.jsonl");
     if (!existsSync(path)) return [];
     return readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));

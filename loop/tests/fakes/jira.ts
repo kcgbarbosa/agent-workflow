@@ -137,6 +137,15 @@ export class FakeJira {
     if (!match || !issue) return [404, { errorMessages: ["Issue does not exist"] }];
     const part = match[2];
     if (!part && method === "GET") return [200, this.json(issue)];
+    if (!part && method === "PUT") {
+      if ("customfield_10021" in body.fields) issue.flagged = Boolean(body.fields.customfield_10021);
+      return [204, undefined];
+    }
+    if (part === "comment" && method === "POST") {
+      const lines = body.body.content.map((paragraph: { content: { text: string }[] }) => paragraph.content.map((item) => item.text).join(""));
+      issue.comments.push(lines.join("\n"));
+      return [201, {}];
+    }
     if (part === "transitions" && method === "GET") {
       const others = STATUSES.filter((status) => status !== issue.status);
       return [200, { transitions: others.map((status) => ({ id: status, name: status, to: { name: status } })) }];
