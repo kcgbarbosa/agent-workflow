@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { basename, extname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Forecaster } from "./forecast.ts";
+import { type Forecaster, median } from "./forecast.ts";
 import {
   allRuns,
   breakdown,
@@ -22,7 +22,7 @@ import {
   runHomes,
   ticketKey,
 } from "./report.ts";
-import { DECISIONS, type Line } from "./log.ts";
+import { DECISIONS, isRecord, type Line } from "./log.ts";
 import { run } from "./spawn.ts";
 
 export const WATCH_PORT = 8790;
@@ -744,10 +744,6 @@ function toolSummary(name: string, input: Record<string, unknown>): [string, str
 
 // --- Helpers ---
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function addTo(map: Map<string, Line[]>, key: string, line: Line): void {
   const list = map.get(key) ?? [];
   list.push(line);
@@ -756,12 +752,6 @@ function addTo(map: Map<string, Line[]>, key: string, line: Line): void {
 
 function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
-}
-
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 function escapeRegExp(text: string): string {
@@ -947,7 +937,7 @@ export class Watch {
     }
     if (!parts.length) return { status: 200, type: "text/html; charset=utf-8", body: readFileSync(PAGE) };
     const route = parts.join("/");
-    if (route === "api/home") return this.json(hostView(this.stateDir).map((project) => ({ ...project, control: false })));
+    if (route === "api/home") return this.json(hostView(this.stateDir));
     if (route === "api/usage") return this.json(planMeter(this.stateDir));
     if (route === "api/forecast") return this.json(this.forecast ? await this.forecast.view() : null);
     const name = parsed.searchParams.get("project") ?? "";

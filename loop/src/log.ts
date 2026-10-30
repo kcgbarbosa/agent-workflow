@@ -18,6 +18,10 @@ export type Line = {
 
 export type Extra = { commit?: string | null; session?: string | null; detail?: string; [field: string]: unknown };
 
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** The time as Python's `isoformat(timespec="seconds")` writes it, so the old readers parse it. */
 function now(): string {
   return new Date().toISOString().replace(/\.\d+Z$/, "+00:00");

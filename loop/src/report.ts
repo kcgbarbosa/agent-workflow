@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Meter, Usage } from "./agent.ts";
-import { DECISIONS, type Line } from "./log.ts";
+import { DECISIONS, isRecord, type Line } from "./log.ts";
 
 const HAIKU = "claude-haiku-5-5";
 // Haiku 5.5 bills a prompt of up to 100K tokens at these rates, in dollars per million tokens, and a longer one at
@@ -589,10 +589,6 @@ function isDirectory(path: string): boolean {
 
 function stripSuffix(name: string): string {
   return name.endsWith(LOOP_SUFFIX) ? name.slice(0, -LOOP_SUFFIX.length) : name;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
