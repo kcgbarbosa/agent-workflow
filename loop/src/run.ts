@@ -347,7 +347,7 @@ export class Run {
         this.log.write(key, "build", "fail", { commit, session: session.session, detail: "The fix attempt returned done with no new commit." });
         continue;
       }
-      this.log.write(key, "build", "pass", { commit, session: session.session });
+      this.log.write(key, "build", "pass", { commit, session: session.session, detail: session.detail });
 
       // Push
       try {
