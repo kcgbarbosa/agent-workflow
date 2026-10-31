@@ -186,7 +186,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 ## Hosts
 
-**Find.** Which machines can run a loop for hours: an always-on machine suits it best. For each one, read the machine README for how to reach it, what it has installed, and how secrets get there.
+**Find.** Which machines can run a loop for hours: an always-on machine suits it best. For each one, read the machine README, `~/dev/machines/README.md`, for how to reach it, what it has installed, and how secrets get there.
 
 **Choose.** List in `tools` each command the agent calls that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `systemd-inhibit`, and `docker` when `[stack]` is set. Each host runs Linux with systemd and Node 22.18 or later, and also needs the `loop` command from agent-workflow's `install.sh`, linger on for the user, `bws` and its token file (Secrets), `gh` signed in, Docker Engine running, and the browsers of the browser tests.
 

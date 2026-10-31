@@ -30,11 +30,9 @@ loop: loop-deps
 loop-deps:
 	cd loop && npm ci --prefer-offline --no-audit --no-fund --silent
 
-# The switchboard in TypeScript, and the Python one that the live unit runs until the cutover.
-# `uv lock --check` fails on a stale lock, which `uv run` would rewrite.
+# The switchboard. `switchboard.service` in machines runs it from the main checkout.
 switchboard: switchboard-deps
 	cd $@ && npx tsc && npx vitest run
-	cd $@ && uv lock --check && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
 
 switchboard-deps:
 	cd switchboard && npm ci --prefer-offline --no-audit --no-fund --silent

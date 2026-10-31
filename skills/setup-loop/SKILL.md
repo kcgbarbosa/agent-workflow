@@ -23,7 +23,7 @@ Find the facts behind every settings section of loop.md yourself. Read the Find 
 - the auth flow, for how a headless browser can sign in as each role
 - seed scripts and the workflow doc
 - `claude mcp list`, for the connectors an agent gets
-- the machine README, `~/.local/share/chezmoi/README.md`, for the hosts, what each has installed, and how secrets reach them
+- the machine README, `~/dev/machines/README.md`, for the hosts, what each has installed, and how secrets reach them
 
 An existing `docs/agents/loop.md` means a re-run. Start from its values.
 
