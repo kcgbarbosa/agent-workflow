@@ -904,7 +904,8 @@ export class Run {
 
   private agentEnv(runDir: string): Record<string, string> {
     const env: Record<string, string> = {};
-    for (const [name, value] of Object.entries(process.env)) if (value !== undefined && name !== "BW_SESSION") env[name] = value;
+    // `bws run` keeps its machine token from the run, and a run started some other way keeps it from the agent too.
+    for (const [name, value] of Object.entries(process.env)) if (value !== undefined && name !== "BWS_ACCESS_TOKEN") env[name] = value;
     return { ...env, ...this.secrets, LOOP_RUN_DIR: runDir, CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" };
   }
 

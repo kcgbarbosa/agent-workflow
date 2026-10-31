@@ -1,6 +1,6 @@
 // The fake `systemctl --user`, over the units of the fake `systemd-run`. `list-units` lists the loaded units
 // that match the pattern, `is-active` answers for each unit named, `stop` sends SIGTERM to the unit's process
-// and waits for it to end, as KillMode=mixed does, and `restart` does nothing. Each call goes to
+// group and waits for it to end, as KillMode=control-group does, and `restart` does nothing. Each call goes to
 // FAKE_DIR/systemd.jsonl.
 import { rmSync } from "node:fs";
 import { join } from "node:path";
@@ -20,6 +20,6 @@ if (command === "list-units") {
 } else if (command === "stop" && alive(rest[0])) {
   const pid = pidOf(rest[0]);
   if (pid === null) rmSync(join(units, `${rest[0]}.json`));
-  else process.kill(pid, "SIGTERM");
+  else process.kill(-pid, "SIGTERM");
   while (alive(rest[0])) await new Promise((done) => setTimeout(done, 50));
 }

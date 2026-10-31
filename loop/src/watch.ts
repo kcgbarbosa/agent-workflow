@@ -29,7 +29,6 @@ import { run } from "./spawn.ts";
 
 export const WATCH_PORT = 8790;
 const PAGE = fileURLToPath(new URL("./watch.html", import.meta.url));
-const SECRETS = "secrets.json";
 const AGENT_LOG = /^agent-(\d+)\.jsonl$/;
 const RUN = new RegExp(`^(?:${KEY.source}|filter-[0-9a-f]{8})$`);
 const DENIED = "denied by the Claude Code auto mode classifier";
@@ -196,12 +195,10 @@ const METHOD_NOT_ALLOWED: Reply = { status: 405, type: "text/plain", body: Buffe
 class Masker {
   private readonly pairs: [string, string][];
 
-  constructor(...secrets: Record<string, string>[]) {
+  constructor(secrets: Record<string, string>) {
     const pairs: [string, string][] = [];
-    for (const each of secrets) {
-      for (const [name, value] of Object.entries(each)) {
-        if (value.length >= MIN_SECRET) pairs.push([value, `[${name}]`]);
-      }
+    for (const [name, value] of Object.entries(secrets)) {
+      if (value.length >= MIN_SECRET) pairs.push([value, `[${name}]`]);
     }
     this.pairs = pairs.sort((a, b) => b[0].length - a[0].length);
   }
@@ -976,19 +973,6 @@ function readRange(path: string, start: number, length: number): Buffer {
   }
 }
 
-/** The state of each project's secrets, from its secrets file: a flat map of names to values, or none when
- * the file is missing or unreadable.
- */
-function storedSecrets(stateDir: string): Record<string, string> {
-  try {
-    const secrets: unknown = JSON.parse(readFileSync(join(stateDir, SECRETS), "utf8"));
-    if (!isRecord(secrets)) return {};
-    return Object.fromEntries(Object.entries(secrets).map(([name, value]) => [name, String(value)]));
-  } catch {
-    return {};
-  }
-}
-
 // --- Server ---
 
 /** Answers each path and file of the page, and only the page's own reads. Each API path and file takes
@@ -998,12 +982,21 @@ export class Watch {
   readonly stateDir: string;
   readonly forecast: Forecaster | null;
   private readonly names: ReadonlySet<string>;
+  private readonly masker: Masker;
 
-  /** `names` are the Host names the watch answers, and `forecast` is the capacity forecast of this project. */
-  constructor(stateDir: string, forecast: Forecaster | null = null, names: ReadonlySet<string> = new Set(["localhost", "127.0.0.1"])) {
+  /** `names` are the Host names the watch answers, `forecast` is the capacity forecast of this project, and
+   * `secrets` the values the page masks, by name.
+   */
+  constructor(
+    stateDir: string,
+    forecast: Forecaster | null = null,
+    names: ReadonlySet<string> = new Set(["localhost", "127.0.0.1"]),
+    secrets: Record<string, string> = {},
+  ) {
     this.stateDir = stateDir;
     this.forecast = forecast;
     this.names = names;
+    this.masker = new Masker(secrets);
   }
 
   /** Whether a request's Host names this host. A site whose name resolves to this host, as in DNS rebinding,
@@ -1015,11 +1008,6 @@ export class Watch {
     } catch {
       return false;
     }
-  }
-
-  masker(): Masker {
-    // Read for each request, so a new secret takes effect without a restart.
-    return new Masker(...[...projects(this.stateDir).values()].map(storedSecrets));
   }
 
   /** Each API path and file takes `?project=<name>`, and without it serves this repo's project. */
@@ -1070,7 +1058,7 @@ export class Watch {
   }
 
   private json(data: unknown): Reply {
-    return { status: 200, type: "application/json", body: Buffer.from(JSON.stringify(this.masker().data(data))) };
+    return { status: 200, type: "application/json", body: Buffer.from(JSON.stringify(this.masker.data(data))) };
   }
 
   private file(home: string, relativePath: string): Reply {
@@ -1079,7 +1067,7 @@ export class Watch {
     if (root === null || path === null || !path.startsWith(root + sep) || !isFile(path)) return missing();
     const imageType = IMAGE_TYPES[extname(path).toLowerCase()];
     if (imageType) return { status: 200, type: imageType, body: readFileSync(path) };
-    const text = this.masker().text(readFileSync(path, "utf8"));
+    const text = this.masker.text(readFileSync(path, "utf8"));
     return { status: 200, type: "text/plain; charset=utf-8", body: Buffer.from(text) };
   }
 }
@@ -1167,10 +1155,10 @@ function closeServer(server: Server): Promise<void> {
 export async function serve(
   stateDir: string,
   port: number,
-  options: { forecast?: Forecaster | null } = {},
+  options: { forecast?: Forecaster | null; secrets?: Record<string, string> } = {},
 ): Promise<{ urls: string[]; close(): Promise<void> }> {
   const found = await tailnet();
-  const watch = new Watch(stateDir, options.forecast ?? null, hostNames(found));
+  const watch = new Watch(stateDir, options.forecast ?? null, hostNames(found), options.secrets ?? {});
   const servers: Server[] = [];
   const urls: string[] = [];
   for (const host of addresses(found)) {

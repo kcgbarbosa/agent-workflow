@@ -1,19 +1,19 @@
 // `loop start <KEY>` or `loop start --filter <JQL>` updates the loop's own checkout, then starts `loop run`
 // as a systemd user unit, and the watch page as another. KEY is an Epic or a ticket. `loop stop` stops the run's
-// unit. `loop run` is the run itself, which the unit runs. `loop secrets` copies the secrets from Bitwarden to
-// this host. `loop watch` serves the page of the runs on this host, and `loop report [<KEY>]` breaks down what
-// the latest run cost against the run before it.
+// unit. `loop run` is the run itself, which the unit runs under `bws run`, with the secrets in its env. `loop
+// watch` serves the page of the runs on this host, and `loop report [<KEY>]` breaks down what the latest run cost
+// against the run before it.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { claudePath } from "./agent.ts";
-import { ConfigError, load, peek, stateDirOf } from "./config.ts";
+import { ConfigError, load, peek } from "./config.ts";
 import { git } from "./git.ts";
 import { Forecaster } from "./forecast.ts";
 import { text } from "./report.ts";
 import { Run, runName, type Target } from "./run.ts";
-import { copySecrets, NO_SECRETS, readSecrets, secretsPath } from "./secrets.ts";
+import { checkSecrets, readSecrets, secretNames, storedNames } from "./secrets.ts";
 import { endAll } from "./spawn.ts";
 import { awake, runs, runUnit, startRun, startWatch, stopRun, UnitError } from "./units.ts";
 import { sourceCheckout, update, UpdateError } from "./update.ts";
@@ -26,7 +26,6 @@ const USAGE = [
   "Usage: loop start|run <KEY> [--repo <path>]",
   "       loop start|run --filter <JQL> [--repo <path>]",
   "       loop stop <KEY>|--filter <JQL> [--repo <path>]",
-  "       loop secrets [--repo <path>]",
   "       loop watch [--repo <path>]",
   "       loop report [<KEY>] [--against <KEY>] [--json] [--repo <path>]",
 ].join("\n");
@@ -51,8 +50,8 @@ function missingTools(needed: string[]): string[] {
 /** Starts the run in its unit, and the watch page in its own, then returns. The run checks the rest itself. */
 async function start(target: Target, repoArg: string | undefined, newCode: boolean): Promise<number> {
   const repo = await mainCheckout(resolve(repoArg ?? process.cwd()));
-  const project = peek(repo);
-  if (!existsSync(secretsPath(stateDirOf(project)))) throw new ConfigError(`This host has no secrets file. ${NO_SECRETS}`);
+  const { name: project, secrets } = peek(repo);
+  await checkSecrets(secrets);
   const [active] = await runs(project);
   if (active) throw new UnitError(`A run is active: ${runUnit(project, active)}. \`loop stop ${active}\` stops it.`);
   const name = runName(target);
@@ -71,17 +70,12 @@ function openOnScreen(url: string): void {
 }
 
 async function stop(name: string, repoArg: string | undefined): Promise<number> {
-  const project = peek(await mainCheckout(resolve(repoArg ?? process.cwd())));
+  const project = peek(await mainCheckout(resolve(repoArg ?? process.cwd()))).name;
   if (!(await stopRun(project, name))) {
     console.error(`No run of ${name} is active.`);
     return 1;
   }
   console.log(`The loop stopped ${name}. \`loop start ${name.startsWith("filter-") ? "--filter <JQL>" : name}\` goes on with the same tickets.`);
-  return 0;
-}
-
-async function secrets(repoArg: string | undefined): Promise<number> {
-  console.log(await copySecrets(load(await mainCheckout(resolve(repoArg ?? process.cwd())))));
   return 0;
 }
 
@@ -93,7 +87,7 @@ async function run(target: Target, repoArg: string | undefined): Promise<number>
     console.error(`The loop refuses to run: ${missing.join(", ")} not on the PATH.`);
     return 2;
   }
-  const secrets = readSecrets(config);
+  const secrets = readSecrets(config.secrets);
   await awake(config.name, runName(target));
   const loop = new Run(config, secrets, target, { pollSeconds: POLL_SECONDS, meterSeconds: METER_SECONDS });
   let stopping: Promise<never> | null = null;
@@ -119,13 +113,23 @@ async function watch(repoArg: string | undefined): Promise<number> {
   // With no secrets, the forecast says why it has no open work, and the rest of the page works.
   let secrets: Record<string, string> = {};
   try {
-    secrets = readSecrets(config);
+    secrets = readSecrets(config.secrets);
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
   }
+  // The page serves every project on the host, so it masks the env value of each secret that `bws run` gave,
+  // also of one that only another repo names.
+  let names = secretNames(config.secrets);
+  try {
+    names = [...new Set([...names, ...(await storedNames())])];
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    console.error(`loop watch masks only the secrets of this repo: ${error.message}`);
+  }
+  const masked = Object.fromEntries(names.flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])));
   let server;
   try {
-    server = await serve(config.stateDir, PORT, { forecast: new Forecaster(config, secrets) });
+    server = await serve(config.stateDir, PORT, { forecast: new Forecaster(config, secrets), secrets: masked });
   } catch (error) {
     console.error(`loop watch cannot listen on port ${PORT}: ${(error as Error).message}`);
     return 2;
@@ -171,7 +175,6 @@ export async function main(argv: string[]): Promise<number> {
   const target: Target = filter ? { filter } : { key: key ?? "" };
   try {
     if (command === "watch" && bare) return await watch(repo);
-    if (command === "secrets" && bare) return await secrets(repo);
     if (command === "report" && reportArgs) return await report(key, against, json ?? false, repo);
     // `loop stop` also takes the name of a filter run, which `loop start` prints when one is active.
     const runArg = !filter && !rest.length && !against && !json && key && FILTER_RUN.test(key);

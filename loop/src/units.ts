@@ -1,7 +1,9 @@
 // The systemd user units of the loop: one for each run, and one for the watch page. A unit outlives the agent
-// or shell that starts it, and systemd knows whether the run is alive.
+// or shell that starts it, and systemd knows whether the run is alive. Each unit loads the host's machine token
+// and runs the loop under `bws run`, which gives it the secrets as env vars.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tokenFile, underBws } from "./secrets.ts";
 import { run, spawnGroup } from "./spawn.ts";
 import { WATCH_PORT } from "./watch.ts";
 
@@ -10,8 +12,10 @@ export class UnitError extends Error {}
 export const WATCH_UNIT = `loop-watch-${WATCH_PORT}.service`;
 /** The user manager's own environment differs between a desktop login and a boot with linger. */
 const ENV = ["PATH", "HOME", "LANG", "SSH_AUTH_SOCK"];
-/** The SIGTERM of a stop goes to the run, which stops its agents. Systemd kills what is left after 10 minutes. */
-const RUN_PROPERTIES = ["KillMode=mixed", "TimeoutStopSec=10min"];
+/** `bws run` is the unit's main process and passes no signal on, so the SIGTERM of a stop goes to every process
+ * of the unit, the run among them, which stops its agents. Systemd kills what is left after 10 minutes.
+ */
+const RUN_PROPERTIES = ["KillMode=control-group", "TimeoutStopSec=10min"];
 const WATCH_PROPERTIES = ["Restart=always", "RestartSec=5"];
 const RUN_NAME = String.raw`[A-Z][A-Z0-9]*-\d+|filter-[0-9a-f]{8}`;
 const LOOP = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "loop");
@@ -57,9 +61,9 @@ export async function startWatch(repo: string, restart: boolean): Promise<void> 
 
 async function inUnit(unit: string, cwd: string, command: string[], properties: string[]): Promise<void> {
   const env = ENV.filter((name) => process.env[name] !== undefined).map((name) => `--setenv=${name}=${process.env[name]}`);
-  const options = properties.map((item) => `--property=${item}`);
+  const options = [`EnvironmentFile=${tokenFile()}`, ...properties].map((item) => `--property=${item}`);
   const args = ["--user", "--collect", "--quiet", "--service-type=exec", `--unit=${unit}`, `--working-directory=${cwd}`];
-  const done = await run("systemd-run", [...args, ...env, ...options, ...command], { seconds: 60 });
+  const done = await run("systemd-run", [...args, ...env, ...options, ...underBws(command)], { seconds: 60 });
   if (done.code === 127) throw new UnitError("systemd-run does not run. The loop needs systemd.");
   if (done.code !== 0) throw new UnitError(`systemd-run cannot start ${unit}: ${done.stderr.trim()}`);
 }
@@ -71,8 +75,8 @@ async function systemctl(args: string[], check = true): Promise<string> {
   return done.stdout;
 }
 
-/** Holds off sleep until this process ends. The inhibitor runs beside the run, because systemd sends the
- * SIGTERM of a stop to the unit's main process only, so the run must be that process.
+/** Holds off sleep until this process ends. The inhibitor runs beside the run, so the run stays the process
+ * that `bws run` started.
  */
 export async function awake(project: string, name: string): Promise<void> {
   const child = spawnGroup("systemd-inhibit", [

@@ -53,7 +53,7 @@ async function play(prompt) {
       effort: flag("effort"),
       run_dir: process.env.LOOP_RUN_DIR,
       jira_token: process.env.JIRA_API_TOKEN ?? null,
-      bw_session: process.env.BW_SESSION ?? null,
+      bws_token: process.env.BWS_ACCESS_TOKEN ?? null,
       port: process.env.PORT ?? null,
       compose: process.env.COMPOSE_PROJECT_NAME ?? null,
       met,

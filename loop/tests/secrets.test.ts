@@ -1,79 +1,73 @@
-import { readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { EPIC, World } from "./world.ts";
+import { EPIC, type Watching, World } from "./world.ts";
+
+const UNIT = `loop-demo-${EPIC}.service`;
+const SECRET = "a-long-jira-token-value";
 
 let world: World;
+let watching: Watching | null = null;
 
 beforeEach(async () => {
   world = await World.create();
-  rmSync(join(world.state, "secrets.json"));
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
 });
 
 afterEach(async () => {
+  await watching?.close();
+  watching = null;
   await world.close();
 });
 
-/** A fake `bw` whose vault is unlocked, and gives `value-of-<field>-<item>` for each item but `missing`. */
-function vault(status = "unlocked", missing = "none"): void {
-  world.command(
-    "bw",
-    `#!/bin/sh
-[ "$1" = status ] && { echo '{"serverUrl":null, "status": "${status}"}'; exit 0; }
-[ "$1" = sync ] && exit 0
-[ "$1" = get ] && [ "$3" = "${missing}" ] && { echo "Not found." >&2; exit 1; }
-[ "$1" = get ] && { echo "value-of-$2-$3"; exit 0; }
-exit 2
-`,
-  );
-}
+test("a run under the fake bws gives the agent the secrets, and the watch page masks them", async () => {
+  // Another repo's stack secret, which this repo's `secrets` does not name, but `bws run` puts in the env too.
+  const stack = "a-long-stack-key-of-another-repo";
+  world.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: SECRET, NTFY_TOPIC: "topic", STACK_KEY: stack });
 
-test("loop secrets copies the secrets to a file only this user reads, and a run needs no unlock", async () => {
-  vault();
-
-  const ran = await world.loop("secrets");
+  const ran = await world.loop("start", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
-  const path = join(world.state, "secrets.json");
-  expect(ran.stdout).toContain(`The demo secrets are in ${path}. A run needs no unlock now.`);
-  expect(statSync(path).mode & 0o777).toBe(0o600);
-  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({
-    JIRA_EMAIL: "value-of-username-Jira",
-    JIRA_API_TOKEN: "value-of-password-Jira",
-    NTFY_TOPIC: "value-of-topic-ntfy",
-  });
+  const output = await world.untilUnitEnds(UNIT);
+  expect(world.prs().map((pr) => pr.state), output).toEqual(["MERGED"]);
+  const [call] = world.calls();
+  expect(call!.jira_token).toBe(SECRET);
+  // `bws run` keeps the machine token from the run and its agents.
+  expect(call!.bws_token).toBeNull();
+  expect(world.jira.notifications).toContain(`${EPIC} complete`);
+
+  appendFileSync(join(world.state, EPIC, "decisions.jsonl"), JSON.stringify({ time: new Date().toISOString(), epic: EPIC, ticket: "DEMO-2", step: "stuck", result: "ok", detail: `token ${SECRET}, key ${stack}` }) + "\n");
+  watching = await world.watch();
+  const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
+
+  expect(JSON.stringify(view)).not.toContain(SECRET);
+  expect(JSON.stringify(view)).not.toContain(stack);
+  expect(JSON.stringify(view)).toContain("[JIRA_API_TOKEN]");
+  expect(JSON.stringify(view)).toContain("[STACK_KEY]");
 });
 
-test("loop secrets refuses a locked vault", async () => {
-  vault("locked");
-
-  const ran = await world.loop("secrets");
-
-  expect(ran.code).toBe(2);
-  expect(ran.stderr).toContain("Bitwarden is locked. Run `export BW_SESSION=$(bw unlock --raw)` first.");
-});
-
-test("loop secrets refuses a vault without a secret of the config, and writes no file", async () => {
-  vault("unlocked", "ntfy");
-
-  const ran = await world.loop("secrets");
-
-  expect(ran.code).toBe(2);
-  expect(ran.stderr).toContain("Bitwarden has no value for ntfy (topic).");
-  expect(() => statSync(join(world.state, "secrets.json"))).toThrow();
-});
-
-test("a run refuses a secrets file without a secret of the config", async () => {
-  vault();
-  expect((await world.loop("secrets")).code).toBe(0);
-  const path = join(world.state, "secrets.json");
-  const { JIRA_EMAIL } = JSON.parse(readFileSync(path, "utf8"));
-  // Only the email is left.
-  writeFileSync(path, JSON.stringify({ JIRA_EMAIL }));
+test("a run refuses an env without a secret it needs", async () => {
+  world.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: "token" });
 
   const ran = await world.loop("run", EPIC);
 
   expect(ran.code).toBe(2);
-  expect(ran.stderr).toContain(`${path} has no value for JIRA_API_TOKEN, NTFY_TOPIC. Run \`export BW_SESSION=$(bw unlock --raw)\`, then \`loop secrets\`.`);
+  expect(ran.stderr).toContain("The loop has no value for NTFY_TOPIC in its env.");
   expect(world.calls()).toEqual([]);
+});
+
+test("an old [secrets] entry with item and field loads with a warning", async () => {
+  const path = join(world.repo, "loop.toml");
+  const config = readFileSync(path, "utf8").replace(/^secrets = .*\n/m, "");
+  writeFileSync(path, `${config}\n[secrets]\nJIRA_EMAIL = { item = "Jira", field = "username" }\nJIRA_API_TOKEN = { item = "Jira", field = "password" }\n`);
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const warnings = ran.stderr.split("\n").filter((line) => line.includes("[secrets]"));
+  expect(warnings).toEqual([
+    "loop.toml: [secrets] with item and field is no longer read, because Bitwarden Secrets Manager holds the values and `secrets` lists the names. The loop ignores it.",
+  ]);
+  expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED"]);
 });

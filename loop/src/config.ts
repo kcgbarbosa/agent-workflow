@@ -7,6 +7,7 @@ import { parse, TomlDate } from "smol-toml";
 
 export const FILE = "loop.toml";
 export const REQUIRED_SECRETS = ["JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC"] as const;
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PLAN_KEYS = ["pro", "max-5x", "max-20x"];
 
 /** The gate runs these now, so the loop no longer reads them. */
@@ -19,8 +20,6 @@ const DROPPED: Record<string, string> = {
 };
 
 export class ConfigError extends Error {}
-
-export type Secret = { item: string; field: string };
 
 export type Config = {
   repo: string;
@@ -46,7 +45,8 @@ export type Config = {
   ntfyUrl: string;
   /** `exact` is false for a `since` with a date only. */
   plans: { plan: string; since: string; exact: boolean }[];
-  secrets: Record<string, Secret>;
+  /** The env var names of the secrets of `loop.toml`, beside REQUIRED_SECRETS. */
+  secrets: string[];
   stateDir: string;
   warnings: string[];
 };
@@ -144,6 +144,12 @@ class Table {
     return Object.keys(this.data).length === 0;
   }
 
+  /** Whether the key holds a table. */
+  holdsTable(key: string): boolean {
+    const value = this.data[key];
+    return typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date);
+  }
+
   keys(): string[] {
     for (const key of Object.keys(this.data)) this.known.add(key);
     return Object.keys(this.data);
@@ -166,10 +172,10 @@ export function stateDirOf(name: string): string {
   return join(homedir(), ".local", "state", `${name}-loop`);
 }
 
-/** The `name` of `loop.toml` alone, with no check of the other keys, so a key that only newer code knows
- * reaches the newer code that `loop start` runs in its unit.
+/** The `name` and the `secrets` names of `loop.toml` alone, with no check of the other keys, so a key that
+ * only newer code knows reaches the newer code that `loop start` runs in its unit.
  */
-export function peek(repo: string): string {
+export function peek(repo: string): { name: string; secrets: string[] } {
   const path = join(repo, FILE);
   let data: Record<string, unknown>;
   try {
@@ -178,7 +184,8 @@ export function peek(repo: string): string {
     throw new ConfigError(`${path}: ${(error as Error).message}`);
   }
   if (typeof data.name !== "string" || !data.name) throw new ConfigError(`${path}: name is missing`);
-  return data.name;
+  const secrets = Array.isArray(data.secrets) ? data.secrets.filter((item): item is string => typeof item === "string") : [];
+  return { name: data.name, secrets };
 }
 
 export function load(repo: string): Config {
@@ -209,16 +216,15 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
   const review = top.table("review", true);
   const notify = top.table("notify", true);
   const watch = top.table("watch", true);
-  const secretsTable = top.table("secrets");
 
-  const secrets: Record<string, Secret> = {};
-  for (const env of secretsTable.keys()) {
-    const entry = secretsTable.table(env);
-    secrets[env] = { item: entry.text("item"), field: entry.text("field") };
-    entry.done(warnings);
-  }
-  const missing = REQUIRED_SECRETS.filter((env) => !(env in secrets));
-  if (missing.length) throw new ConfigError(`secrets: the loop needs ${missing.join(", ")}`);
+  // The old `[secrets]` table mapped each env var to a Bitwarden item and field.
+  let secrets: string[] = [];
+  if (top.holdsTable("secrets")) {
+    top.table("secrets").keys();
+    warnings.push(`${FILE}: [secrets] with item and field is no longer read, because Bitwarden Secrets Manager holds the values and \`secrets\` lists the names. The loop ignores it.`);
+  } else secrets = top.texts("secrets", []);
+  const bad = secrets.filter((env) => !ENV_NAME.test(env));
+  if (bad.length) throw new ConfigError(`secrets: ${bad.join(", ")} is not an env var name`);
 
   let stack: Config["stack"] = null;
   if (!stackTable.empty()) {
@@ -275,7 +281,7 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     stateDir: stateDirOf(name),
     warnings,
   };
-  for (const table of [top, tracker, agent, limits, stackTable, ui, review, notify, watch, secretsTable]) {
+  for (const table of [top, tracker, agent, limits, stackTable, ui, review, notify, watch]) {
     table.done(warnings);
   }
   return config;
