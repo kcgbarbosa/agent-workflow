@@ -32,7 +32,7 @@ A person can also ask a remote session on the host to run it. The run is a syste
 
 - The children query returns the tickets of a real Epic and none of another. A ticket that the query misses is linked to the Epic by another field, and the loop never sees it.
 - A ticket with a blocker shows the link type "Blocks". A repo that uses another link name gets no edges, and the frontier starts blocked tickets at once.
-- The site has a field named Flagged. If the field is missing, the loop cannot mark a stuck ticket, and a human ticket adds it.
+- The site has a field named Flagged. If the field is missing, the loop cannot mark a stuck ticket, and the setup session adds it (step 4 of the skill).
 - Move one ticket by hand to `in_progress` and to `landed`. If the workflow refuses a move, change the workflow or the name.
 
 ## Status and stuck marker
@@ -43,15 +43,15 @@ A person can also ask a remote session on the host to run it. The run is a syste
 
 ## Human steps
 
-**Find.** Read the backlog for steps that need a person: creating accounts or test users in a third-party service, turning on tracker automation, domain and DNS changes, production credentials, billing, roles and permissions in an identity or cloud provider, installs on a host.
+**Find.** Read the backlog for steps that need a person: creating accounts or test users in a third-party service, domain and DNS changes, production credentials, billing, roles and permissions in an identity or cloud provider, installs on a host.
 
-**Choose.** An agent does every step it can. A ticket is flagged for a person only when an attempt failed on a blocker that needs a person, or when the step is dangerous and the owner has not consented to it. The reason is that a ticket marked human by habit sticks, and every ticket downstream of a stuck one waits (rule 7). Auto mode holds changes to sensitive admin controls until a person approves them. An unattended agent stops there, and the ticket sticks. Plan each such change as a human ticket that runs before the Epic.
+**Choose.** Setup is never a ticket. The setup skills do each setup step in their own session (step 4 of the skill), and ask the user in the conversation only for a step with no API, then check it. In an Epic, an agent does every step it can. A ticket is a human step only when an attempt failed on a blocker that needs a person, when the step is dangerous and the owner has not consented to it, or when it is a one-off live change the owner follows, such as a cutover. The reason is that a ticket marked human by habit sticks, and every ticket downstream of a stuck one waits (rule 7). Auto mode holds changes to sensitive admin controls until a person approves them, and an unattended agent stops there, so make such a change in the setup session, where the user approves it.
 
 Write the rule in the issue tracker doc, so `to-tickets` follows it:
 
-> Mark a ticket as a human step only when an agent tried it and a blocker needs a person, or when the step is dangerous and the owner has not consented. An agent does every other step, including setup in development accounts. Plan a change to a sensitive admin control, such as a role in the identity provider, as a human ticket.
+> Setup is never a ticket: the setup skills do it in their session. Mark a ticket as a human step only when an agent tried it and a blocker needs a person, when the step is dangerous and the owner has not consented, or when it is a one-off live change such as a cutover. An agent does every other step.
 
-**Check.** Each human ticket in the Epic names its blocker or its danger. A ticket that names neither is an agent ticket.
+**Check.** Each human ticket in the Epic names its blocker, its danger, or its live change. No ticket in the Epic is a setup step.
 
 ## Branches and commits
 
@@ -136,7 +136,7 @@ With `parallel = 2`, the highest slot is 3, so a port moves by at most 30. The b
 
 Rules for all three:
 
-- Test users exist only in a non-production environment, one per role, with the least permission that role has. A person creates them, as a human ticket. Their passwords are secrets (Secrets).
+- Test users exist only in a non-production environment, one per role, with the least permission that role has. The setup session creates them, and asks the user for any step with no API. Their passwords are secrets (Secrets).
 - The sign-in code is development only, and the go-live checklist gets an item that removes or disables it.
 - Storage state files hold live sessions. Write them to a git-ignored folder in the worktree, never to the run folder, because the run folder is shown on the watch page. The tests delete them when they end.
 
@@ -221,5 +221,5 @@ BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
 | A check passes once and fails once                        | The check itself. It is flaky, and a fix attempt cannot cure it |
 | A check fails for a missing key on the gate only          | A secret the check needs. Use a development default            |
 | The judge gets no screenshots                             | The sign-in, the browser tests, or their diff folder           |
-| The watch page shows red tool calls                       | An action that auto mode denies. Plan it as a human step       |
+| The watch page shows red tool calls                       | An action that auto mode denies. Make it in a setup session    |
 | The run costs more than the plan allows                   | `effort`, then `parallel`                                      |
