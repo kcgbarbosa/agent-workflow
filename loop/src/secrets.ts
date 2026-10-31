@@ -1,47 +1,56 @@
-// `loop secrets` copies the secrets of `loop.toml [secrets]` from Bitwarden to a file that only this user can
-// read, so a run needs no unlock. The file is the only place a run reads them from.
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// The loop's secrets live in Bitwarden Secrets Manager. The run unit and the watch unit load the host's machine
+// token from TOKEN_FILE and start the loop under `bws run`, which puts each secret in the env. No secret is
+// kept in a file on the host but the token.
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { type Config, ConfigError, REQUIRED_SECRETS } from "./config.ts";
+import { ConfigError, REQUIRED_SECRETS } from "./config.ts";
 import { run } from "./spawn.ts";
 
-export const SECRETS_FILE = "secrets.json";
-export const NO_SECRETS = "Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`.";
-/** A `bw` call that has not answered by then has failed. */
+/** A `bws` call that has not answered by then has failed. */
 const QUIET_SECONDS = 120;
+const SETUP = "`/setup-loop` sets it up.";
 
-export function secretsPath(stateDir: string): string {
-  return join(stateDir, SECRETS_FILE);
+/** The host's machine token, as `BWS_ACCESS_TOKEN=<token>`, mode 600. */
+export function tokenFile(): string {
+  return join(homedir(), ".config", "bws", "token.env");
 }
 
-/** The secrets a run gets. It refuses a file that lacks one the run needs. */
-export function readSecrets(config: Config): Record<string, string> {
-  const path = secretsPath(config.stateDir);
-  if (!existsSync(path)) throw new ConfigError(`This host has no secrets file. ${NO_SECRETS}`);
-  const secrets = JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
-  const missing = [...new Set([...REQUIRED_SECRETS, ...Object.keys(config.secrets)])].filter((name) => !secrets[name]);
-  if (missing.length) throw new ConfigError(`${path} has no value for ${missing.join(", ")}. ${NO_SECRETS}`);
-  return secrets;
+/** The env var names of the secrets a run needs: those of the loop, and those of `loop.toml`. */
+export function secretNames(names: string[]): string[] {
+  return [...new Set([...REQUIRED_SECRETS, ...names])];
 }
 
-export async function copySecrets(config: Config): Promise<string> {
-  const status = await run("bw", ["status"], { seconds: QUIET_SECONDS });
-  if (status.code !== 0 || !status.stdout.replaceAll(" ", "").includes('"status":"unlocked"')) {
-    throw new ConfigError("Bitwarden is locked. Run `export BW_SESSION=$(bw unlock --raw)` first.");
+/** The secrets a run gets, from the env that `bws run` gave it. It refuses an env that lacks one. */
+export function readSecrets(names: string[]): Record<string, string> {
+  const wanted = secretNames(names);
+  const missing = wanted.filter((name) => !process.env[name]);
+  if (missing.length) throw new ConfigError(`The loop has no value for ${missing.join(", ")} in its env. It runs under \`bws run\`, which ${SETUP}`);
+  return Object.fromEntries(wanted.map((name) => [name, process.env[name]!]));
+}
+
+/** Refuses, with one line, a host with no token file, or a store that lacks a secret the run needs. */
+export async function checkSecrets(names: string[]): Promise<void> {
+  const path = tokenFile();
+  if (!existsSync(path)) throw new ConfigError(`This host has no Secrets Manager token file, ${path}. ${SETUP}`);
+  const token = /^\s*BWS_ACCESS_TOKEN=["']?([^"'\n]*)["']?\s*$/m.exec(readFileSync(path, "utf8"))?.[1];
+  if (!token) throw new ConfigError(`${path} has no BWS_ACCESS_TOKEN. ${SETUP}`);
+  const listed = await run("bws", ["secret", "list", "--output", "json"], { seconds: QUIET_SECONDS, env: { ...process.env, BWS_ACCESS_TOKEN: token } });
+  if (listed.code === 127) throw new ConfigError(`bws is not on the PATH. ${SETUP}`);
+  if (listed.code !== 0) throw new ConfigError(`bws cannot list the secrets: ${listed.stderr.trim().split("\n")[0]}`);
+  let keys: Set<string>;
+  try {
+    keys = new Set((JSON.parse(listed.stdout) as { key: string }[]).map((secret) => secret.key));
+  } catch {
+    throw new ConfigError("bws listed the secrets in a form the loop does not read.");
   }
-  await run("bw", ["sync"], { seconds: QUIET_SECONDS });
-  const secrets: Record<string, string> = {};
-  const missing: string[] = [];
-  for (const [env, secret] of Object.entries(config.secrets)) {
-    const found = await run("bw", ["get", secret.field, secret.item], { seconds: QUIET_SECONDS });
-    if (found.code === 0 && found.stdout.trim()) secrets[env] = found.stdout.trim();
-    else missing.push(`${secret.item} (${secret.field})`);
-  }
-  if (missing.length) throw new ConfigError(`Bitwarden has no value for ${missing.join(", ")}.`);
-  const path = secretsPath(config.stateDir);
-  mkdirSync(config.stateDir, { recursive: true });
-  writeFileSync(path, JSON.stringify(secrets), { mode: 0o600 });
-  // The mode of writeFileSync applies to a new file only.
-  chmodSync(path, 0o600);
-  return `The ${config.name} secrets are in ${path}. A run needs no unlock now.`;
+  const missing = secretNames(names).filter((name) => !keys.has(name));
+  if (missing.length) throw new ConfigError(`Secrets Manager has no secret ${missing.join(", ")}. ${SETUP}`);
+}
+
+/** The command line that runs the command under `bws run`. `bws` joins its arguments into one `sh -c` line,
+ * so each word is quoted, and `exec` makes the command the shell's own process.
+ */
+export function underBws(command: string[]): string[] {
+  return ["bws", "run", "--", `exec ${command.map((word) => `'${word.replaceAll("'", `'\\''`)}'`).join(" ")}`];
 }

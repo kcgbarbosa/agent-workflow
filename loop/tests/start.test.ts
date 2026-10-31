@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { EPIC, World } from "./world.ts";
@@ -34,10 +34,20 @@ test("loop start runs the loop as a systemd unit and returns, and the unit build
   expect(ran.code, ran.stderr).toBe(0);
   expect(ran.stdout).toMatch(new RegExp(`The loop is building ${EPIC}\\. Watch it at http://[\\d.]+:8790/#/demo/${EPIC}, or with \`journalctl --user -fu ${UNIT}\`\\.`));
   const [args] = runs(UNIT);
-  expect(args).toEqual(expect.arrayContaining(["--user", "--collect", "--service-type=exec", "--property=KillMode=mixed", `--working-directory=${world.repo}`]));
+  expect(args).toEqual(
+    expect.arrayContaining([
+      "--user",
+      "--collect",
+      "--service-type=exec",
+      "--property=KillMode=control-group",
+      `--property=EnvironmentFile=${world.tokenFile}`,
+      `--working-directory=${world.repo}`,
+    ]),
+  );
   expect(args!.some((arg) => arg.startsWith("--setenv=PATH="))).toBe(true);
-  expect(args!.some((arg) => arg.startsWith("--setenv=BW_SESSION"))).toBe(false);
-  expect(args!.slice(-4)).toEqual(["run", EPIC, "--repo", world.repo]);
+  expect(args!.some((arg) => arg.includes("BWS_ACCESS_TOKEN"))).toBe(false);
+  expect(args!.slice(-4, -1)).toEqual(["bws", "run", "--"]);
+  expect(args!.at(-1)).toMatch(/^exec '[^']*\/bin\/loop' 'run' 'DEMO-1' '--repo' '[^']*\/demo'$/);
 
   const output = await world.untilUnitEnds(UNIT);
   expect(world.prs().map((pr) => pr.state), output).toEqual(["MERGED"]);
@@ -141,19 +151,31 @@ test("the watch page keeps running across a loop update, which restarts it on th
   const [args, ...more] = runs(WATCH_UNIT);
   expect(more).toEqual([]);
   expect(args).toEqual(expect.arrayContaining(["--property=Restart=always"]));
-  expect(args!.slice(-3)).toEqual(["watch", "--repo", world.repo]);
+  expect(args!.slice(-4, -1)).toEqual(["bws", "run", "--"]);
+  expect(args!.at(-1)).toMatch(new RegExp(`/bin/loop' 'watch' '--repo' '${world.repo}'$`));
   expect(world.unitAlive(WATCH_UNIT)).toBe(true);
   const restarts = world.systemd().filter((call) => call.tool === "systemctl" && call.args[0] === "restart");
   expect(restarts.map((call) => call.args)).toEqual([["restart", WATCH_UNIT]]);
 });
 
-test("loop start refuses a host with no secrets file", async () => {
-  execFileSync("rm", [join(world.state, "secrets.json")]);
+test("loop start refuses with one line when the token file is missing", async () => {
+  rmSync(world.tokenFile);
 
   const ran = await world.loop("start", EPIC);
 
   expect(ran.code).toBe(2);
-  expect(ran.stderr).toContain("This host has no secrets file. Run `export BW_SESSION=$(bw unlock --raw)`, then `loop secrets`.");
+  expect(ran.stderr).toBe(`This host has no Secrets Manager token file, ${world.tokenFile}. \`/setup-loop\` sets it up.\n`);
+  expect(runs(UNIT)).toEqual([]);
+});
+
+test("loop start refuses with one line naming a secret that Secrets Manager lacks", async () => {
+  world.commitTo(world.repo, { "loop.toml": readFileSync(join(world.repo, "loop.toml"), "utf8").replace('"NTFY_TOPIC"]', '"NTFY_TOPIC", "CLAUDE_CODE_OAUTH_TOKEN"]') }, "chore: the loop account");
+  world.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: "token", NTFY_TOPIC: "topic" });
+
+  const ran = await world.loop("start", EPIC);
+
+  expect(ran.code).toBe(2);
+  expect(ran.stderr).toBe("Secrets Manager has no secret CLAUDE_CODE_OAUTH_TOKEN. `/setup-loop` sets it up.\n");
   expect(runs(UNIT)).toEqual([]);
 });
 

@@ -176,17 +176,19 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 **Choose.**
 
 - Every secret is a development or staging credential with the least scope that works, such as a cloud key for the development bucket only. No production credential is on a loop host.
-- One vault item per credential, named `<name>-<what>`. A login item holds two secrets, the username and the password, and `[secrets]` maps each env var to one `field` of it.
+- Each secret lives once, in Bitwarden Secrets Manager, under its env var name: in the `loop` project when every repo's loop shares it, as the three the script needs do, or in a project of the repo. `secrets` in `loop.toml` lists the names a run needs beyond those three.
 - `CLAUDE_CODE_OAUTH_TOKEN` comes from `claude setup-token`, run as the account that should pay for the loop. Each agent run then uses that account, whichever account is signed in on the host. Leave it out when the host's own account is the one.
-- A secret never goes in the repo, the ticket file, a commit, or a log. The watch page masks the values it finds in the secrets file.
+- A secret never goes in the repo, the ticket file, a commit, or a log. The watch page masks the value of each secret that `secrets` names.
 
-**Check.** `loop secrets` fails at once with the name of any item that the vault lacks. Run `loop secrets` and then `loop start` on each host before the first Epic.
+**Make.** `/setup-loop` makes the store in its own session: the Secrets Manager organisation, the `loop` project, the host's machine account and its access token, the token file `~/.config/bws/token.env` that holds `BWS_ACCESS_TOKEN=<token>` with mode 600, `bws` on the host, and each secret through `bws secret create`. Ask KC in the conversation only for a step with no API, such as a machine account's access token, which Bitwarden shows once, in its web app. Check each step right after it.
+
+**Check.** `bws secret list` with the host's token lists each name. `loop start` checks the token file and the names, and refuses with the one that is missing. Run `loop start` on each host before the first Epic.
 
 ## Hosts
 
 **Find.** Which machines can run a loop for hours: an always-on machine suits it best. For each one, read the machine README for how to reach it, what it has installed, and how secrets get there.
 
-**Choose.** List in `tools` each command the agent calls that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `systemd-inhibit`, and `docker` when `[stack]` is set. Each host runs Linux with systemd and Node 22.18 or later, and also needs the `loop` command from agent-workflow's `install.sh`, linger on for the user, `bw` for `loop secrets`, `gh` signed in, Docker Engine running, and the browsers of the browser tests.
+**Choose.** List in `tools` each command the agent calls that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `systemd-inhibit`, and `docker` when `[stack]` is set. Each host runs Linux with systemd and Node 22.18 or later, and also needs the `loop` command from agent-workflow's `install.sh`, linger on for the user, `bws` and its token file (Secrets), `gh` signed in, Docker Engine running, and the browsers of the browser tests.
 
 **Check.** `loginctl show-user $USER -p Linger` prints `Linger=yes`. Run `loop start` on each host. A missing prerequisite ends the run at once, and `journalctl --user -u loop-<name>-<Epic key>` names every one.
 
@@ -204,11 +206,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 ## Host setup
 
-Each host gets the `loop` command from `install.sh`, linger with `loginctl enable-linger`, and one run of `loop secrets` from the repo. Run `loop secrets` again after a secret changes:
-
-```sh
-BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
-```
+Each host gets the `loop` command from `install.sh`, linger with `loginctl enable-linger`, and `bws` with its token file (Secrets). A changed secret needs no step on a host: the next run gets it.
 
 ## When a value is wrong
 

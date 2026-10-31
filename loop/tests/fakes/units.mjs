@@ -1,6 +1,6 @@
 // The units of the fake `systemd-run`, which the fake `systemctl` reads too. FAKE_DIR/units/<unit>.json keeps a
-// unit with its pid. A unit is loaded while its process lives, as `--collect` unloads a unit that ended, also a
-// failed one. A unit with no pid, as the fake `loop watch` unit, stays loaded.
+// unit with its pid. A unit is loaded while a process of its group lives, as `--collect` unloads a unit that
+// ended, also a failed one. A unit with no pid, as the fake `loop watch` unit, stays loaded.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -24,7 +24,7 @@ export function alive(unit) {
   const pid = pidOf(unit);
   if (pid === null) return true;
   try {
-    process.kill(pid, 0);
+    process.kill(-pid, 0);
     return true;
   } catch {
     return false;

@@ -31,7 +31,7 @@ test("a ticket becomes a worktree, a branch from main, an agent run, a push, and
   const [call] = world.calls();
   expect(call!.cwd).toBe(`${world.state}/${EPIC}/worktrees/DEMO-2`);
   expect(call!.prompt).toBe(`/implement ${world.state}/${EPIC}/runs/DEMO-2/ticket.md`);
-  expect(call!.bw_session).toBeNull();
+  expect(call!.bws_token).toBeNull();
 });
 
 test("an Epic key, a ticket key, and a filter build the same frontier shape", async () => {
@@ -539,6 +539,18 @@ test("a ticket of another component counts only as a blocker, through its status
 
   expect(ran.code, ran.stderr).toBe(0);
   expect(world.prs().map((pr) => [pr.headRefName, pr.state])).toEqual([["feat/DEMO-3-add-the-login-page", "MERGED"]]);
+});
+
+test("a blocker outside the filter that Jira has Done does not hold a ticket", async () => {
+  world.jira.add("OTHER-7", "Set up the store", { status: "Done" });
+  world.jira.add("DEMO-2", "Add the login page", { blockers: ["OTHER-7"] });
+  world.jira.filters.set("labels = loop", ["DEMO-2"]);
+  world.verdicts({ "DEMO-2": "pass" });
+
+  const ran = await world.loop("run", "--filter", "labels = loop");
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.prs().map((pr) => [pr.headRefName, pr.state])).toEqual([["feat/DEMO-2-add-the-login-page", "MERGED"]]);
 });
 
 test("a ticket of another component that is done by the end of the run lets the run close the Epic", async () => {

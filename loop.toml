@@ -6,6 +6,9 @@ tools = ["make", "uv", "npm"]
 # Installs the loop's packages in each new worktree, so the first test run finds node_modules.
 setup = ["make", "loop-deps"]
 agent_hint = "The gate runs `make check`, so run the Vitest files that cover your change, such as `cd loop && npx vitest run tests/run.test.ts`. For a screenshot, the headless Chrome is `find ~/.cache/ms-playwright -name chrome-headless-shell -type f | head -1`, and `loop/tests/seed.ts` serves the watch page in seeded states: `cd loop && node tests/seed.ts`. Run shellcheck as `uvx --from shellcheck-py shellcheck`."
+# The env var names of the secrets in Bitwarden Secrets Manager, shared with Pitchridge: the same Jira account,
+# ntfy topic, and loop Claude account.
+secrets = ["JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC", "CLAUDE_CODE_OAUTH_TOKEN"]
 
 [tracker]
 kind = "jira"
@@ -32,13 +35,6 @@ plans = [
   { plan = "pro", since = 2026-10-01 },
   { plan = "max-5x", since = 2026-10-14T16:48:00Z },
 ]
-
-[secrets]
-# Shared with Pitchridge: the same Jira account, ntfy topic, and loop Claude account.
-JIRA_EMAIL = { item = "pitchridge-jira", field = "username" }
-JIRA_API_TOKEN = { item = "pitchridge-jira", field = "password" }
-NTFY_TOPIC = { item = "pitchridge-ntfy-topic", field = "password" }
-CLAUDE_CODE_OAUTH_TOKEN = { item = "pitchridge-loop-claude-token", field = "password" }
 
 # The shared gate's settings. actions/review/action.yml in agent-workflow gives the [review] keys, and
 # actions/judge/action.yml gives `blocking`, which goes in the repo's [ui] table.

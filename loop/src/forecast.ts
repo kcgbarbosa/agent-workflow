@@ -388,7 +388,7 @@ export class Forecaster {
     const email = this.secrets.JIRA_EMAIL;
     const token = this.secrets.JIRA_API_TOKEN;
     if (!email || !token) {
-      throw new BacklogError("This host has no Jira secret in its secrets file. Run `loop secrets`.");
+      throw new BacklogError("The watch page has no Jira secret in its env. Its unit runs it under `bws run`.");
     }
     return new Jira(this.config.trackerUrl, email, token);
   }

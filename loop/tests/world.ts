@@ -1,17 +1,20 @@
-// One scenario's world: a git repo with a bare origin, the fake Jira, the fake `gh`, the fake `claude`, and
-// the loop's own checkout with an origin of its own, all in a temporary folder with no network.
+// One scenario's world: a git repo with a bare origin, the fake Jira, the fake `gh`, the fake `claude`, the fake
+// `bws` with the host's token file, and the loop's own checkout with an origin of its own, all in a temporary
+// folder with no network.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Line } from "../src/log.ts";
+import { underBws } from "../src/secrets.ts";
 import { FakeJira } from "./fakes/jira.ts";
 
 const LOOP = resolve(import.meta.dirname, "..", "bin", "loop");
 const FAKES = resolve(import.meta.dirname, "fakes");
 
 export const EPIC = "DEMO-1";
+const TOKEN = "machine-token";
 
 export type Ran = { code: number; stdout: string; stderr: string };
 
@@ -49,6 +52,7 @@ export class World {
   readonly checkout = join(this.root, "agent-workflow");
   readonly checkoutOrigin = join(this.root, "agent-workflow.git");
   readonly state = join(this.home, ".local", "state", "demo-loop");
+  readonly tokenFile = join(this.home, ".config", "bws", "token.env");
   readonly env: NodeJS.ProcessEnv;
   readonly jira: FakeJira;
 
@@ -68,7 +72,6 @@ export class World {
       FAKE_ORIGIN: this.origin,
       LOOP_CHECKOUT: this.checkout,
       LOOP_POLL_SECONDS: "0.05",
-      BW_SESSION: "vault-session-key",
       NODE_OPTIONS: `--import=${join(FAKES, "offline.mjs")}`,
     };
     this.git(this.root, "init", "--quiet", "--bare", this.origin);
@@ -83,7 +86,9 @@ export class World {
     this.git(this.root, "init", "--quiet", this.checkout);
     this.git(this.checkout, "remote", "add", "origin", this.checkoutOrigin);
     this.commitTo(this.checkout, { "config/settings.json": "{}\n", "loop/run.ts": "one\n" }, "chore: start");
-    writeFileSync(join(this.state, "secrets.json"), JSON.stringify({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: "token", NTFY_TOPIC: "topic" }));
+    mkdirSync(dirname(this.tokenFile), { recursive: true });
+    writeFileSync(this.tokenFile, `BWS_ACCESS_TOKEN=${TOKEN}\n`, { mode: 0o600 });
+    this.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: "token", NTFY_TOPIC: "topic" });
     jira.add(EPIC, "The Loop", { issueType: "Epic" });
   }
 
@@ -114,6 +119,7 @@ export class World {
   /** `top` holds top-level keys, which TOML needs before the first table, and `tracker` more keys of `[tracker]`. */
   writeConfig(extra = "", top = "", tracker = ""): void {
     const config = `name = "demo"
+secrets = ["JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC"]
 ${top}
 
 [tracker]
@@ -123,11 +129,6 @@ ${tracker}
 
 [notify]
 url = "${this.jira.url}/ntfy"
-
-[secrets]
-JIRA_EMAIL = { item = "Jira", field = "username" }
-JIRA_API_TOKEN = { item = "Jira", field = "password" }
-NTFY_TOPIC = { item = "ntfy", field = "topic" }
 ${extra}`;
     writeFileSync(join(this.repo, "loop.toml"), config);
   }
@@ -141,6 +142,21 @@ ${extra}`;
     this.git(clone, "remote", "add", "origin", origin);
     this.commitTo(clone, files, "chore: start");
     return origin;
+  }
+
+  /** The secrets that the fake `bws` holds, names to values. */
+  bws(secrets: Record<string, string>): void {
+    writeFileSync(join(this.fakes, "bws.json"), JSON.stringify(secrets));
+  }
+
+  /** The command line and env of a loop command, as its unit runs it: `loop run` and `loop watch` under `bws
+   * run`, with the host's token.
+   */
+  private invocation(args: string[]): [string, string[], NodeJS.ProcessEnv] {
+    const command = [LOOP, ...args, "--repo", this.repo];
+    if (args[0] !== "run" && args[0] !== "watch") return [LOOP, command.slice(1), this.env];
+    const [bws, ...rest] = underBws(command);
+    return [bws!, rest, { ...this.env, BWS_ACCESS_TOKEN: TOKEN }];
   }
 
   /** The agent's steps for a ticket. */
@@ -185,8 +201,9 @@ ${extra}`;
 
   /** Runs the loop to its end. */
   loop(...args: string[]): Promise<Ran> {
+    const [command, rest, env] = this.invocation(args);
     return new Promise((done) => {
-      execFile(LOOP, [...args, "--repo", this.repo], { env: this.env, timeout: 60_000 }, (error, stdout, stderr) => {
+      execFile(command, rest, { env, timeout: 60_000 }, (error, stdout, stderr) => {
         const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
         done({ code, stdout, stderr });
       });
@@ -195,7 +212,9 @@ ${extra}`;
 
   /** Starts `loop watch` on a free port, and returns once it serves. */
   async watch(): Promise<Watching> {
-    const child = spawn(LOOP, ["watch", "--repo", this.repo], { env: { ...this.env, LOOP_WATCH_PORT: "0" } });
+    const [command, rest, env] = this.invocation(["watch"]);
+    // `bws` passes no signal on, so the close stops its whole process group.
+    const child = spawn(command, rest, { env: { ...env, LOOP_WATCH_PORT: "0" }, detached: true });
     const url = await new Promise<string>((done, fail) => {
       let output = "";
       child.stdout.on("data", (data: Buffer) => {
@@ -222,7 +241,7 @@ ${extra}`;
       new Promise<void>((done) => {
         if (child.exitCode !== null) return done();
         child.once("close", () => done());
-        child.kill("SIGTERM");
+        process.kill(-child.pid!, "SIGTERM");
       });
     return { url, get, close };
   }
@@ -255,7 +274,7 @@ ${extra}`;
     const { pid } = JSON.parse(readFileSync(path, "utf8")) as { pid: number | null };
     if (pid === null) return true;
     try {
-      process.kill(pid, 0);
+      process.kill(-pid, 0);
       return true;
     } catch {
       return false;
@@ -374,7 +393,8 @@ ${extra}`;
     prompt: string;
     resume: string | null;
     cwd: string;
-    bw_session: string | null;
+    jira_token: string | null;
+    bws_token: string | null;
     port: string | null;
     compose: string | null;
     met: boolean;

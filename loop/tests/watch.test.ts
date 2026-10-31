@@ -104,7 +104,7 @@ test("a run whose process is gone shows as stopped, with each ticket in the step
 
 test("the page shows the checks of a red pull request, masks each secret, and answers only its own host names", async () => {
   const secret = "a-long-jira-token-value";
-  writeFileSync(join(world.state, "secrets.json"), JSON.stringify({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: secret, NTFY_TOPIC: "topic" }));
+  world.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: secret, NTFY_TOPIC: "topic" });
   world.record([...redThenFixed(deadPid()).slice(0, 8), { ticket: "DEMO-2", step: "stuck", result: "ok", pr: PR, detail: `Still red, token ${secret}` }]);
   watching = await world.watch();
 

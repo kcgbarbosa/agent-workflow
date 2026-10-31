@@ -53,7 +53,7 @@ The ntfy topic that Pitchridge uses. A message holds the key and the status only
 
 ### Secrets
 
-The Jira email and API token, the ntfy topic, and the Claude token of the loop account. `loop.toml` maps each env var to its Bitwarden item, the same items as Pitchridge. Pitchridge's `docs/agents/loop.md` gives how each item was made. `loop secrets` copies them to a file on the host, as the design gives.
+The Jira email and API token, the ntfy topic, and the Claude token of the loop account. Each lives in the `loop` project of Bitwarden Secrets Manager under its env var name, shared with Pitchridge, and `loop.toml` `secrets` lists the names. The design gives how a run gets them.
 
 ### Hosts
 
@@ -69,8 +69,4 @@ In `loop.toml`.
 
 ### Setup
 
-Run `loop secrets` once on t14 from this repo, and again after a secret changes:
-
-```sh
-BW_SESSION=$(bw unlock --raw) && export BW_SESSION && loop secrets; bw lock
-```
+`/setup-loop` sets up Secrets Manager and t14's token file, as its Secrets section gives. Until then, `loop start` refuses with the one that is missing.
