@@ -426,7 +426,6 @@ export class Run {
       return "stopped";
     }
     this.log.write(key, "merge", "merged", { commit: merged, pr: url });
-    await this.status(key, DONE);
     this.merged.add(key);
     this.mergedUrls.push(url);
     this.open.delete(key);
@@ -434,8 +433,12 @@ export class Run {
     return "merged";
   }
 
-  /** Moves a merged ticket's dependents to its base, and removes its worktree and branch. */
+  /**
+   * Moves a merged ticket to Done unless it is already done, also one that merged before this run, then moves its
+   * dependents to its base, and removes its worktree and branch.
+   */
   private async afterMerge(key: string, branch: string, base: string): Promise<void> {
+    if (!this.byKey.get(key)?.done) await this.status(key, DONE);
     await this.retarget(key, branch, base);
     await this.removeWorktree(key, branch);
   }

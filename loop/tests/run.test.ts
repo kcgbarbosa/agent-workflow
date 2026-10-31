@@ -323,7 +323,21 @@ test("a ticket whose pull request merged before the run counts as done, and its 
     result: "merged-before",
     pr: world.prs()[0]!.url,
   });
+  expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual(["Done"]);
+  expect(world.steps().slice(world.steps().indexOf("DEMO-2 start merged-before"))[1]).toBe("DEMO-2 tracker-status ok");
+});
+
+test("a ticket whose pull request merged before the run and that is already Done gets no transition", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC, status: "Done" });
+  world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
+  world.mergedBefore("DEMO-2", "feat/DEMO-2-add-the-login-page");
+  world.verdicts({ "DEMO-3": "pass" });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
   expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual([]);
+  expect(world.jira.issues.get("DEMO-3")!.statuses).toEqual(["In Progress", "In Review", "Done"]);
 });
 
 test("a restart does not rebuild a ticket the first run merged, and removes the worktree a kill left behind", async () => {
