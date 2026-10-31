@@ -111,14 +111,15 @@ export class World {
     this.git(clone, "push", "--quiet", "-u", "origin", "HEAD:main");
   }
 
-  /** `top` holds top-level keys, which TOML needs before the first table. */
-  writeConfig(extra = "", top = ""): void {
+  /** `top` holds top-level keys, which TOML needs before the first table, and `tracker` more keys of `[tracker]`. */
+  writeConfig(extra = "", top = "", tracker = ""): void {
     const config = `name = "demo"
 ${top}
 
 [tracker]
 kind = "jira"
 url = "${this.jira.url}"
+${tracker}
 
 [notify]
 url = "${this.jira.url}/ntfy"
@@ -129,6 +130,17 @@ JIRA_API_TOKEN = { item = "Jira", field = "password" }
 NTFY_TOPIC = { item = "ntfy", field = "topic" }
 ${extra}`;
     writeFileSync(join(this.repo, "loop.toml"), config);
+  }
+
+  /** Another repo on the fake GitHub, `https://github.com/kcgbarbosa/<name>`, with the files on its main. Returns its bare origin. */
+  otherRepo(name: string, files: Record<string, string>): string {
+    const origin = join(this.root, `${name}.git`);
+    const clone = join(this.root, name);
+    this.git(this.root, "init", "--quiet", "--bare", origin);
+    this.git(this.root, "init", "--quiet", clone);
+    this.git(clone, "remote", "add", "origin", origin);
+    this.commitTo(clone, files, "chore: start");
+    return origin;
   }
 
   /** The agent's steps for a ticket. */

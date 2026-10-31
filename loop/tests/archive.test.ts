@@ -83,3 +83,21 @@ test("an Epic whose description links no spec is marked done with no archive pul
   expect(world.steps()).toEqual(expect.arrayContaining([`${EPIC} archive no-spec`, `${EPIC} complete ok`]));
   expect(world.prs().map((pr) => pr.headRefName)).not.toContain(`docs/${EPIC}-archive-spec`);
 });
+
+test("the archive takes the repo from the Epic's Spec link, whichever repo's run closes the Epic", async () => {
+  const specs = world.otherRepo("specs", { [SPEC]: "# The Loop\n" });
+  world.jira.issues.get(EPIC)!.body = [`Spec: https://github.com/kcgbarbosa/specs/blob/main/${SPEC}`];
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const archived = world.prs().find((pr) => pr.headRefName === `docs/${EPIC}-archive-spec`);
+  expect(archived).toMatchObject({ baseRefName: "main", state: "MERGED" });
+  expect(archived!.url).toMatch(/^https:\/\/github\.com\/kcgbarbosa\/specs\/pull\/\d+$/);
+  expect(world.git(specs, "ls-tree", "-r", "--name-only", "main")).not.toContain(SPEC);
+  expect(world.git(world.origin, "ls-tree", "-r", "--name-only", "main")).toContain(SPEC);
+  const pinned = world.git(specs, "rev-parse", "main~1");
+  expect(world.jira.issues.get(EPIC)!.body).toEqual([`Spec: https://github.com/kcgbarbosa/specs/blob/${pinned}/${SPEC}`]);
+  expect(world.steps()).toEqual(expect.arrayContaining([`${EPIC} archive pr-open`, `${EPIC} complete ok`]));
+  expect(world.jira.issues.get(EPIC)!.status).toBe("Done");
+});

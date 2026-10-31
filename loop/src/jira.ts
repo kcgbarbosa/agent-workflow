@@ -8,6 +8,8 @@ export type Ticket = {
   status: string;
   done: boolean;
   flagged: boolean;
+  /** The Jira components: the repo the ticket changes, or `manual` for work no loop builds. */
+  components: string[];
   blockers: { key: string; done: boolean }[];
   parent: string | null;
   text: string;
@@ -93,7 +95,7 @@ export class Jira {
   }
 
   private async fields(): Promise<string[]> {
-    return ["summary", "status", "issuetype", "description", "issuelinks", "parent", await this.flaggedField()];
+    return ["summary", "status", "issuetype", "description", "issuelinks", "parent", "components", await this.flaggedField()];
   }
 
   private async flaggedField(): Promise<string> {
@@ -114,6 +116,7 @@ export class Jira {
       status: fields.status?.name ?? "",
       done: isDone(fields.status),
       flagged: Boolean(fields[this.flaggedId ?? "customfield_10021"]),
+      components: ((fields.components ?? []) as Fields[]).map((component) => component.name),
       blockers: links
         .filter((link) => link.type?.name === "Blocks" && link.inwardIssue)
         .map((link) => ({ key: link.inwardIssue.key, done: isDone(link.inwardIssue.fields?.status) })),

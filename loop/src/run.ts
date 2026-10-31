@@ -58,6 +58,12 @@ const BRANCH_KEY = new RegExp(`^(?:${BRANCH_TYPES.join("|")})/([A-Z][A-Z0-9]*-\\
 /** A repo path of a Markdown file, as a ticket names its spec. */
 const MD_PATH = /[\w./-]+\.md\b/;
 
+/** The Spec line of an Epic's description. */
+const SPEC_LINE = /^\s*\**spec\**[.:]/i;
+
+/** The component of a ticket that a person does, which no loop builds. */
+const MANUAL = "manual";
+
 export type Target = { key: string } | { filter: string };
 
 /** `meterSeconds` is the least time between two plan meter lines of a running agent. */
@@ -75,6 +81,9 @@ type Stack = { key: string } & OpenPr;
 
 class PortsTaken extends Error {}
 
+/** A frontier the run refuses to build. */
+class Refused extends Error {}
+
 export function runName(target: Target): string {
   if ("key" in target) return target.key;
   return `filter-${createHash("sha256").update(target.filter).digest("hex").slice(0, 8)}`;
@@ -82,6 +91,10 @@ export function runName(target: Target): string {
 
 function branchPrefixes(key: string): string[] {
   return BRANCH_TYPES.map((type) => `${type}/${key}-`);
+}
+
+function specLineOf(text: string): string {
+  return text.split("\n").find((line) => SPEC_LINE.test(line)) ?? "";
 }
 
 function typeOf(ticket: Ticket): string {
@@ -113,6 +126,8 @@ export class Run {
   private epicText: Promise<string> | null = null;
   /** The summary of the Epic or ticket the run started with, for the watch page. */
   private summary: string | null = null;
+  /** The Epic's children, of every component, when the run started with the Epic. */
+  private children: Ticket[] | null = null;
   private readonly merged = new Set<string>();
   /** The address of each merged pull request, which names the repo on GitHub. */
   private readonly mergedUrls: string[] = [];
@@ -146,7 +161,16 @@ export class Run {
     // The watch page tells a running run from the pid, and two runs apart from the setup.
     const setup = await runSetup(this.config);
     this.log.write(this.name, "start", "ok", { detail: this.config.mainBranch, input, pid: process.pid, setup });
-    const tickets = await this.tickets();
+    let tickets: Ticket[];
+    try {
+      tickets = await this.tickets();
+    } catch (error) {
+      if (!(error instanceof Refused)) throw error;
+      console.error(error.message);
+      this.log.write(this.name, "stop", "refused", { detail: error.message });
+      await this.notify(`${this.name} refused: ${error.message}`);
+      return 2;
+    }
     for (const ticket of tickets) this.byKey.set(ticket.key, ticket);
     await git(this.config.repo, "fetch", "--prune", "--quiet", "origin");
     const mergedBefore = new Map<string, github.PullRequest>();
@@ -237,11 +261,14 @@ export class Run {
     try {
       const epic = await this.jira.ticket(this.epic);
       if (epic.done) return false;
-      const children = this.name === this.epic ? tickets : await this.jira.search(`parent = ${this.epic} ORDER BY key ASC`);
+      const children = this.children ?? (await this.jira.search(`parent = ${this.epic} ORDER BY key ASC`));
       if (!children.length || !children.every((child) => this.merged.has(child.key) || child.done)) return false;
-      const [url] = this.mergedUrls;
-      if (!url) throw new Error(`No pull request of ${this.epic} merged, so the loop does not know the repo on GitHub.`);
-      const archived = await archive(this.config, this.jira, epic, url.split("/pull/")[0]!, this.home);
+      // The spec lives in the repo that the Spec line links, which can be another repo than this run's.
+      const here = await this.repoUrl();
+      const specRepo = mdLinks(specLineOf(epic.text))[0]?.prefix ?? here;
+      if (!specRepo) throw new Error(`The Spec line of ${this.epic} links no repo and no pull request of it merged, so the loop does not know the repo on GitHub.`);
+      const config = specRepo.toLowerCase() === here?.toLowerCase() ? this.config : await this.cloneOf(specRepo);
+      const archived = await archive(config, this.jira, epic, specRepo, this.home);
       this.log.write(this.name, "archive", archived.result, { detail: archived.detail, pr: archived.pr });
       // The archive pull request merges on its own once its gate is green, and the Epic does not wait for it.
       if (archived.result === "pr-open") stillOpen = ` The archive pull request ${archived.pr} is still open.`;
@@ -260,18 +287,46 @@ export class Run {
     return true;
   }
 
-  /** The tickets of an Epic, the one ticket of a key, or the tickets a filter finds. */
+  /**
+   * The tickets of the run's component among the Epic's children, the one ticket of a key, or the tickets a
+   * filter finds. A ticket of another component, `manual` included, counts only as a blocker, through its
+   * status. A ticket with no component refuses the run.
+   */
   private async tickets(): Promise<Ticket[]> {
-    if ("filter" in this.target) return this.jira.search(this.target.filter);
-    const ticket = await this.jira.ticket(this.target.key);
-    this.summary = ticket.summary;
-    if (ticket.issueType === "Epic") {
-      this.epic = ticket.key;
-      this.epicText = Promise.resolve(ticket.text);
-      return this.jira.search(`parent = ${ticket.key} ORDER BY key ASC`);
+    let tickets: Ticket[];
+    if ("filter" in this.target) tickets = await this.jira.search(this.target.filter);
+    else {
+      const ticket = await this.jira.ticket(this.target.key);
+      this.summary = ticket.summary;
+      if (ticket.issueType === "Epic") {
+        this.epic = ticket.key;
+        this.epicText = Promise.resolve(ticket.text);
+        tickets = this.children = await this.jira.search(`parent = ${ticket.key} ORDER BY key ASC`);
+      } else {
+        this.epic = ticket.parent;
+        tickets = [ticket];
+      }
     }
-    this.epic = ticket.parent;
-    return [ticket];
+    const none = tickets.filter((ticket) => !ticket.components.length).map((ticket) => ticket.key);
+    if (none.length) {
+      const have = none.length === 1 ? "has" : "have";
+      throw new Refused(`${none.join(", ")} ${have} no component. Set the Jira component of each to the repo it changes, or ${MANUAL} for work no loop builds.`);
+    }
+    return tickets.filter((ticket) => ticket.components.includes(this.config.component));
+  }
+
+  /** The repo on GitHub of this run: the one of a merged pull request, or the origin remote. */
+  private async repoUrl(): Promise<string | null> {
+    return this.mergedUrls[0]?.split("/pull/")[0] ?? (await originUrl(this.config.repo));
+  }
+
+  /** The config of a clone of another repo, in the run's folder, for the archive of a spec that lives there. */
+  private async cloneOf(repoUrl: string): Promise<Config> {
+    const folder = join(this.home, "repos", repoUrl.split("/").slice(-2).join("-"));
+    if (existsSync(folder)) await git(folder, "fetch", "--prune", "--quiet", "origin");
+    else await github.clone(this.config.repo, repoUrl, folder);
+    const head = await git(folder, "symbolic-ref", "--short", "refs/remotes/origin/HEAD");
+    return { ...this.config, repo: folder, mainBranch: head.replace(/^origin\//, "") };
   }
 
   private state(ticket: Ticket): State {
@@ -752,17 +807,16 @@ export class Run {
   /**
    * The `Spec:` line of the pull request body: the Markdown file of this repo that the Spec line of the Epic's
    * description links, else the first one of this repo the description links, else the first Markdown path on
-   * a line of the ticket that names the spec, else none. The repo is the one of a merged pull request, or the
-   * origin remote; when neither names a GitHub repo, a link to any repo counts.
+   * a line of the ticket that names the spec, else none. The repo is the one `repoUrl` gives; when it is
+   * unknown, a link to any repo counts.
    */
   private async specLine(ticket: Ticket): Promise<string> {
     if (this.epic) {
       this.epicText ??= this.jira.ticket(this.epic).then((epic) => epic.text);
       const text = await this.epicText.catch(() => "");
-      const repoUrl = this.mergedUrls[0]?.split("/pull/")[0] ?? (await originUrl(this.config.repo));
+      const repoUrl = await this.repoUrl();
       const links = (part: string) => (repoUrl ? specLinks(part, repoUrl) : mdLinks(part));
-      const specLine = text.split("\n").find((line) => /^\s*\**spec\**[.:]/i.test(line)) ?? "";
-      const [link] = [...links(specLine), ...links(text)];
+      const [link] = [...links(specLineOf(text)), ...links(text)];
       if (link) return `Spec: [${link.path}](${link.url})`;
     }
     const named = ticket.text.split("\n").find((line) => /\bspec\b/i.test(line) && MD_PATH.test(line));

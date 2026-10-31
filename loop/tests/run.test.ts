@@ -483,16 +483,96 @@ url = "http://localhost:3000"
 
 [review]
 enabled = true
-`);
+`, "", "name_landed_keys_only = true");
 
   const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
   const warnings = ran.stderr.split("\n").filter((line) => line.includes("is no longer read"));
-  expect(warnings).toHaveLength(4);
-  for (const key of ["[gates]", "[acceptance]", "[ui].skill", "[demo]"]) {
+  expect(warnings).toHaveLength(5);
+  for (const key of ["[gates]", "[acceptance]", "[ui].skill", "[demo]", "[tracker].name_landed_keys_only"]) {
     expect(warnings.filter((line) => line.startsWith(`loop.toml: ${key} `))).toHaveLength(1);
   }
+});
+
+test("a run builds only the tickets of its component", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.jira.add("DEMO-3", "Set up the host", { parent: EPIC, components: ["machines"] });
+  world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.prs().map((pr) => pr.headRefName)).toEqual(["feat/DEMO-2-add-the-login-page"]);
+  expect(world.calls().map((call) => call.cwd)).toEqual([`${world.state}/${EPIC}/worktrees/DEMO-2`]);
+  const frontier = world.decisions().find((line) => line.step === "frontier")!.tickets as { key: string }[];
+  expect(frontier.map((ticket) => ticket.key)).toEqual(["DEMO-2"]);
+  expect(world.jira.issues.get("DEMO-3")!.status).toBe("To Do");
+  expect(world.jira.issues.get(EPIC)!.status).toBe("To Do");
+});
+
+test("a component set in loop.toml names the run's tickets", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.jira.add("DEMO-3", "Set up the host", { parent: EPIC, components: ["machines"] });
+  world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
+  world.writeConfig("", 'component = "machines"');
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.prs().map((pr) => pr.headRefName)).toEqual(["feat/DEMO-3-set-up-the-host"]);
+});
+
+test("a ticket of another component counts only as a blocker, through its status", async () => {
+  world.jira.add("DEMO-2", "Set up the host", { parent: EPIC, components: ["machines"] });
+  world.jira.add("DEMO-3", "Add the login page", { parent: EPIC, blockers: ["DEMO-2"] });
+  world.verdicts({ "DEMO-3": "pass" });
+
+  const held = await world.loop("run", EPIC);
+
+  expect(held.code, held.stderr).toBe(0);
+  expect(world.prs()).toEqual([]);
+  expect(world.decisions().find((line) => line.step === "finish")!.detail).toContain("waiting on a blocker: DEMO-3");
+
+  world.jira.issues.get("DEMO-2")!.status = "Done";
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.prs().map((pr) => [pr.headRefName, pr.state])).toEqual([["feat/DEMO-3-add-the-login-page", "MERGED"]]);
+});
+
+test("a ticket with no component refuses the run with one line that names each", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC, components: [] });
+  world.jira.add("DEMO-3", "Add the logout page", { parent: EPIC });
+  world.jira.add("DEMO-4", "Add the signup page", { parent: EPIC, components: [] });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code).toBe(2);
+  const refusal = ran.stderr.split("\n").filter((line) => line.includes("no component"));
+  expect(refusal).toEqual([expect.stringContaining("DEMO-2, DEMO-4 have no component.")]);
+  expect(world.calls()).toEqual([]);
+  expect(world.prs()).toEqual([]);
+  expect(world.steps()).toContain(`${EPIC} stop refused`);
+});
+
+test("a manual ticket is never built or flagged, and a ticket that waits on it starts once it is Done", async () => {
+  world.jira.add("DEMO-2", "Cut over the host", { parent: EPIC, components: ["manual"] });
+  world.jira.add("DEMO-3", "Add the login page", { parent: EPIC, blockers: ["DEMO-2"] });
+  world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
+
+  const held = await world.loop("run", EPIC);
+
+  expect(held.code, held.stderr).toBe(0);
+  expect(world.calls()).toEqual([]);
+  expect(world.jira.issues.get("DEMO-2")).toMatchObject({ status: "To Do", flagged: false, statuses: [], comments: [] });
+
+  world.jira.issues.get("DEMO-2")!.status = "Done";
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.prs().map((pr) => [pr.headRefName, pr.state])).toEqual([["feat/DEMO-3-add-the-login-page", "MERGED"]]);
+  expect(world.jira.issues.get(EPIC)!.status).toBe("Done");
 });
 
 test("an unknown loop.toml key refuses the run", async () => {
