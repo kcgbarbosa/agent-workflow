@@ -14,7 +14,7 @@ AGENTS.md        this repo's own instructions
 install.sh       makes the links and installs the loop command. Safe to run again
 tests/           the repo-level checks. make check runs them with the loop, switchboard and shellcheck checks
 .github/         the shared merge gate, workflows/gate.yml, which every repo calls, and this repo's own call to it
-actions/         the gate's review and UI judge, composite actions that the gate runs after the check
+actions/         the gate's review and UI judge, composite actions that the gate runs beside and after the check
 Makefile         make check, the gate's check for this repo
 licenses/        upstream licenses. Keep
 ```

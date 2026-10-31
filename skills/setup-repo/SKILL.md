@@ -111,7 +111,7 @@ When a labels file from the retired setup skill exists in `docs/agents/`, tell t
 
 ### 5. Put the repo on the gate
 
-The shared merge gate is `.github/workflows/gate.yml` in agent-workflow. It runs the repo's `make check` on each pull request, and `make check-docs` on one that changes only `*.md` files and `docs/`. After a green check, `gate / review` has a second model review the pull request, and `gate / judge` has a model look at each changed screenshot. Both bill the repo secret `CLAUDE_CODE_OAUTH_TOKEN`, a Claude plan, or `ANTHROPIC_API_KEY`, the API. A check that needs keys, such as for its stack, gets them from the optional repo secret `CHECK_ENV`, one `NAME=value` per line. When the `Makefile` lacks either target, draft it from the test commands that exploration found, and write it once the user approves.
+The shared merge gate is `.github/workflows/gate.yml` in agent-workflow. It runs the repo's `make check` on each pull request, and `make check-docs` on one that changes only `*.md` files and `docs/`. Beside the check, `gate / review` has a second model review the pull request, except on a docs-only one. After a green check, `gate / judge` has a model look at each changed screenshot. Both bill the repo secret `CLAUDE_CODE_OAUTH_TOKEN`, a Claude plan, or `ANTHROPIC_API_KEY`, the API. A check that needs keys, such as for its stack, gets them from the optional repo secret `CHECK_ENV`, one `NAME=value` per line. When the `Makefile` lacks either target, draft it from the test commands that exploration found, and write it once the user approves.
 
 Then, at the repo root:
 

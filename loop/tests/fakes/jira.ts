@@ -15,6 +15,8 @@ export type Issue = {
   body: string[];
   /** The statuses the loop moved the issue to, in order. */
   statuses: string[];
+  /** The statuses the workflow offers no transition to. */
+  unreachable: string[];
 };
 
 const STATUSES = ["To Do", "In Progress", "In Review", "Done"];
@@ -79,6 +81,7 @@ export class FakeJira {
       comments: [],
       body: [`The work of ${key}.`],
       statuses: [],
+      unreachable: [],
       ...values,
     };
     this.issues.set(key, issue);
@@ -150,7 +153,7 @@ export class FakeJira {
       return [201, {}];
     }
     if (part === "transitions" && method === "GET") {
-      const others = STATUSES.filter((status) => status !== issue.status);
+      const others = STATUSES.filter((status) => status !== issue.status && !issue.unreachable.includes(status));
       return [200, { transitions: others.map((status) => ({ id: status, name: status, to: { name: status } })) }];
     }
     if (part === "transitions" && method === "POST") {
