@@ -165,7 +165,21 @@ export type HostRun = {
   working: { key: string; step: string | null }[];
 };
 
-export type HostProject = { name: string; runs: HostRun[] };
+/** A project's card on the home page, from its current run: the running run, else the newest. */
+export type HostProject = {
+  name: string;
+  runs: HostRun[];
+  state: "running" | "needs_kc" | "idle";
+  current: string | null;
+  needs_kc: NeedsKc[];
+  working: { key: string; step: string; since: string }[];
+  progress: { complete: number; total: number } | null;
+  epic: { key: string; summary: string } | null;
+  last: { key: string; status: string; at: string } | null;
+};
+
+/** A line of the home page's log, across every run of every project. */
+export type LogEntry = { time: string; project: string; epic: string; ticket: string; step: string; result: string; detail: string; pr?: string };
 
 type FrontierTicket = {
   key: string;
@@ -237,16 +251,20 @@ function alive(pid: number): boolean {
 }
 
 /** Each project on this host with the latest run of each of its Epics, the running one first, then the
- * newest: its status, its tickets complete of the total, and the step of each running ticket. The home page
- * lists them, and the page's project and Epic menus read them.
+ * newest: its status, its tickets complete of the total, and the step of each running ticket. The Epic menu
+ * reads the runs. Each project's card reads its state, worked out from its current run alone: needs KC when
+ * the run has a needs-KC row, else running while the run runs or is paused, else idle.
  */
 export function hostView(stateDir: string): HostProject[] {
-  return [...projects(stateDir)].map(([name, home]) => {
+  return [...projects(stateDir)].map(([name, home]): HostProject => {
     const epics = runHomes(home).sort((a, b) => mtime(join(b, DECISIONS)) - mtime(join(a, DECISIONS)));
     const history = allRuns(home);
+    const views = new Map<string, { view: EpicView; at: string }>();
     const runs = epics.map((epic): HostRun => {
       const key = basename(epic);
-      const view = epicView(home, key, isRunning(readLines(join(epic, DECISIONS)), key), history);
+      const lines = readLines(join(epic, DECISIONS));
+      const view = epicView(home, key, isRunning(lines, key), history);
+      views.set(key, { view, at: lines.at(-1)?.time ?? iso(mtime(join(epic, DECISIONS))) });
       return {
         key,
         summary: view.summary,
@@ -261,9 +279,48 @@ export function hostView(stateDir: string): HostProject[] {
           .map((ticket) => ({ key: ticket.key, step: ticket.step?.name ?? null })),
       };
     });
+    const current = (runs.find((run) => run.running) ?? runs[0])?.key ?? null;
     runs.sort((a, b) => Number(b.running) - Number(a.running));
-    return { name, runs };
+    const found = current === null ? undefined : views.get(current);
+    if (!found) return { name, runs, state: "idle", current, needs_kc: [], working: [], progress: null, epic: null, last: null };
+    const { view, at } = found;
+    const state = view.needs_kc.length ? "needs_kc" : view.status === "running" || view.status === "paused" ? "running" : "idle";
+    return {
+      name,
+      runs,
+      state,
+      current,
+      needs_kc: view.needs_kc,
+      working: view.tickets.flatMap((ticket) =>
+        ticket.column === "running" && ticket.step ? [{ key: ticket.key, step: ticket.step.name, since: ticket.step.since }] : [],
+      ),
+      progress: view.progress,
+      epic: { key: view.key, summary: view.summary },
+      last: state === "idle" ? { key: view.key, status: view.status, at } : null,
+    };
   });
+}
+
+// The steps the home page's log leaves out: the plan meter and the loop's bookkeeping.
+const UNLOGGED = new Set(["meter", "tracker-status", "frontier", "notify", "agent"]);
+const LOG_LINES = 50;
+
+/** The latest lines of every run of every project on this host, or of one project, newest first. */
+export function hostLog(stateDir: string, project?: string): LogEntry[] {
+  const entries: LogEntry[] = [];
+  for (const [name, home] of projects(stateDir)) {
+    if (project !== undefined && name !== project) continue;
+    for (const run of runHomes(home)) {
+      for (const line of readLines(join(run, DECISIONS))) {
+        if (UNLOGGED.has(line.step)) continue;
+        const { time, epic, ticket, step, result } = line;
+        const entry: LogEntry = { time, project: name, epic, ticket, step, result, detail: String(line.detail ?? "") };
+        if (typeof line.pr === "string" && line.pr) entry.pr = line.pr;
+        entries.push(entry);
+      }
+    }
+  }
+  return entries.sort((a, b) => Date.parse(b.time) - Date.parse(a.time)).slice(0, LOG_LINES);
 }
 
 /** The breakdown of an Epic's latest run, or of the latest run on this host, against the run before it. */
@@ -1027,6 +1084,10 @@ export class Watch {
     if (route === "api/usage") return this.json(planMeter(this.stateDir));
     if (route === "api/forecast") return this.json(this.forecast ? await this.forecast.view() : null);
     const name = parsed.searchParams.get("project") ?? "";
+    if (route === "api/log") {
+      if (name && !projects(this.stateDir).has(name)) return missing();
+      return this.json(hostLog(this.stateDir, name || undefined));
+    }
     const dir = name ? projects(this.stateDir).get(name) : this.stateDir;
     if (dir === undefined) return missing();
     if (parts.length === 3 && parts[0] === "api" && parts[1] === "epic" && RUN.test(parts[2])) {
