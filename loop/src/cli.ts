@@ -13,7 +13,7 @@ import { git } from "./git.ts";
 import { Forecaster } from "./forecast.ts";
 import { text } from "./report.ts";
 import { Run, runName, type Target } from "./run.ts";
-import { checkSecrets, readSecrets, secretNames } from "./secrets.ts";
+import { checkSecrets, readSecrets, secretNames, storedNames } from "./secrets.ts";
 import { endAll } from "./spawn.ts";
 import { awake, runs, runUnit, startRun, startWatch, stopRun, UnitError } from "./units.ts";
 import { sourceCheckout, update, UpdateError } from "./update.ts";
@@ -117,8 +117,16 @@ async function watch(repoArg: string | undefined): Promise<number> {
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
   }
-  // The page masks the value of each secret that the env holds, also of a secret the forecast lacks.
-  const masked = Object.fromEntries(secretNames(config.secrets).flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])));
+  // The page serves every project on the host, so it masks the env value of each secret that `bws run` gave,
+  // also of one that only another repo names.
+  let names = secretNames(config.secrets);
+  try {
+    names = [...new Set([...names, ...(await storedNames())])];
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    console.error(`loop watch masks only the secrets of this repo: ${error.message}`);
+  }
+  const masked = Object.fromEntries(names.flatMap((name) => (process.env[name] ? [[name, process.env[name]]] : [])));
   let server;
   try {
     server = await serve(config.stateDir, PORT, { forecast: new Forecaster(config, secrets), secrets: masked });

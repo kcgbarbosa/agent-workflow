@@ -22,7 +22,9 @@ afterEach(async () => {
 });
 
 test("a run under the fake bws gives the agent the secrets, and the watch page masks them", async () => {
-  world.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: SECRET, NTFY_TOPIC: "topic" });
+  // Another repo's stack secret, which this repo's `secrets` does not name, but `bws run` puts in the env too.
+  const stack = "a-long-stack-key-of-another-repo";
+  world.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: SECRET, NTFY_TOPIC: "topic", STACK_KEY: stack });
 
   const ran = await world.loop("start", EPIC);
 
@@ -35,12 +37,14 @@ test("a run under the fake bws gives the agent the secrets, and the watch page m
   expect(call!.bws_token).toBeNull();
   expect(world.jira.notifications).toContain(`${EPIC} complete`);
 
-  appendFileSync(join(world.state, EPIC, "decisions.jsonl"), JSON.stringify({ time: new Date().toISOString(), epic: EPIC, ticket: "DEMO-2", step: "stuck", result: "ok", detail: `token ${SECRET}` }) + "\n");
+  appendFileSync(join(world.state, EPIC, "decisions.jsonl"), JSON.stringify({ time: new Date().toISOString(), epic: EPIC, ticket: "DEMO-2", step: "stuck", result: "ok", detail: `token ${SECRET}, key ${stack}` }) + "\n");
   watching = await world.watch();
   const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
 
   expect(JSON.stringify(view)).not.toContain(SECRET);
+  expect(JSON.stringify(view)).not.toContain(stack);
   expect(JSON.stringify(view)).toContain("[JIRA_API_TOKEN]");
+  expect(JSON.stringify(view)).toContain("[STACK_KEY]");
 });
 
 test("a run refuses an env without a secret it needs", async () => {

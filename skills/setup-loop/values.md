@@ -165,7 +165,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 ## Notifications
 
-**Choose.** The events are fixed: a stuck ticket, a pause and a stop, an Epic complete, and the finish. Use ntfy.sh unless the user runs a server, and then set `notify.url`. The topic is a long random name, for example from `openssl rand -hex 16`, kept in the vault as a secret. Subscribe to it in the ntfy app on the user's phone.
+**Choose.** The events are fixed: a stuck ticket, a pause and a stop, an Epic complete, and the finish. Use ntfy.sh unless the user runs a server, and then set `notify.url`. The topic is a long random name, for example from `openssl rand -hex 16`, kept as a secret in Bitwarden Secrets Manager. Subscribe to it in the ntfy app on the user's phone.
 
 **Check.** Post a test message to the topic with `curl -d test https://ntfy.sh/<topic>` and see it on the phone.
 
@@ -178,7 +178,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 - Every secret is a development or staging credential with the least scope that works, such as a cloud key for the development bucket only. No production credential is on a loop host.
 - Each secret lives once, in Bitwarden Secrets Manager, under its env var name: in the `loop` project when every repo's loop shares it, as the three the script needs do, or in a project of the repo. `secrets` in `loop.toml` lists the names a run needs beyond those three.
 - `CLAUDE_CODE_OAUTH_TOKEN` comes from `claude setup-token`, run as the account that should pay for the loop. Each agent run then uses that account, whichever account is signed in on the host. Leave it out when the host's own account is the one.
-- A secret never goes in the repo, the ticket file, a commit, or a log. The watch page masks the value of each secret that `secrets` names.
+- A secret never goes in the repo, the ticket file, a commit, or a log. The watch page masks the value of each secret that the host's machine token reads.
 
 **Make.** `/setup-loop` makes the store in its own session: the Secrets Manager organisation, the `loop` project, the host's machine account and its access token, the token file `~/.config/bws/token.env` that holds `BWS_ACCESS_TOKEN=<token>` with mode 600, `bws` on the host, and each secret through `bws secret create`. Ask KC in the conversation only for a step with no API, such as a machine account's access token, which Bitwarden shows once, in its web app. Check each step right after it.
 

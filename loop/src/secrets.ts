@@ -31,6 +31,15 @@ export function readSecrets(names: string[]): Record<string, string> {
 
 /** Refuses, with one line, a host with no token file, or a store that lacks a secret the run needs. */
 export async function checkSecrets(names: string[]): Promise<void> {
+  const keys = await storedNames();
+  const missing = secretNames(names).filter((name) => !keys.has(name));
+  if (missing.length) throw new ConfigError(`Secrets Manager has no secret ${missing.join(", ")}. ${SETUP}`);
+}
+
+/** The name of each secret that the host's machine token reads, and so each one that `bws run` gives. `bws run`
+ * keeps the token from the loop, so this reads the token file.
+ */
+export async function storedNames(): Promise<Set<string>> {
   const path = tokenFile();
   if (!existsSync(path)) throw new ConfigError(`This host has no Secrets Manager token file, ${path}. ${SETUP}`);
   const token = /^\s*BWS_ACCESS_TOKEN=["']?([^"'\n]*)["']?\s*$/m.exec(readFileSync(path, "utf8"))?.[1];
@@ -38,14 +47,11 @@ export async function checkSecrets(names: string[]): Promise<void> {
   const listed = await run("bws", ["secret", "list", "--output", "json"], { seconds: QUIET_SECONDS, env: { ...process.env, BWS_ACCESS_TOKEN: token } });
   if (listed.code === 127) throw new ConfigError(`bws is not on the PATH. ${SETUP}`);
   if (listed.code !== 0) throw new ConfigError(`bws cannot list the secrets: ${listed.stderr.trim().split("\n")[0]}`);
-  let keys: Set<string>;
   try {
-    keys = new Set((JSON.parse(listed.stdout) as { key: string }[]).map((secret) => secret.key));
+    return new Set((JSON.parse(listed.stdout) as { key: string }[]).map((secret) => secret.key));
   } catch {
     throw new ConfigError("bws listed the secrets in a form the loop does not read.");
   }
-  const missing = secretNames(names).filter((name) => !keys.has(name));
-  if (missing.length) throw new ConfigError(`Secrets Manager has no secret ${missing.join(", ")}. ${SETUP}`);
 }
 
 /** The command line that runs the command under `bws run`. `bws` joins its arguments into one `sh -c` line,
