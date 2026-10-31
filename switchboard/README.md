@@ -21,7 +21,9 @@ iPhone (CarPlay) -> Twilio number -> ElevenLabs agent -> Tailscale Funnel (switc
 
 The start page's Switchboard card reads `/api/status` with the same token: whether the session runs, when KC last talked, and how many replies wait. `/health` answers without the token and says nothing more.
 
-Run `uv run pytest` here. The tests use a stand-in `claude` in `tests/bin`.
+`src/*.ts` is the switchboard in TypeScript, which Node runs as it is with `node src/cli.ts`. It takes the same flags, env file, port and session ID file as the Python one in `src/switchboard/`, which the unit runs until the cutover. Both read `src/switchboard/prompt.md`. On `SIGTERM` the TypeScript one answers new requests with 503 and exits when the asks that run end, or after 60 seconds.
+
+Run `npm run check` and `uv run pytest` here. The Vitest tests use the fake `claude` in `tests/fakes/`, and the pytest ones the stand-in in `tests/bin`.
 
 ## Set up the phone side
 

@@ -1,0 +1,3 @@
+#!/bin/sh
+# The fake `claude` on the PATH of a switchboard that a test runs as a process.
+exec node --disable-warning=ExperimentalWarning "$(dirname "$0")/../claude.ts" "$@"
