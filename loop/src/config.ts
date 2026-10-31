@@ -15,6 +15,7 @@ const DROPPED: Record<string, string> = {
   acceptance: "the merge gate runs the acceptance tests",
   "ui.skill": "the merge gate's judge reviews the UI",
   demo: "the loop no longer opens an Epic pull request with a demo",
+  "tracker.name_landed_keys_only": "the loop no longer opens the Epic pull request it named the landed keys in",
 };
 
 export class ConfigError extends Error {}
@@ -24,6 +25,8 @@ export type Secret = { item: string; field: string };
 export type Config = {
   repo: string;
   name: string;
+  /** The Jira component of the tickets the run builds. */
+  component: string;
   mainBranch: string;
   tools: string[];
   /** The command the loop runs in a new worktree before the build, or none. */
@@ -236,9 +239,8 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     return { plan, since, exact };
   });
 
-  // Keys the loop checks and uses for nothing: `name_landed_keys_only` is from the Epic pull request the loop no
-  // longer opens, and `[ui]` `path`, `accepted_unchecked`, and `blocking` are settings of the gate's judge.
-  tracker.flag("name_landed_keys_only", false);
+  // Keys the loop checks and uses for nothing: `[ui]` `path`, `accepted_unchecked`, and `blocking` are settings
+  // of the gate's judge.
   ui.text("path", null);
   ui.texts("accepted_unchecked", []);
   ui.texts("blocking", []);
@@ -246,6 +248,7 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
   const config: Config = {
     repo,
     name,
+    component: top.text("component", name),
     mainBranch: top.text("main_branch", "main"),
     tools: top.texts("tools", []),
     setup: top.texts("setup", []),

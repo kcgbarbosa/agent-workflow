@@ -1,7 +1,7 @@
 // One scenario's world: a git repo with a bare origin, the fake Jira, the fake `gh`, the fake `claude`, and
 // the loop's own checkout with an origin of its own, all in a temporary folder with no network.
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -111,14 +111,15 @@ export class World {
     this.git(clone, "push", "--quiet", "-u", "origin", "HEAD:main");
   }
 
-  /** `top` holds top-level keys, which TOML needs before the first table. */
-  writeConfig(extra = "", top = ""): void {
+  /** `top` holds top-level keys, which TOML needs before the first table, and `tracker` more keys of `[tracker]`. */
+  writeConfig(extra = "", top = "", tracker = ""): void {
     const config = `name = "demo"
 ${top}
 
 [tracker]
 kind = "jira"
 url = "${this.jira.url}"
+${tracker}
 
 [notify]
 url = "${this.jira.url}/ntfy"
@@ -129,6 +130,17 @@ JIRA_API_TOKEN = { item = "Jira", field = "password" }
 NTFY_TOPIC = { item = "ntfy", field = "topic" }
 ${extra}`;
     writeFileSync(join(this.repo, "loop.toml"), config);
+  }
+
+  /** Another repo on the fake GitHub, `https://github.com/kcgbarbosa/<name>`, with the files on its main. Returns its bare origin. */
+  otherRepo(name: string, files: Record<string, string>): string {
+    const origin = join(this.root, `${name}.git`);
+    const clone = join(this.root, name);
+    this.git(this.root, "init", "--quiet", "--bare", origin);
+    this.git(this.root, "init", "--quiet", clone);
+    this.git(clone, "remote", "add", "origin", origin);
+    this.commitTo(clone, files, "chore: start");
+    return origin;
   }
 
   /** The agent's steps for a ticket. */
@@ -303,7 +315,8 @@ ${extra}`;
       const path = join(this.fakes, "github.json");
       const state = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { prs: [] };
       change(state);
-      writeFileSync(path, JSON.stringify(state, null, 2));
+      writeFileSync(`${path}.tmp`, JSON.stringify(state, null, 2));
+      renameSync(`${path}.tmp`, path);
     } finally {
       rmdirSync(lock);
     }

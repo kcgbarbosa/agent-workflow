@@ -20,11 +20,12 @@ When the Epic merges, a pull request deletes the spec, and the Spec line of the 
 
 Issues carry these fields.
 
-| Field    | Values                              | Who sets it                  |
-| -------- | ----------------------------------- | ---------------------------- |
-| Status   | To Do, In Progress, In Review, Done | The loop                     |
-| Priority | Highest, High, Medium, Low          | The owner                    |
-| Sprint   | The board's sprints                 | The owner                    |
+| Field     | Values                                                               | Who sets it   |
+| --------- | -------------------------------------------------------------------- | ------------- |
+| Status    | To Do, In Progress, In Review, Done                                  | The loop      |
+| Priority  | Highest, High, Medium, Low                                           | The owner     |
+| Sprint    | The board's sprints                                                  | The owner     |
+| Component | The repo the ticket changes, or `manual` for a ticket no loop builds | `/to-tickets` |
 
 The owner sets priority and the other hand-set fields. A skill that creates an issue leaves them at the Jira default or empty.
 

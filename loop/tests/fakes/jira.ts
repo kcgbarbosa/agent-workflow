@@ -11,6 +11,8 @@ export type Issue = {
   parent: string | null;
   blockers: string[];
   flagged: boolean;
+  /** The Jira components, which name the repo a ticket changes, or `manual`. */
+  components: string[];
   comments: string[];
   body: string[];
   /** The statuses the loop moved the issue to, in order. */
@@ -78,6 +80,7 @@ export class FakeJira {
       parent: null,
       blockers: [],
       flagged: false,
+      components: ["demo"],
       comments: [],
       body: [`The work of ${key}.`],
       statuses: [],
@@ -98,6 +101,7 @@ export class FakeJira {
         description: adf(issue.body),
         parent: issue.parent ? { key: issue.parent } : null,
         customfield_10021: issue.flagged ? [{ value: "Impediment" }] : null,
+        components: issue.components.map((name) => ({ name })),
         issuelinks: issue.blockers.map((key) => {
           const status = this.issues.get(key)?.status ?? "To Do";
           return {

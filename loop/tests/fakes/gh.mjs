@@ -7,15 +7,23 @@
 // FAKE_DIR/no-retarget exists. A new pull request gets the review of FAKE_DIR/reviews.json by ticket key, in
 // the shape the gate's review posts: the findings in the diff as comments, and the others in the body. A draft
 // pull request does not merge, as on GitHub. Auto-merge also waits for each check that FAKE_DIR/required.json
-// names to report, as branch protection's required checks do.
+// names to report, as branch protection's required checks do. Another repo is a bare origin beside FAKE_ORIGIN,
+// `<name>.git`: `gh repo clone` clones it, and a call in its clone acts on its pull requests only.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 const fakes = process.env.FAKE_DIR;
 const origin = process.env.FAKE_ORIGIN;
 const store = join(fakes, "github.json");
 const args = process.argv.slice(2);
+// The origin of the repo the call runs in: FAKE_ORIGIN, or another repo's bare origin.
+let here = origin;
+try {
+  const remote = execFileSync("git", ["remote", "get-url", "origin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  if (remote && remote !== origin && existsSync(remote)) here = remote;
+} catch {}
+const repoName = (at) => (at === origin ? "demo" : basename(at, ".git"));
 appendFileSync(join(fakes, "gh.jsonl"), JSON.stringify({ args }) + "\n");
 
 // One call at a time, since two tickets' calls that read and write github.json at once lose a write.
@@ -31,7 +39,11 @@ for (;;) {
 process.on("exit", () => rmdirSync(lock));
 
 const state = existsSync(store) ? JSON.parse(readFileSync(store, "utf8")) : { prs: [] };
-const save = () => writeFileSync(store, JSON.stringify(state, null, 2));
+// A rename replaces the file whole, so a test that reads it without the lock never reads half a write.
+const save = () => {
+  writeFileSync(`${store}.tmp`, JSON.stringify(state, null, 2));
+  renameSync(`${store}.tmp`, store);
+};
 const option = (name) => {
   const index = args.indexOf(`--${name}`);
   return index >= 0 ? args[index + 1] : undefined;
@@ -51,7 +63,8 @@ const green = (pr) =>
   pr.checks.length > 0 &&
   pr.checks.every((check) => check.bucket === "pass" || check.bucket === "skipping") &&
   required.every((name) => pr.checks.some((check) => check.name === name));
-const git = (...command) => execFileSync("git", ["-C", origin, ...command], { encoding: "utf8" }).trim();
+const originOf = (pr) => pr.origin ?? origin;
+const gitAt = (at, ...command) => execFileSync("git", ["-C", at, ...command], { encoding: "utf8" }).trim();
 const keyOf = (branch) => /^(?:feat|fix|docs)\/([A-Z][A-Z0-9]*-\d+)-/.exec(branch)?.[1];
 const verdicts = existsSync(join(fakes, "verdicts.json")) ? JSON.parse(readFileSync(join(fakes, "verdicts.json"), "utf8")) : {};
 
@@ -75,6 +88,7 @@ function check(pr) {
 
 function squash(pr) {
   const base = `refs/heads/${pr.baseRefName}`;
+  const git = (...command) => gitAt(originOf(pr), ...command);
   const tree = git("merge-tree", "--write-tree", base, `refs/heads/${pr.headRefName}`).split("\n")[0];
   const commit = git("commit-tree", tree, "-p", base, "-m", `${pr.title} (#${pr.number})`);
   git("update-ref", base, commit);
@@ -92,7 +106,7 @@ function squash(pr) {
 let settled = false;
 for (const pr of state.prs) {
   if (pr.state !== "OPEN") continue;
-  const oid = git("for-each-ref", "--format=%(objectname)", `refs/heads/${pr.headRefName}`);
+  const oid = gitAt(originOf(pr), "for-each-ref", "--format=%(objectname)", `refs/heads/${pr.headRefName}`);
   if (oid && oid !== pr.headRefOid) {
     pr.headRefOid = oid;
     pr.pushes = (pr.pushes ?? 0) + 1;
@@ -129,6 +143,11 @@ if (noun === "api") {
   for (const item of items) console.log(JSON.stringify(item));
   process.exit(0);
 }
+if (noun === "repo" && verb === "clone") {
+  const [, , url, folder] = args;
+  gitAt(dirname(origin), "clone", "--quiet", join(dirname(origin), `${basename(url)}.git`), folder);
+  process.exit(0);
+}
 if (noun !== "pr") fail(`fake gh: no ${noun}`);
 if (verb === "list") {
   const wanted = option("state") ?? "open";
@@ -139,6 +158,7 @@ if (verb === "list") {
   const words = (text) => text.split(/[^A-Za-z0-9]+/).filter(Boolean).join(" ");
   const prs = state.prs.filter(
     (pr) =>
+      originOf(pr) === here &&
       (wanted === "all" || pr.state === wanted.toUpperCase()) &&
       (head === undefined || pr.headRefName === head) &&
       (base === undefined || pr.baseRefName === base) &&
@@ -154,7 +174,7 @@ if (verb === "list") {
   const number = 100 + state.prs.length;
   const pr = {
     number,
-    url: `https://github.com/kcgbarbosa/demo/pull/${number}`,
+    url: `https://github.com/kcgbarbosa/${repoName(here)}/pull/${number}`,
     headRefName: head,
     baseRefName: option("base"),
     title: option("title"),
@@ -163,16 +183,17 @@ if (verb === "list") {
     isDraft: false,
     autoMerge: null,
     mergeCommit: null,
-    headRefOid: git("rev-parse", `refs/heads/${head}`),
+    headRefOid: gitAt(here, "rev-parse", `refs/heads/${head}`),
     pushes: 1,
     reviews: [],
   };
+  if (here !== origin) pr.origin = here;
   pr.checks = [check(pr)];
   const reviews = existsSync(join(fakes, "reviews.json")) ? JSON.parse(readFileSync(join(fakes, "reviews.json"), "utf8")) : {};
   if (reviews[keyOf(head)]) pr.reviews.push(review(pr, reviews[keyOf(head)]));
   state.prs.push(pr);
   save();
-  console.log(`https://github.com/kcgbarbosa/demo/pull/${number}`);
+  console.log(pr.url);
 } else if (verb === "merge") {
   const pr = find(args[2]);
   if (pr.state !== "OPEN") fail(`Pull request #${pr.number} is not open`);

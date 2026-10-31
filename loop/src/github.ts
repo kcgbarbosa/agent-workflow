@@ -60,6 +60,11 @@ export async function autoMerge(cwd: string, url: string): Promise<void> {
   await gh(cwd, ["pr", "merge", url, "--auto", "--squash"]);
 }
 
+/** Clones the repo at its address on GitHub into the folder, with the git protocol and sign-in that gh has. */
+export async function clone(cwd: string, url: string, folder: string): Promise<void> {
+  await gh(cwd, ["repo", "clone", url, folder, "--", "--quiet"]);
+}
+
 /** The open pull requests that target the branch, as a stacked ticket's does. */
 export async function stackedOn(cwd: string, branch: string): Promise<PullRequest[]> {
   return JSON.parse((await gh(cwd, ["pr", "list", "--base", branch, "--state", "open", "--json", FIELDS])).stdout || "[]") as PullRequest[];

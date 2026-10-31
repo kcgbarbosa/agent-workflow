@@ -8,12 +8,12 @@ The loop runs from `~/dev/agent-workflow`, through the `~/.local/bin/loop` link 
 
 ### Run
 
-On t14: `cd ~/dev/agent-workflow && loop start <Epic key>`, which fast-forwards the checkout first. `loop stop <Epic key>` ends a run. From another device, run it from a T3 Code thread on t14.
+On t14: `cd ~/dev/agent-workflow && loop start <Epic key>`, which fast-forwards the checkout first. `loop stop <Epic key>` ends a run. An Epic with tickets in machines too, such as AW-8, takes one `loop start <Epic key>` in each repo, and each builds only its own tickets. From another device, run it from a T3 Code thread on t14.
 
 ### Tracker
 
 Jira, project `AW`. `loop.toml` gives the site. Children are `parent = <Epic key>`. Edges are the "Blocks" link type, which `to-tickets` writes.
-`name_landed_keys_only` is on. The design's Tracker section gives what the loop does with it.
+Each ticket's Jira component is the repo it changes, `agent-workflow` or `machines`, or `manual` for a step only KC can do. `loop.toml` sets no `component`, so a run here builds the `agent-workflow` tickets.
 
 ### Status and stuck marker
 
@@ -21,7 +21,7 @@ The loop sets In Progress when a ticket starts, In Review when its pull request 
 
 ### Human steps
 
-None planned. KC's `gh` login on t14 has admin on the repo, so an agent can change repo settings through `gh api`. When auto mode holds such a change, KC approves it from the phone.
+A step only KC can do is a ticket with the component `manual`, which no loop builds. KC sets it Done, and the next run starts the tickets that wait on it. KC's `gh` login on t14 has admin on the repo, so an agent can change repo settings through `gh api`. When auto mode holds such a change, KC approves it from the phone.
 
 ### Branches and commits
 
