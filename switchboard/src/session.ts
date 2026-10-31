@@ -9,8 +9,8 @@ import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 
-// What the session is told about the call. The Python package reads the same file until the cutover.
-export const PROMPT = new URL("switchboard/prompt.md", import.meta.url);
+// What the session is told about the call.
+export const PROMPT = new URL("prompt.md", import.meta.url);
 
 // Each ask starts with this tag, so the reader can tell the turn that answers it from a turn a message woke.
 export const tag = (id: number) => `[voice:${id}]`;

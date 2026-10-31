@@ -57,7 +57,7 @@ The Jira email and API token, the ntfy topic, and the Claude token of the loop a
 
 ### Hosts
 
-`t14` only. The machine README, `~/.local/share/chezmoi/README.md`, gives how to reach it.
+`t14` only. The machine README, `~/dev/machines/README.md`, gives how to reach it.
 
 ### Limits
 
