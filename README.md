@@ -7,12 +7,13 @@ skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
 agents/<name>.md a subagent tier on a cheaper model. The loop gives its agents the same files
 loop/            the loop command, which turns each ticket of an Epic into a pull request, unattended. Its design is skills/setup-loop/loop.md
 switchboard/     a phone line to the Claude Code sessions on the T14, for the car. Its README is the setup
-config/          the shared Claude Code files settings.json, statusline.sh, keybindings.json and notify.sh. install.sh links them into ~/.claude
+config/          the shared Claude Code files settings.json, statusline.sh, keybindings.json, notify.sh and format-markdown.ts, the hook that runs Prettier on each Markdown file an agent edits. install.sh links them into ~/.claude
 docs/            project-skills.md, the registry of skills that live in project repos
 config/CLAUDE.md the global instructions, linked to ~/.claude/CLAUDE.md, the name Claude Code reads
 AGENTS.md        this repo's own instructions
 install.sh       makes the links and installs the loop command. Safe to run again
-tests/           the repo-level checks. make check runs them with the loop, switchboard and shellcheck checks
+tests/           the repo checks on Vitest, and the gate scripts' tests on pytest. make check runs them after the checks of lefthook.yml
+lefthook.yml     every format, lint and policy check of this repo, run at each commit and first in make check
 .github/         the shared merge gate, workflows/gate.yml, which every repo calls, and this repo's own call to it
 actions/         the gate's review and UI judge, composite actions that the gate runs beside and after the check
 Makefile         make check, the gate's check for this repo
@@ -21,7 +22,7 @@ licenses/        upstream licenses. Keep
 
 `install.sh` skips a real folder or file at a skill, tier or `CLAUDE.md` target and names it. It leaves other entries in `~/.claude/skills` and `~/.claude/agents` alone.
 
-For the four files from `config/`, a real file at the target is moved to `<name>.bak`, or to a name with a timestamp suffix when that exists, and a message goes to stderr. A link to somewhere outside this repo is left alone and reported.
+For the shared files from `config/`, a real file at the target is moved to `<name>.bak`, or to a name with a timestamp suffix when that exists, and a message goes to stderr. A link to somewhere outside this repo is left alone and reported.
 
 ## Computer
 
