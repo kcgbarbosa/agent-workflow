@@ -1,7 +1,7 @@
 // One scenario's world: a git repo with a bare origin, the fake Jira, the fake `gh`, the fake `claude`, and
 // the loop's own checkout with an origin of its own, all in a temporary folder with no network.
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -315,7 +315,8 @@ ${extra}`;
       const path = join(this.fakes, "github.json");
       const state = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : { prs: [] };
       change(state);
-      writeFileSync(path, JSON.stringify(state, null, 2));
+      writeFileSync(`${path}.tmp`, JSON.stringify(state, null, 2));
+      renameSync(`${path}.tmp`, path);
     } finally {
       rmdirSync(lock);
     }

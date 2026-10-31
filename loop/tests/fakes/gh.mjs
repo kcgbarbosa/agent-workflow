@@ -10,7 +10,7 @@
 // names to report, as branch protection's required checks do. Another repo is a bare origin beside FAKE_ORIGIN,
 // `<name>.git`: `gh repo clone` clones it, and a call in its clone acts on its pull requests only.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 const fakes = process.env.FAKE_DIR;
@@ -39,7 +39,11 @@ for (;;) {
 process.on("exit", () => rmdirSync(lock));
 
 const state = existsSync(store) ? JSON.parse(readFileSync(store, "utf8")) : { prs: [] };
-const save = () => writeFileSync(store, JSON.stringify(state, null, 2));
+// A rename replaces the file whole, so a test that reads it without the lock never reads half a write.
+const save = () => {
+  writeFileSync(`${store}.tmp`, JSON.stringify(state, null, 2));
+  renameSync(`${store}.tmp`, store);
+};
 const option = (name) => {
   const index = args.indexOf(`--${name}`);
   return index >= 0 ? args[index + 1] : undefined;
