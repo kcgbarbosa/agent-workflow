@@ -40,8 +40,11 @@ const USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now res
 
 const STUCK_COMMENT = "The loop stopped this ticket.";
 
-/** The status an Epic takes when its last ticket merges. */
-const EPIC_DONE = "Done";
+/** The status a ticket takes when its pull request merges, and an Epic when its last ticket merges. */
+const DONE = "Done";
+
+/** The lines of a failed setup's output that the stuck reason quotes. */
+const SETUP_TAIL = 20;
 
 /** The required check that fails while the pull request has the hold label. It is a pause, not a red gate, as a draft is. */
 const HOLD_CHECK = "hold";
@@ -247,8 +250,8 @@ export class Run {
       return false;
     }
     try {
-      await this.jira.transition(this.epic, EPIC_DONE);
-      this.log.write(this.name, "complete", "ok", { detail: `${this.epic} is ${EPIC_DONE}.${stillOpen}` });
+      await this.jira.transition(this.epic, DONE);
+      this.log.write(this.name, "complete", "ok", { detail: `${this.epic} is ${DONE}.${stillOpen}` });
     } catch (error) {
       this.log.write(this.name, "complete", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
       return false;
@@ -308,10 +311,16 @@ export class Run {
     await git(repo, "fetch", "--prune", "--quiet", "origin");
     const stack = this.stackOn(ticket);
     const base = stack?.branch ?? main;
-    const branch = await this.worktree(ticket, worktree, base);
+    const { branch, added } = await this.worktree(ticket, worktree, base);
     this.log.write(key, "start", restart ? "restart" : "new", { detail: branch, slot, ...(stack ? { base, pr: stack.url } : {}) });
     if (ticket.status !== this.config.inProgress) await this.status(key, this.config.inProgress);
     await this.writeTicket(ticket, branch, runDir, stack);
+    // A restart runs it again when the setup of the earlier run did not pass.
+    const setUp = this.log.lines().some((line) => line.ticket === key && line.step === "worktree" && line.result === "setup");
+    if (this.config.setup.length && (added || !setUp)) {
+      const failed = await this.setup(key, worktree);
+      if (failed) return this.stuck(key, failed, null);
+    }
 
     let prompt = `/implement ${join(runDir, "ticket.md")}`;
     let url: string | null = null;
@@ -424,8 +433,12 @@ export class Run {
     return "merged";
   }
 
-  /** Moves a merged ticket's dependents to its base, and removes its worktree and branch. */
+  /**
+   * Moves a merged ticket to Done unless it is already done, also one that merged before this run, then moves its
+   * dependents to its base, and removes its worktree and branch.
+   */
   private async afterMerge(key: string, branch: string, base: string): Promise<void> {
+    if (!this.byKey.get(key)?.done) await this.status(key, DONE);
     await this.retarget(key, branch, base);
     await this.removeWorktree(key, branch);
   }
@@ -665,16 +678,35 @@ export class Run {
     return { branch, local: local !== undefined, remote: remote !== undefined };
   }
 
-  /** Reuses the ticket's branch and worktree from an earlier run, or branches from the base: main, or the blocker's branch. */
-  private async worktree(ticket: Ticket, path: string, base: string): Promise<string> {
+  /**
+   * Reuses the ticket's branch and worktree from an earlier run, or branches from the base: main, or the blocker's
+   * branch. `added` is true when the worktree is new.
+   */
+  private async worktree(ticket: Ticket, path: string, base: string): Promise<{ branch: string; added: boolean }> {
     const repo = this.config.repo;
     const { branch, local, remote } = await this.branchOf(ticket);
     await git(repo, "worktree", "prune");
-    if (existsSync(path)) return branch;
+    if (existsSync(path)) return { branch, added: false };
     if (local) await git(repo, "worktree", "add", "--quiet", path, branch);
     else if (remote) await git(repo, "worktree", "add", "--quiet", "--track", "-b", branch, path, `origin/${branch}`);
     else await git(repo, "worktree", "add", "--quiet", "--no-track", "-b", branch, path, `origin/${base}`);
-    return branch;
+    return { branch, added: true };
+  }
+
+  /** Runs `setup` in the ticket's worktree, and returns why it failed, with the tail of its output, or null. */
+  private async setup(key: string, worktree: string): Promise<string | null> {
+    const [command, ...args] = this.config.setup;
+    const shown = this.config.setup.join(" ");
+    const minutes = this.config.agentTimeoutMinutes;
+    const done = await run(command!, args, { cwd: worktree, seconds: minutes * 60 });
+    if (done.code === 0 && !done.timedOut) {
+      this.log.write(key, "worktree", "setup", { detail: shown });
+      return null;
+    }
+    const output = [done.stdout.trimEnd(), done.stderr.trimEnd()].filter(Boolean).join("\n");
+    const tail = output.split("\n").slice(-SETUP_TAIL).join("\n");
+    const why = done.timedOut ? `ran past its limit of ${minutes} min` : `exited with ${done.code}`;
+    return `The setup command \`${shown}\` ${why} in ${worktree}. Its output ends:\n${tail}`;
   }
 
   private async writeTicket(ticket: Ticket, branch: string, runDir: string, stack: Stack | null): Promise<void> {

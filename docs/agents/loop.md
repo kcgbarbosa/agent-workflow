@@ -13,11 +13,11 @@ On t14: `cd ~/dev/agent-workflow && loop start <Epic key>`, which fast-forwards 
 ### Tracker
 
 Jira, project `AW`. `loop.toml` gives the site. Children are `parent = <Epic key>`. Edges are the "Blocks" link type, which `to-tickets` writes.
-`name_landed_keys_only` is on. The design's Tracker section gives what the loop does with it. If a merged pull request leaves its ticket open, an agent moves it to Done through the Jira API.
+`name_landed_keys_only` is on. The design's Tracker section gives what the loop does with it.
 
 ### Status and stuck marker
 
-The loop sets In Progress when a ticket starts and In Review when its pull request opens, and Done on the Epic when its last ticket merges. A stuck ticket gets the Jira Flagged field and a comment. KC sets priority and the sprint.
+The loop sets In Progress when a ticket starts, In Review when its pull request opens, Done when it merges, and Done on the Epic when its last ticket merges. A stuck ticket gets the Jira Flagged field and a comment. KC sets priority and the sprint.
 
 ### Human steps
 
@@ -29,7 +29,7 @@ None planned. KC's `gh` login on t14 has admin on the repo, so an agent can chan
 
 ### Gate
 
-The shared merge gate, through `.github/workflows/pull-request.yml`. It runs `make check`, and `make check-docs` on a docs-only pull request. `loop.toml` turns the review on and gives the agent hint. shellcheck runs through `uvx --from shellcheck-py`, so the host needs no install.
+The shared merge gate, through `.github/workflows/pull-request.yml`. It runs `make check`, and `make check-docs` on a docs-only pull request. `loop.toml` turns the review on, gives the agent hint, and runs `make loop-deps` in each new worktree. shellcheck runs through `uvx --from shellcheck-py`, so the host needs no install.
 
 ### Stack per worktree
 

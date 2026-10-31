@@ -21,7 +21,7 @@ A person can also ask a remote session on the host to run it. The run is a syste
 
 ## Tracker
 
-**Find.** Open a finished Epic in the tracker. List its children with the query `parent = TIDE-12`. Open one child that had a blocker and read its links. Read the exact status names in the workflow, and the automation rules in the project settings.
+**Find.** Open a finished Epic in the tracker. List its children with the query `parent = TIDE-12`. Open one child that had a blocker and read its links. Read the exact status names in the workflow.
 
 **Choose.**
 
@@ -37,7 +37,7 @@ A person can also ask a remote session on the host to run it. The run is a syste
 
 ## Status and stuck marker
 
-**Choose.** The loop sets the two statuses of Tracker, flags a stuck ticket, and sets the Epic to `Done` when its last ticket merges. The tracker's automation sets a ticket's Done, when the pull request that names the key merges into `main`. In Jira, a rule that another rule's change must start needs the setting that lets other rules trigger it. Priority, labels, and sprints stay with a person, because the loop never reads them.
+**Choose.** The loop sets the two statuses of Tracker, sets a ticket to `Done` when its pull request merges, flags a stuck ticket, and sets the Epic to `Done` when its last ticket merges. The loop sets the done status, not the tracker's automation, so plan no automation rule for it. Priority, labels, and sprints stay with a person, because the loop never reads them.
 
 **Check.** A flagged ticket stands out on the board the team uses. If it does not, add the flag to the board's card layout, because it is the only sign of a stuck ticket there.
 
@@ -70,6 +70,7 @@ Write the rule in the issue tracker doc, so `to-tickets` follows it:
 - The shared merge gate checks every pull request, and the loop runs no gate of its own. `/setup-repo` puts the repo on it: the caller workflow, the `check` and `check-docs` make targets, the toolchain file, and the branch protection.
 - `[review]` `enabled` turns the gate's second-model review on or off. Off suits a small private repo. `model`, `effort`, and `skip` override the gate's defaults.
 - `agent_hint` is one line for what the gate does not say, such as "`make test` starts the database of this worktree's stack". Put in it only what an agent cannot find by looking.
+- `setup` is the command that installs a new worktree's packages, such as `["make", "deps"]`, so no agent spends its first test run on a missing `node_modules`. Leave it out when the tests need no install.
 
 **Check.**
 

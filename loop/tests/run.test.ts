@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { EPIC, World } from "./world.ts";
 
@@ -71,8 +71,9 @@ test("the loop waits for the pull request's checks and merges on green", async (
   expect(world.prs()[0]!.state).toBe("MERGED");
   const wait = world.decisions().find((line) => line.step === "wait");
   expect(wait).toMatchObject({ result: "green", pr: world.prs()[0]!.url, checks: [{ name: "gate / check", bucket: "pass" }] });
-  expect(world.steps().slice(-7)).toEqual([
+  expect(world.steps().slice(-8)).toEqual([
     "DEMO-2 merge merged",
+    "DEMO-2 tracker-status ok",
     "DEMO-2 worktree removed",
     "DEMO-1 archive no-spec",
     "DEMO-1 complete ok",
@@ -225,7 +226,7 @@ test("a ticket with no Epic names the spec from its own text", async () => {
   expect(world.prs()[0]!.body).toContain("Add the login page. Spec: docs/specs/login.md\n");
 });
 
-test("the ticket goes to In Progress at start and In Review when the pull request opens, and the loop sets nothing after the merge", async () => {
+test("the ticket goes to In Progress at start, In Review when the pull request opens, and Done when it merges", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.jira.add("DEMO-3", "Already in progress", { parent: EPIC, status: "In Progress" });
   world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
@@ -233,14 +234,75 @@ test("the ticket goes to In Progress at start and In Review when the pull reques
   const ran = await world.loop("run", EPIC);
 
   expect(ran.code, ran.stderr).toBe(0);
-  expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual(["In Progress", "In Review"]);
-  expect(world.jira.issues.get("DEMO-3")!.statuses).toEqual(["In Review"]);
+  expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual(["In Progress", "In Review", "Done"]);
+  expect(world.jira.issues.get("DEMO-3")!.statuses).toEqual(["In Review", "Done"]);
   const steps = world.steps().filter((step) => step.startsWith("DEMO-2"));
   expect(steps.indexOf("DEMO-2 tracker-status ok")).toBeLessThan(steps.indexOf("DEMO-2 build started"));
-  expect(steps.lastIndexOf("DEMO-2 tracker-status ok")).toBe(steps.indexOf("DEMO-2 pr open") + 1);
-  // Jira Automation moves the ticket to Done at the merge, so the loop sets nothing after it.
-  expect(steps.lastIndexOf("DEMO-2 tracker-status ok")).toBeLessThan(steps.indexOf("DEMO-2 merge merged"));
+  expect(steps.indexOf("DEMO-2 tracker-status ok", steps.indexOf("DEMO-2 build started"))).toBe(steps.indexOf("DEMO-2 pr open") + 1);
+  expect(steps.lastIndexOf("DEMO-2 tracker-status ok")).toBe(steps.indexOf("DEMO-2 merge merged") + 1);
+  expect(world.decisions().findLast((line) => line.ticket === "DEMO-2" && line.step === "tracker-status")).toMatchObject({ detail: "Done" });
+  expect(world.jira.issues.get("DEMO-2")!.status).toBe("Done");
+});
+
+test("a merged ticket the workflow cannot move to Done logs the failure, and the run goes on", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC, unreachable: ["Done"] });
+  world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
+  world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
   expect(world.jira.issues.get("DEMO-2")!.status).toBe("In Review");
+  expect(world.decisions().findLast((line) => line.ticket === "DEMO-2" && line.step === "tracker-status")).toMatchObject({
+    result: "fail",
+    detail: "Done: DEMO-2 has no transition to Done",
+  });
+  expect(world.steps()).toContain("DEMO-3 merge merged");
+  expect(world.jira.issues.get("DEMO-3")!.status).toBe("Done");
+});
+
+test("the setup command runs in the new worktree before the build", async () => {
+  const out = `${world.fakes}/setup-cwd`;
+  world.writeConfig("", `setup = ["sh", "-c", "pwd > ${out}"]`);
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(readFileSync(out, "utf8").trim()).toBe(`${world.state}/${EPIC}/worktrees/DEMO-2`);
+  const steps = world.steps();
+  expect(steps.indexOf("DEMO-2 worktree setup")).toBeGreaterThan(steps.indexOf("DEMO-2 start new"));
+  expect(steps.indexOf("DEMO-2 worktree setup")).toBeLessThan(steps.indexOf("DEMO-2 build started"));
+});
+
+test("a failing setup command makes the ticket stuck with the tail of its output, and no agent runs", async () => {
+  const lines = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\\\\n");
+  world.writeConfig("", `setup = ["sh", "-c", "printf '${lines}\\\\n'; echo 'npm ERR! missing lock' >&2; exit 3"]`);
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code).toBe(1);
+  expect(world.calls()).toEqual([]);
+  const issue = world.jira.issues.get("DEMO-2")!;
+  expect(issue.flagged).toBe(true);
+  expect(issue.comments[0]).toContain("The setup command `sh -c");
+  expect(issue.comments[0]).toContain("exited with 3");
+  expect(issue.comments[0]).toContain("line 30\nnpm ERR! missing lock");
+  expect(issue.comments[0]).not.toContain("line 5\n");
+  expect(world.steps()).toContain("DEMO-2 stuck ok");
+  expect(world.steps()).not.toContain("DEMO-2 build started");
+});
+
+test("no setup key runs no setup command", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.steps().filter((step) => step.includes("setup"))).toEqual([]);
 });
 
 test("a ticket whose pull request merged before the run counts as done, and its dependent builds", async () => {
@@ -261,7 +323,21 @@ test("a ticket whose pull request merged before the run counts as done, and its 
     result: "merged-before",
     pr: world.prs()[0]!.url,
   });
+  expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual(["Done"]);
+  expect(world.steps().slice(world.steps().indexOf("DEMO-2 start merged-before"))[1]).toBe("DEMO-2 tracker-status ok");
+});
+
+test("a ticket whose pull request merged before the run and that is already Done gets no transition", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC, status: "Done" });
+  world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
+  world.mergedBefore("DEMO-2", "feat/DEMO-2-add-the-login-page");
+  world.verdicts({ "DEMO-3": "pass" });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
   expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual([]);
+  expect(world.jira.issues.get("DEMO-3")!.statuses).toEqual(["In Progress", "In Review", "Done"]);
 });
 
 test("a restart does not rebuild a ticket the first run merged, and removes the worktree a kill left behind", async () => {
@@ -355,6 +431,7 @@ test("the decisions log has one line per step, and no gate, review, land, or Epi
     "DEMO-2 tracker-status ok",
     "DEMO-2 wait green",
     "DEMO-2 merge merged",
+    "DEMO-2 tracker-status ok",
     "DEMO-2 worktree removed",
     "DEMO-1 archive no-spec",
     "DEMO-1 complete ok",

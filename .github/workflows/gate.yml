@@ -1,7 +1,8 @@
 name: gate
 
 # The shared merge gate. A repo calls it from the pull-request workflow that setup-repo writes, so every repo runs the same checks.
-# The repo's own `make check` decides what green means. The review and the judge run after it, so a broken build never pays for a model.
+# The repo's own `make check` decides what green means. The review starts beside it, so its wait does not add to the check's.
+# The judge runs after it, for its screenshots.
 on:
   workflow_call:
     inputs:
@@ -46,15 +47,16 @@ on:
         required: false
 
 jobs:
-  check:
+  # Works out from the diff whether the pull request is docs-only, which the check and the review both need.
+  paths:
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
     outputs:
       docs-only: ${{ steps.paths.outputs.docs-only }}
-      screenshots: ${{ steps.screenshots.outputs.screenshots }}
     steps:
       - uses: actions/checkout@v7
+        if: inputs.docs-only
         with:
           fetch-depth: 0
       # The checkout is the pull request merged into its base, so the first parent is the base.
@@ -65,6 +67,20 @@ jobs:
           if [ -n "$changed" ] && ! grep -qvE '(\.md$|^docs/)' <<<"$changed"; then
             echo "docs-only=true" >> "$GITHUB_OUTPUT"
           fi
+
+  # A failed `paths` leaves docs-only unset, so the check and the review run in full and a skip never passes the gate.
+  check:
+    needs: paths
+    if: ${{ !cancelled() }}
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+    outputs:
+      screenshots: ${{ steps.screenshots.outputs.screenshots }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       # The repo's pinned toolchain, so the runner uses the same versions as the T14.
       - if: hashFiles('mise.toml', '.mise.toml', '.tool-versions', '.config/mise.toml') != ''
         uses: jdx/mise-action@v5
@@ -90,7 +106,7 @@ jobs:
           unset CHECK_ENV
           bash -c "$COMMAND"
         env:
-          COMMAND: ${{ steps.paths.outputs.docs-only == 'true' && inputs.docs-check || inputs.check }}
+          COMMAND: ${{ needs.paths.outputs.docs-only == 'true' && inputs.docs-check || inputs.check }}
           CHECK_ENV: ${{ secrets.CHECK_ENV }}
       # actions/judge/action.yml gives the folder that the repo's browser tests write.
       - id: screenshots
@@ -106,8 +122,8 @@ jobs:
 
   # A docs-only pull request skips the review, and a skipped job reports success.
   review:
-    needs: check
-    if: needs.check.outputs.docs-only != 'true'
+    needs: paths
+    if: ${{ !cancelled() && needs.paths.outputs.docs-only != 'true' }}
     runs-on: ${{ inputs.runner }}
     # A good review takes under 10 minutes. Without a limit, a stalled one holds the merge for 6 hours.
     timeout-minutes: 30

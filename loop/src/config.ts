@@ -26,6 +26,8 @@ export type Config = {
   name: string;
   mainBranch: string;
   tools: string[];
+  /** The command the loop runs in a new worktree before the build, or none. */
+  setup: string[];
   agentHint: string;
   trackerUrl: string;
   inProgress: string;
@@ -246,6 +248,7 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     name,
     mainBranch: top.text("main_branch", "main"),
     tools: top.texts("tools", []),
+    setup: top.texts("setup", []),
     agentHint: top.text("agent_hint", ""),
     trackerUrl: tracker.text("url"),
     inProgress: tracker.text("in_progress", "In Progress"),

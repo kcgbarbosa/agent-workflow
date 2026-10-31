@@ -111,8 +111,10 @@ export class World {
     this.git(clone, "push", "--quiet", "-u", "origin", "HEAD:main");
   }
 
-  writeConfig(extra = ""): void {
+  /** `top` holds top-level keys, which TOML needs before the first table. */
+  writeConfig(extra = "", top = ""): void {
     const config = `name = "demo"
+${top}
 
 [tracker]
 kind = "jira"

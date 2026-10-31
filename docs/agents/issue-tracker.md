@@ -22,7 +22,7 @@ Issues carry these fields.
 
 | Field    | Values                              | Who sets it                  |
 | -------- | ----------------------------------- | ---------------------------- |
-| Status   | To Do, In Progress, In Review, Done | The loop and Jira Automation |
+| Status   | To Do, In Progress, In Review, Done | The loop                     |
 | Priority | Highest, High, Medium, Low          | The owner                    |
 | Sprint   | The board's sprints                 | The owner                    |
 
