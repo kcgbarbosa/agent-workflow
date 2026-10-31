@@ -16,7 +16,7 @@ pre-commit:
       run: npx oxlint {staged_files}
     tsc:
       glob: "*.ts"
-      run: npx tsc && cd loop && npx tsc
+      run: npx tsc && cd loop && npx tsc && cd ../switchboard && npx tsc
     # Through uvx, so no host or runner needs a shellcheck install, until the pin has shellcheck.
     shellcheck:
       glob: ["*.sh", "loop/bin/loop"]

@@ -1,5 +1,5 @@
 # The gate runs `make check` on each pull request, and `make check-docs` on one that changes only `*.md` files and `docs/`.
-.PHONY: check check-docs hooks root root-deps gate loop loop-deps switchboard
+.PHONY: check check-docs hooks root root-deps gate loop loop-deps switchboard switchboard-deps
 
 check: hooks root gate loop switchboard
 
@@ -8,7 +8,7 @@ check-docs: hooks root
 	cd loop && npx vitest run tests/docs.test.ts
 
 # Every check of `lefthook.yml`, on all files. It fails when a check fails or when a formatter changed a file.
-hooks: root-deps loop-deps
+hooks: root-deps loop-deps switchboard-deps
 	lefthook run pre-commit --all-files --no-stage-fixed --no-auto-install
 	git diff --exit-code
 
@@ -30,6 +30,11 @@ loop: loop-deps
 loop-deps:
 	cd loop && npm ci --prefer-offline --no-audit --no-fund --silent
 
+# The switchboard in TypeScript, and the Python one that the live unit runs until the cutover.
 # `uv lock --check` fails on a stale lock, which `uv run` would rewrite.
-switchboard:
+switchboard: switchboard-deps
+	cd $@ && npx tsc && npx vitest run
 	cd $@ && uv lock --check && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest
+
+switchboard-deps:
+	cd switchboard && npm ci --prefer-offline --no-audit --no-fund --silent
