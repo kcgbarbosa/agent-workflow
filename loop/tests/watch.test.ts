@@ -1,7 +1,7 @@
 // What KC sees of a run from the phone: the watch page, the cost report, and the forecast, all read from the
 // decisions log, so they work with no network.
 import { execFileSync } from "node:child_process";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { EPIC, type Watching, World } from "./world.ts";
@@ -512,4 +512,248 @@ test("a project with no earlier figure has no typical share", async () => {
   const { body: view } = await watching.get(`/api/epic/${EPIC}?project=demo`);
 
   expect(view.plan).toMatchObject({ per_merged: { five_hour: 5 }, typical: null, warn: false });
+});
+
+const SECRET = "a-long-jira-token-value";
+// The steps the log leaves out: the plan meter and the loop's bookkeeping.
+const LEFT_OUT = ["meter", "tracker-status", "frontier", "notify", "agent"];
+
+/** The lines, one minute apart from the start. */
+function from(start: string, lines: object[]): object[] {
+  return lines.map((line, index) => ({ time: new Date(Date.parse(start) + index * 60_000).toISOString().replace(/\.\d+Z$/, "+00:00"), ...line }));
+}
+
+/** A frontier line of the run's Epic and its tickets. */
+function frontier(epic: string, summary: string, keys: string[]): object {
+  return { ticket: epic, step: "frontier", result: "ok", summary, tickets: keys.map((key) => ({ key, summary: `Work on ${key}`, status: "To Do", state: "ready", blockers: [] })) };
+}
+
+/** A ticket's lines from its start to its merge. */
+function mergedTicket(key: string): object[] {
+  return [...opened(key, `${PR}${key}`), { ticket: key, step: "wait", result: "green", pr: `${PR}${key}`, checks: [] }, { ticket: key, step: "merge", result: "merged", pr: `${PR}${key}` }];
+}
+
+/** A host of four projects: demo runs two tickets in different steps, beta's running run has a held pull
+ * request, gamma's newest run completed after an older blocked one, and delta has no runs. The logs hold more
+ * than 50 work lines, the lines the log leaves out, and one line whose detail holds a secret.
+ */
+function fourProjects(): void {
+  world.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: SECRET, NTFY_TOPIC: "topic" });
+  world.record(from("2026-10-31T09:00:00Z", [
+    { ticket: EPIC, step: "start", result: "ok", pid: process.pid },
+    frontier(EPIC, "The Loop", ["DEMO-2", "DEMO-3"]),
+    { ticket: EPIC, step: "tracker-status", result: "ok", detail: "In Progress" },
+    ...opened("DEMO-2", `${PR}2`),
+    { ticket: "DEMO-2", step: "agent", result: "done", session: "s1" },
+    { ticket: "DEMO-2", step: "meter", result: "read", meter: { five_hour: { utilization: 0.4, resets_at: 1 } } },
+    { ticket: "DEMO-3", step: "start", result: "new", detail: "feat/DEMO-3", slot: 1 },
+    { ticket: "DEMO-3", step: "build", result: "started", attempt: 1 },
+  ]));
+  world.record(from("2026-10-31T09:30:00Z", [
+    { ticket: "BETA-1", step: "start", result: "ok", pid: process.pid },
+    frontier("BETA-1", "The Beta", ["BETA-2"]),
+    { ticket: "BETA-2", step: "start", result: "new", detail: "feat/BETA-2", slot: 0 },
+    { ticket: "BETA-2", step: "build", result: "started", attempt: 1 },
+    { ticket: "BETA-2", step: "build", result: "pass", commit: "b1", detail: `Built with token ${SECRET}` },
+    { ticket: "BETA-2", step: "push", result: "ok", commit: "b1" },
+    { ticket: "BETA-2", step: "pr", result: "open", commit: "b1", pr: `${PR}b` },
+    { ticket: "BETA-2", step: "wait", result: "held", pr: `${PR}b`, checks: [{ name: "hold", bucket: "fail" }], detail: HOLD },
+    { ticket: "BETA-2", step: "notify", result: "ok", detail: "Held." },
+  ]), "BETA-1", "beta");
+  const gamma = world.project("gamma");
+  world.record(from("2026-10-30T08:00:00Z", [
+    { ticket: "GAMMA-1", step: "start", result: "ok", pid: 1 },
+    frontier("GAMMA-1", "The Gamma", ["GAMMA-2"]),
+    { ticket: "GAMMA-2", step: "start", result: "new", detail: "feat/GAMMA-2", slot: 0 },
+    ...Array.from({ length: 40 }, (_, attempt) => ({ ticket: "GAMMA-2", step: "build", result: "started", attempt })),
+    { ticket: "GAMMA-2", step: "build", result: "blocked", detail: "The spec does not say which page." },
+    { ticket: "GAMMA-2", step: "stuck", result: "ok", detail: "The agent is blocked." },
+    { ticket: "GAMMA-1", step: "finish", result: "ok" },
+  ]), "GAMMA-1", "gamma");
+  world.record(from("2026-10-31T07:00:00Z", [
+    { ticket: "GAMMA-5", step: "start", result: "ok", pid: 1 },
+    frontier("GAMMA-5", "The Gamma, again", ["GAMMA-6"]),
+    ...mergedTicket("GAMMA-6"),
+    { ticket: "GAMMA-5", step: "finish", result: "ok" },
+  ]), "GAMMA-5", "gamma");
+  const older = new Date("2026-10-30T09:00:00Z");
+  utimesSync(join(gamma, "GAMMA-1", "decisions.jsonl"), older, older);
+  world.project("delta");
+}
+
+type HomeProject = { name: string; state: string; current: string | null; [field: string]: unknown };
+
+async function homeOf(name: string): Promise<HomeProject> {
+  const { body } = await watching!.get("/api/home");
+  return body.find((project: HomeProject) => project.name === name);
+}
+
+test("the home view gives each project of the host, including one with no runs", async () => {
+  fourProjects();
+  watching = await world.watch();
+
+  const { body: home } = await watching.get("/api/home");
+
+  expect(home.map((project: HomeProject) => project.name).sort()).toEqual(["beta", "delta", "demo", "gamma"]);
+  expect(home.find((project: HomeProject) => project.name === "delta")).toEqual({
+    name: "delta", runs: [], state: "idle", current: null, needs_kc: [], working: [], progress: null, epic: null, last: null,
+  });
+});
+
+test("a running run's project is running, with each ticket's step and when it began, and the Epic's progress", async () => {
+  fourProjects();
+  watching = await world.watch();
+
+  const demo = await homeOf("demo");
+
+  expect(demo).toMatchObject({
+    state: "running",
+    current: EPIC,
+    needs_kc: [],
+    working: [
+      { key: "DEMO-2", step: "wait", since: "2026-10-31T09:07:00+00:00" },
+      { key: "DEMO-3", step: "build", since: "2026-10-31T09:11:00+00:00" },
+    ],
+    progress: { complete: 0, total: 2 },
+    epic: { key: EPIC, summary: "The Loop" },
+    last: null,
+  });
+  expect(demo.runs).toEqual([expect.objectContaining({ key: EPIC, running: true, needs_kc: 0 })]);
+});
+
+test("a project whose running run has a held pull request is needs KC, with the row, its reason and its link", async () => {
+  fourProjects();
+  watching = await world.watch();
+
+  const beta = await homeOf("beta");
+
+  expect(beta).toMatchObject({ state: "needs_kc", current: "BETA-1", needs_kc: [{ kind: "held", ticket: "BETA-2", reason: HOLD, pr: `${PR}b` }] });
+});
+
+test("a paused run's project is running", async () => {
+  const resumes = new Date(Date.now() + 3_600_000).toISOString();
+  world.record([
+    { ticket: EPIC, step: "start", result: "ok", pid: process.pid },
+    FRONTIER,
+    { ticket: "DEMO-2", step: "start", result: "new", detail: "feat/DEMO-2", slot: 0 },
+    { ticket: "DEMO-2", step: "build", result: "started", attempt: 1 },
+    { ticket: "DEMO-2", step: "agent", result: "usage-pause", detail: "The 5-hour window is full." },
+    { ticket: EPIC, step: "usage-pause", result: "ok", resumes },
+  ]);
+  watching = await world.watch();
+
+  const demo = await homeOf("demo");
+
+  expect(demo.runs).toEqual([expect.objectContaining({ status: "paused" })]);
+  expect(demo).toMatchObject({ state: "running", current: EPIC, last: null });
+});
+
+test("a completed project is idle with its last run's key, status and time, and an older blocked run is not counted", async () => {
+  fourProjects();
+  watching = await world.watch();
+
+  const gamma = await homeOf("gamma");
+
+  expect(gamma).toMatchObject({
+    state: "idle",
+    current: "GAMMA-5",
+    needs_kc: [],
+    working: [],
+    progress: { complete: 1, total: 1 },
+    epic: { key: "GAMMA-5", summary: "The Gamma, again" },
+    last: { key: "GAMMA-5", status: "completed", at: "2026-10-31T07:09:00+00:00" },
+  });
+  expect((gamma.runs as { key: string; status: string }[]).map((run) => [run.key, run.status])).toEqual([["GAMMA-5", "completed"], ["GAMMA-1", "blocked"]]);
+});
+
+test("the current run is the running one, else the newest", async () => {
+  world.record(from("2026-10-31T09:00:00Z", redThenFixed(process.pid)));
+  world.record(from("2026-10-31T10:00:00Z", [{ ticket: "DEMO-10", step: "start", result: "ok", pid: deadPid() }, { ticket: "DEMO-10", step: "finish", result: "ok" }]), "DEMO-10");
+  const older = new Date("2026-10-31T09:30:00Z");
+  utimesSync(join(world.state, EPIC, "decisions.jsonl"), older, older);
+  world.record(from("2026-10-30T09:00:00Z", [{ ticket: "SIDE-1", step: "start", result: "ok", pid: 1 }, { ticket: "SIDE-1", step: "finish", result: "ok" }]), "SIDE-1", "side");
+  world.record(from("2026-10-31T09:00:00Z", [{ ticket: "SIDE-2", step: "start", result: "ok", pid: 1 }, { ticket: "SIDE-2", step: "stop", result: "killed" }]), "SIDE-2", "side");
+  utimesSync(join(world.project("side"), "SIDE-1", "decisions.jsonl"), older, older);
+  watching = await world.watch();
+
+  expect((await homeOf("demo")).current).toBe(EPIC);
+  expect((await homeOf("side")).current).toBe("SIDE-2");
+});
+
+type LogLine = { time: string; project: string; epic: string; ticket: string; step: string; result: string; detail: string; pr?: string };
+
+test("the log merges every project's lines newest first, at most 50", async () => {
+  fourProjects();
+  watching = await world.watch();
+
+  const { body: log } = await watching.get("/api/log");
+
+  expect(log).toHaveLength(50);
+  const times = log.map((line: LogLine) => Date.parse(line.time));
+  expect(times).toEqual([...times].sort((a, b) => b - a));
+  expect(log[0]).toMatchObject({ project: "beta", time: "2026-10-31T09:37:00+00:00", step: "wait", result: "held" });
+  expect(new Set(log.map((line: LogLine) => line.project))).toEqual(new Set(["demo", "beta", "gamma"]));
+});
+
+test("the log leaves out meter, tracker-status, frontier, notify and agent lines", async () => {
+  fourProjects();
+  watching = await world.watch();
+
+  const { body: log } = await watching.get("/api/log?project=demo");
+
+  expect(log.map((line: LogLine) => `${line.ticket} ${line.step} ${line.result}`)).toEqual([
+    "DEMO-3 build started",
+    "DEMO-3 start new",
+    "DEMO-2 pr open",
+    "DEMO-2 push ok",
+    "DEMO-2 build pass",
+    "DEMO-2 build started",
+    "DEMO-2 start new",
+    `${EPIC} start ok`,
+  ]);
+  const { body: all } = await watching.get("/api/log");
+  expect(all.filter((line: LogLine) => LEFT_OUT.includes(line.step))).toEqual([]);
+});
+
+test("the log filtered to one project holds only its lines", async () => {
+  fourProjects();
+  watching = await world.watch();
+
+  const { body: gamma } = await watching.get("/api/log?project=gamma");
+  const missingProject = await watching.get("/api/log?project=nowhere");
+
+  expect(gamma).toHaveLength(50);
+  expect(new Set(gamma.map((line: LogLine) => line.project))).toEqual(new Set(["gamma"]));
+  expect(gamma[0]).toMatchObject({ epic: "GAMMA-5", step: "finish" });
+  expect(missingProject.status).toBe(404);
+});
+
+test("each log line carries its time, project, Epic, ticket, step, result and link, with each secret masked", async () => {
+  fourProjects();
+  watching = await world.watch();
+
+  const { body: log } = await watching.get("/api/log?project=beta");
+
+  expect(log[0]).toEqual({ time: "2026-10-31T09:37:00+00:00", project: "beta", epic: "BETA-1", ticket: "BETA-2", step: "wait", result: "held", detail: HOLD, pr: `${PR}b` });
+  expect(log.find((line: LogLine) => line.step === "build" && line.result === "started")).not.toHaveProperty("pr");
+  expect(JSON.stringify(log)).not.toContain(SECRET);
+  expect(log.find((line: LogLine) => line.step === "build" && line.result === "pass").detail).toBe("Built with token [JIRA_API_TOKEN]");
+});
+
+test("the epic, usage, report and forecast routes answer as before", async () => {
+  world.writeConfig('[watch]\nplans = [{ plan = "max-5x", since = 2026-10-01T00:00:00Z }]\n');
+  world.jira.filters.set("project in (DEMO) AND issuetype = Epic AND statusCategory != Done ORDER BY key ASC", [EPIC]);
+  world.jira.filters.set(`parent in (${EPIC}) ORDER BY key ASC`, []);
+  fourProjects();
+  watching = await world.watch();
+
+  const epic = await watching.get("/api/epic/BETA-1?project=beta");
+  const usage = await watching.get("/api/usage");
+  const report = await watching.get("/api/report/GAMMA-5?project=gamma");
+  const forecast = await watching.get("/api/forecast");
+
+  expect(epic.body).toMatchObject({ key: "BETA-1", status: "running", needs_kc: [{ kind: "held", ticket: "BETA-2" }] });
+  expect(usage.body.five_hour).toMatchObject({ utilization: 0.4, resets_at: 1 });
+  expect(report.body.rows.find((item: { label: string }) => item.label === "Tickets merged")).toMatchObject({ current: 1 });
+  expect(forecast.body.plan).toMatchObject({ key: "max-5x" });
 });

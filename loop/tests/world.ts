@@ -246,9 +246,10 @@ ${extra}`;
     return { url, get, close };
   }
 
-  /** Writes a recorded decisions log for the run. */
-  record(lines: object[], run = EPIC): void {
-    mkdirSync(join(this.state, run), { recursive: true });
+  /** Writes a recorded decisions log for the run, of this repo's project or of another project on the host. */
+  record(lines: object[], run = EPIC, project = "demo"): void {
+    const state = this.project(project);
+    mkdirSync(join(state, run), { recursive: true });
     const start = Date.parse("2026-10-20T10:00:00Z");
     const text = lines.map((line, index) => JSON.stringify({
       time: new Date(start + index * 60_000).toISOString().replace(/\.\d+Z$/, "+00:00"),
@@ -258,7 +259,14 @@ ${extra}`;
       detail: "",
       ...line,
     }) + "\n");
-    writeFileSync(join(this.state, run, "decisions.jsonl"), text.join(""));
+    writeFileSync(join(state, run, "decisions.jsonl"), text.join(""));
+  }
+
+  /** The state folder of a project on the host, made if it is not there yet. */
+  project(name: string): string {
+    const state = join(dirname(this.state), `${name}-loop`);
+    mkdirSync(state, { recursive: true });
+    return state;
   }
 
   /** The calls of the fake `systemd-run`, `systemctl`, and `systemd-inhibit`, in order. */
