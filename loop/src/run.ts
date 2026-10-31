@@ -126,8 +126,6 @@ export class Run {
   private epicText: Promise<string> | null = null;
   /** The summary of the Epic or ticket the run started with, for the watch page. */
   private summary: string | null = null;
-  /** The Epic's children, of every component, when the run started with the Epic. */
-  private children: Ticket[] | null = null;
   private readonly merged = new Set<string>();
   /** The address of each merged pull request, which names the repo on GitHub. */
   private readonly mergedUrls: string[] = [];
@@ -261,7 +259,8 @@ export class Run {
     try {
       const epic = await this.jira.ticket(this.epic);
       if (epic.done) return false;
-      const children = this.children ?? (await this.jira.search(`parent = ${this.epic} ORDER BY key ASC`));
+      // Read again, since a ticket of another repo or a manual one can be done by now.
+      const children = await this.jira.search(`parent = ${this.epic} ORDER BY key ASC`);
       if (!children.length || !children.every((child) => this.merged.has(child.key) || child.done)) return false;
       // The spec lives in the repo that the Spec line links, which can be another repo than this run's.
       const here = await this.repoUrl();
@@ -301,7 +300,7 @@ export class Run {
       if (ticket.issueType === "Epic") {
         this.epic = ticket.key;
         this.epicText = Promise.resolve(ticket.text);
-        tickets = this.children = await this.jira.search(`parent = ${ticket.key} ORDER BY key ASC`);
+        tickets = await this.jira.search(`parent = ${ticket.key} ORDER BY key ASC`);
       } else {
         this.epic = ticket.parent;
         tickets = [ticket];

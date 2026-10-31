@@ -541,6 +541,22 @@ test("a ticket of another component counts only as a blocker, through its status
   expect(world.prs().map((pr) => [pr.headRefName, pr.state])).toEqual([["feat/DEMO-3-add-the-login-page", "MERGED"]]);
 });
 
+test("a ticket of another component that is done by the end of the run lets the run close the Epic", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.jira.add("DEMO-3", "Set up the host", { parent: EPIC, components: ["machines"] });
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.prs().length === 1, "the pull request to open");
+  // The machines run merges its ticket while this run waits on its gate.
+  world.jira.issues.get("DEMO-3")!.status = "Done";
+  world.setCheck("DEMO-2", "pass");
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.steps()).toContain(`${EPIC} complete ok`);
+  expect(world.jira.issues.get(EPIC)!.status).toBe("Done");
+});
+
 test("a ticket with no component refuses the run with one line that names each", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC, components: [] });
   world.jira.add("DEMO-3", "Add the logout page", { parent: EPIC });
