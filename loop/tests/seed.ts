@@ -183,9 +183,9 @@ function planned(): object[] {
   });
 }
 
-/** Writes a run's decisions log, its last line `end` minutes ago. */
-function write(epic: string, seeded: (home: string) => object[], end: number): void {
-  const home = join(stateDir, epic);
+/** Writes a run's decisions log, its last line `end` minutes ago, in this project or another on the host. */
+function write(epic: string, seeded: (home: string) => object[], end: number, state = stateDir): void {
+  const home = join(state, epic);
   mkdirSync(home, { recursive: true });
   const written = seeded(home);
   const first = Date.now() - (end + written.length) * 60_000;
@@ -196,10 +196,57 @@ function write(epic: string, seeded: (home: string) => object[], end: number): v
   writeFileSync(join(home, "decisions.jsonl"), text.join("\n") + "\n");
 }
 
+/** A running run of another project, with two tickets in different steps. */
+function busy(): object[] {
+  return [
+    { ticket: "SHOP-1", step: "start", result: "ok", pid: process.pid },
+    { ticket: "SHOP-1", step: "frontier", result: "ok", summary: "Checkout", tickets: ["SHOP-2", "SHOP-3", "SHOP-4"].map((key) => ({ key, summary: `Work on ${key}`, status: "To Do", state: "ready", blockers: [] })) },
+    ...opened("SHOP-2", 30),
+    { ticket: "SHOP-3", step: "start", result: "new", detail: "feat/SHOP-3", slot: 1 },
+    { ticket: "SHOP-3", step: "build", result: "started", attempt: 1 },
+    { ticket: "SHOP-3", step: "meter", result: "read", meter: { five_hour: { utilization: 0.42, resets_at: Math.floor(Date.now() / 1000) + 7200 } } },
+  ];
+}
+
+/** A run of another project that finished with every ticket merged, or, `blocked`, with one stuck. */
+function finished(epic: string, blocked: boolean): () => object[] {
+  const ticket = `${epic.split("-")[0]}-${Number(epic.split("-")[1]) + 1}`;
+  return () => [
+    { ticket: epic, step: "start", result: "ok", pid: 1 },
+    { ticket: epic, step: "frontier", result: "ok", summary: blocked ? "Search" : "Search, again", tickets: [{ key: ticket, summary: "Add search", status: "To Do", state: "ready", blockers: [] }] },
+    ...opened(ticket, 40),
+    ...(blocked
+      ? [{ ticket, step: "stuck", result: "ok", detail: "Still red." }]
+      : [{ ticket, step: "wait", result: "green", pr: pr(40), checks: [] }, { ticket, step: "merge", result: "merged", pr: pr(40) }]),
+    { ticket: epic, step: "finish", result: "ok" },
+  ];
+}
+
 const stateDir = join(mkdtempSync(join(tmpdir(), "seed-")), "demo-loop");
+const other = (name: string) => {
+  const state = join(stateDir, "..", `${name}-loop`);
+  mkdirSync(state, { recursive: true });
+  return state;
+};
 write(PLANNED, planned, 600);
 write(KILLED, killed, 180);
 write(EPIC, lines, 0);
+write("SHOP-1", busy, 2, other("shop"));
+// DEMO-4's session: one tool call that ran, and one that auto mode denied, which the ticket detail shows in red.
+const session = join(stateDir, EPIC, "runs", "DEMO-4");
+mkdirSync(session, { recursive: true });
+const call = (id: string, command: string) => ({ type: "assistant", message: { content: [{ type: "tool_use", id, name: "Bash", input: { command } }] } });
+const answer = (id: string, content: string, is_error: boolean) => ({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content, is_error }] } });
+writeFileSync(join(session, "agent-1.jsonl"), [
+  { type: "system", subtype: "init", model: "claude-opus-5-5" },
+  call("t1", "npx vitest run tests/login.test.ts"),
+  answer("t1", "Tests  4 passed (4)", false),
+  call("t2", "git push --force origin main"),
+  answer("t2", "Permission for this action has been denied by the Claude Code auto mode classifier.", true),
+].map((event) => JSON.stringify(event)).join("\n") + "\n");
+write("FIND-1", finished("FIND-1", true), 900, other("find"));
+write("FIND-5", finished("FIND-5", false), 120, other("find"));
+other("notes");
 
 const server = await serve(stateDir, Number(process.argv[2] ?? 8791));
 for (const url of server.urls) console.log(`The seeded run is at ${url}#/demo/${EPIC}`);
