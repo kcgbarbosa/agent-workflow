@@ -1,0 +1,23 @@
+# Every check of the repo, wired once. A commit runs it on the staged files, and `make check` on all files.
+pre-commit:
+  parallel: true
+  commands:
+    prettier:
+      glob: "*.{md,json,yml,yaml}"
+      run: prettier --write {staged_files}
+      stage_fixed: true
+    gitleaks:
+      run: gitleaks dir --no-banner --redact .
+    lychee:
+      glob: "*.md"
+      run: lychee --offline --no-progress {staged_files}
+    oxlint:
+      glob: "*.{ts,tsx,mjs,js}"
+      run: npx oxlint {staged_files}
+    tsc:
+      glob: "*.ts"
+      run: npx tsc && cd loop && npx tsc
+    # Through uvx, so no host or runner needs a shellcheck install, until the pin has shellcheck.
+    shellcheck:
+      glob: ["*.sh", "loop/bin/loop"]
+      run: uvx --from shellcheck-py shellcheck {staged_files}

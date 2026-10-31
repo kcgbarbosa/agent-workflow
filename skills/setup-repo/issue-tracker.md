@@ -31,11 +31,11 @@ The PRD owner shown on the PRD is `<PRD owner>`.
 
 Issues carry these fields.
 
-| Field         | Values                              | Who sets it                  |
-| ------------- | ----------------------------------- | ---------------------------- |
-| Status        | To Do, In Progress, In Review, Done | The loop                     |
-| Priority      | Highest, High, Medium, Low          | The owner                    |
-| <Extra field> | <Values>                            | The owner                    |
+| Field         | Values                              | Who sets it |
+| ------------- | ----------------------------------- | ----------- |
+| Status        | To Do, In Progress, In Review, Done | The loop    |
+| Priority      | Highest, High, Medium, Low          | The owner   |
+| <Extra field> | <Values>                            | The owner   |
 
 The owner sets priority and the other hand-set fields. A skill that creates an issue leaves them at the Jira default or empty.
 

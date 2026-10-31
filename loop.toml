@@ -5,7 +5,7 @@ main_branch = "main"
 tools = ["make", "uv", "npm"]
 # Installs the loop's packages in each new worktree, so the first test run finds node_modules.
 setup = ["make", "loop-deps"]
-agent_hint = "The gate runs `make check`, so run the Vitest files that cover your change, such as `cd loop && npx vitest run tests/run.test.ts`. For a screenshot, the headless Chrome is `find ~/.cache/ms-playwright -name chrome-headless-shell -type f | head -1`, and `loop/tests/seed.ts` serves the watch page in seeded states: `cd loop && node tests/seed.ts`. Run shellcheck as `uvx --from shellcheck-py shellcheck`."
+agent_hint = "The gate runs `make check`, so run the Vitest files that cover your change, such as `cd loop && npx vitest run tests/run.test.ts`, or `npx vitest run tests/install.test.ts` at the root for a repo check. For a screenshot, the headless Chrome is `find ~/.cache/ms-playwright -name chrome-headless-shell -type f | head -1`, and `loop/tests/seed.ts` serves the watch page in seeded states: `cd loop && node tests/seed.ts`. A commit runs the checks of `lefthook.yml`, such as Prettier and shellcheck, on the staged files."
 # The env var names of the secrets in Bitwarden Secrets Manager, shared with Pitchridge: the same Jira account,
 # ntfy topic, and loop Claude account.
 secrets = ["JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC", "CLAUDE_CODE_OAUTH_TOKEN"]

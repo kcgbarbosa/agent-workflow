@@ -1,6 +1,6 @@
 ---
 name: setup-repo
-description: "Configure this repo for the Jira workflow and the shared merge gate: write docs/agents/issue-tracker.md, domain.md, testing.md and workflow.md, the Agent skills block of AGENTS.md, the gate workflows, and the branch protection. Run once before first use of /to-spec, /to-prd and /to-tickets."
+description: "Configure this repo for the Jira workflow and the shared merge gate: write docs/agents/issue-tracker.md, domain.md, testing.md and workflow.md, the Agent skills block of AGENTS.md, the lefthook file, the gate workflows, and the branch protection. Run once before first use of /to-spec, /to-prd and /to-tickets."
 disable-model-invocation: true
 ---
 
@@ -12,6 +12,7 @@ Scaffold the per-repo configuration that `grill-with-docs`, `to-spec`, `to-prd`,
 - **Domain docs**: where `GLOSSARY.md`, the ADRs, the specs and the README Users table live
 - **Testing**: the acceptance suite that proves each "What the user sees" line on the real stack, and what may be stubbed
 - **Workflow**: the order of the work for one feature
+- **Checks**: one `lefthook.yml` that lists every format, lint and policy check, run at each commit
 - **Gate**: the shared merge gate that every pull request must pass, and auto-merge behind it
 
 This is a prompt-driven skill, not a deterministic script. Explore, present what you found, confirm with the user, then write. It reads Jira at most, and writes nothing in it.
@@ -29,6 +30,7 @@ Look at the current repo to understand its starting state. Read whatever exists;
 - `loop.toml` and `docs/agents/loop.md`: is there a loop?
 - The test folders, the test commands in the `Makefile` or `package.json`, and the seed: is there a suite that runs on the real stack, and a stubbed one?
 - `.github/workflows/`, the `check` and `check-docs` targets of the `Makefile`, and a `mise.toml` or `.tool-versions`: is the repo on the gate?
+- `lefthook.yml` and `git config --local core.hooksPath`: are the checks wired?
 - Monorepo signals: a `pnpm-workspace.yaml`, a `workspaces` field in `package.json`, or a `GLOSSARY-MAP.md`.
 
 If `CLAUDE.md` exists, stop. Claude Code reads `AGENTS.md` only when no `CLAUDE.md` exists in the working directory or above. Tell the user to merge `CLAUDE.md` into `AGENTS.md` and remove it, then run this skill again. Never create or edit `CLAUDE.md` or `CLAUDE.local.md`.
@@ -109,7 +111,13 @@ grill-with-docs → to-spec → to-tickets → the loop or a T3 Code thread → 
 
 When a labels file from the retired setup skill exists in `docs/agents/`, tell the user it is obsolete and offer to delete it. Delete it only if they agree.
 
-### 5. Put the repo on the gate
+### 5. Wire the checks
+
+Run `~/.claude/skills/setup-repo/hooks.sh` at the repo root. When the repo has no lefthook file, it writes `lefthook.yml` from the languages the repo has. Its header lists the checks of each language. Then it unsets the repo's `core.hooksPath` and runs `lefthook install`, so each commit runs the checks on its staged files. Show the user the file.
+
+Draft the start of the `check` target of the `Makefile` with `lefthook run pre-commit --all-files --no-stage-fixed --no-auto-install` then `git diff --exit-code`, so the gate runs the same list and fails when a formatter changed a file. Write it once the user approves, after the gate's runner has the tools: `lefthook`, `prettier`, `gitleaks` and `lychee` in the repo's `mise.toml`.
+
+### 6. Put the repo on the gate
 
 The shared merge gate is `.github/workflows/gate.yml` in agent-workflow. It runs the repo's `make check` on each pull request, and `make check-docs` on one that changes only `*.md` files and `docs/`. Beside the check, `gate / review` has a second model review the pull request, except on a docs-only one. After a green check, `gate / judge` has a model look at each changed screenshot. Both bill the repo secret `CLAUDE_CODE_OAUTH_TOKEN`, a Claude plan, or `ANTHROPIC_API_KEY`, the API. A check that needs keys, such as for its stack, gets them from the optional repo secret `CHECK_ENV`, one `NAME=value` per line. When the `Makefile` lacks either target, draft it from the test commands that exploration found, and write it once the user approves.
 
@@ -121,7 +129,7 @@ Then, at the repo root:
 
 Both steps are safe to run again. A second run in a repo already on the gate adds the checks it lacks, such as `gate / review` and `gate / judge`. A pull request with auto-merge on merges itself when every required check is green. The `hold` label keeps it waiting.
 
-### 6. Done
+### 7. Done
 
 Tell the user which files you wrote. Say that they can edit `docs/agents/*.md` directly, and that this skill needs to run again only to change the Jira project, the PRD, or the acceptance suite.
 

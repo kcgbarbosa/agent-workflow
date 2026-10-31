@@ -210,15 +210,15 @@ Each host gets the `loop` command from `install.sh`, linger with `loginctl enabl
 
 ## When a value is wrong
 
-| Symptom                                                   | Value to fix                                                   |
-| --------------------------------------------------------- | -------------------------------------------------------------- |
-| The run's journal names missing commands                  | `tools`, or the host                                           |
-| The config refuses the file with an unknown key           | A typo in `loop.toml`                                          |
-| The frontier starts a ticket before its blocker           | The link type of the edges, or the Epic children query         |
-| A ticket cannot move to a status                          | `tracker.in_progress`, `tracker.landed`, or the workflow       |
-| A build fails with "address already in use"               | `ports`, `port_step`, or a process left on a slot port         |
-| A check passes once and fails once                        | The check itself. It is flaky, and a fix attempt cannot cure it |
-| A check fails for a missing key on the gate only          | A secret the check needs. Use a development default            |
-| The judge gets no screenshots                             | The sign-in, the browser tests, or their diff folder           |
-| The watch page shows red tool calls                       | An action that auto mode denies. Make it in a setup session    |
-| The run costs more than the plan allows                   | `effort`, then `parallel`                                      |
+| Symptom                                          | Value to fix                                                    |
+| ------------------------------------------------ | --------------------------------------------------------------- |
+| The run's journal names missing commands         | `tools`, or the host                                            |
+| The config refuses the file with an unknown key  | A typo in `loop.toml`                                           |
+| The frontier starts a ticket before its blocker  | The link type of the edges, or the Epic children query          |
+| A ticket cannot move to a status                 | `tracker.in_progress`, `tracker.landed`, or the workflow        |
+| A build fails with "address already in use"      | `ports`, `port_step`, or a process left on a slot port          |
+| A check passes once and fails once               | The check itself. It is flaky, and a fix attempt cannot cure it |
+| A check fails for a missing key on the gate only | A secret the check needs. Use a development default             |
+| The judge gets no screenshots                    | The sign-in, the browser tests, or their diff folder            |
+| The watch page shows red tool calls              | An action that auto mode denies. Make it in a setup session     |
+| The run costs more than the plan allows          | `effort`, then `parallel`                                       |

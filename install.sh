@@ -43,7 +43,7 @@ for link in "$dest"/agents/*; do
 done
 
 # The shared files win over a file made by hand. The old file is kept as <name>.bak, or <name>.bak.<time> when that exists.
-for file in settings.json statusline.sh keybindings.json notify.sh; do
+for file in settings.json statusline.sh keybindings.json notify.sh format-markdown.ts; do
   target="$dest/$file"
   if [ -L "$target" ]; then
     case "$(readlink "$target")" in

@@ -29,7 +29,7 @@ A step only KC can do is a ticket with the component `manual`, which no loop bui
 
 ### Gate
 
-The shared merge gate, through `.github/workflows/pull-request.yml`. It runs `make check`, and `make check-docs` on a docs-only pull request. `loop.toml` turns the review on, gives the agent hint, and runs `make loop-deps` in each new worktree. shellcheck runs through `uvx --from shellcheck-py`, so the host needs no install.
+The shared merge gate, through `.github/workflows/pull-request.yml`. It runs `make check`, and `make check-docs` on a docs-only pull request. `loop.toml` turns the review on, gives the agent hint, and runs `make loop-deps` in each new worktree. `make check` starts with every check of `lefthook.yml`, the list a commit runs.
 
 ### Stack per worktree
 
