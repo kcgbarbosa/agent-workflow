@@ -1,4 +1,4 @@
-"""The gate's UI judge: one model call per changed screenshot, with no tools, and a comment for what it finds.
+"""The gate's UI judge: one model call per screenshot step, with no tools, and a comment for what it finds.
 
 It runs in a checkout of the base, for its loop.toml, with the diff folder beside it. action.yml gives the folder and the env it reads.
 Exit 1 means a blocking verdict.
@@ -18,6 +18,7 @@ from pathlib import Path
 
 VERDICTS = ("blocking", "minor", "fine")
 IMAGES = (("baseline.png", "The baseline, from the base branch:"), ("new.png", "The new screenshot:"), ("diff.png", "The diff, which marks the changed pixels:"))
+RATED_IMAGES = (("new.png", "The screenshot:"),)
 BLOCKING_MARKER = "<!-- gate judge blocking -->"
 MINOR_MARKER = "<!-- gate judge minor -->"
 
@@ -28,7 +29,25 @@ def blocking_list() -> list[str]:
     return tomllib.loads(Path("loop.toml").read_text()).get("ui", {}).get("blocking", [])
 
 
-def prompt(line: str, blocking: list[str]) -> str:
+def rated(step: Path) -> bool:
+    """A step with no baseline is rated on its one screenshot, not judged as a change."""
+    return not (step / "baseline.png").exists()
+
+
+def prompt(line: str, blocking: list[str], baseline: bool = True) -> str:
+    if not baseline:
+        rule = (
+            f"The screen is blocking only when it shows one of these faults: {'; '.join(blocking)}. Any other fault is minor."
+            if blocking
+            else "Nothing is blocking in this repo, so every screen is minor or fine."
+        )
+        return (
+            "You judge one screenshot of a pull request. It has no baseline, so judge the screen as it is.\n"
+            f"The ticket line for this step: {line}\n"
+            f"{rule} Fine means the screen is what the ticket line asks for and looks right.\n"
+            'Answer with JSON only, in the shape {"verdict": "blocking" | "minor" | "fine", "sentence": "<one sentence>"}. '
+            'A blocking answer adds "fault": the item of the list that the screen shows.'
+        )
     rule = (
         f"A change is blocking only when it shows one of these: {'; '.join(blocking)}. Anything else is minor or fine."
         if blocking
@@ -44,8 +63,8 @@ def prompt(line: str, blocking: list[str]) -> str:
 
 
 def ask(step: Path, line: str, blocking: list[str]) -> dict:
-    content: list[dict] = [{"type": "text", "text": prompt(line, blocking)}]
-    for name, caption in IMAGES:
+    content: list[dict] = [{"type": "text", "text": prompt(line, blocking, baseline=not rated(step))}]
+    for name, caption in RATED_IMAGES if rated(step) else IMAGES:
         data = base64.b64encode((step / name).read_bytes()).decode()
         content += [
             {"type": "text", "text": caption},
@@ -119,23 +138,27 @@ def main() -> int:
     repo, number = os.environ["GITHUB_REPOSITORY"], os.environ["PR_NUMBER"]
     base, head = os.environ["BASE_SHA"], os.environ["HEAD_SHA"]
     blocking = blocking_list()
-    found: dict[str, list[tuple[str, dict, str]]] = {verdict: [] for verdict in VERDICTS}
+    found: dict[str, list[tuple[Path, dict, str]]] = {verdict: [] for verdict in VERDICTS}
     for step in steps:
         meta = json.loads((step / "step.json").read_text())
         answer = ask(step, meta["line"], blocking)
         if answer["verdict"] == "blocking" and not on_list(answer, blocking):
             answer = {"verdict": "minor", "sentence": f"{answer['sentence']} (Not on the blocking list.)"}
-        found[answer["verdict"]].append((step.name, answer, meta["path"]))
+        found[answer["verdict"]].append((step, answer, meta["path"]))
         print(f"{step.name}: {answer['verdict']}, {answer['sentence']}")
 
     sections = [
-        f"### {name}\n\n{answer['sentence']}\n\n| Before | After |\n| --- | --- |\n"
-        f"| {image(repo, base, path, 'before')} | {image(repo, head, path, 'after')} |"
-        for name, answer, path in found["blocking"]
+        f"### {step.name}\n\n{answer['sentence']}\n\n"
+        + (
+            f"| Screenshot |\n| --- |\n| {image(repo, head, path, 'screenshot')} |"
+            if rated(step)
+            else f"| Before | After |\n| --- | --- |\n| {image(repo, base, path, 'before')} | {image(repo, head, path, 'after')} |"
+        )
+        for step, answer, path in found["blocking"]
     ]
     blocks = "\n\n".join([f"**gate / judge** blocks at {head[:7]}.", *sections]) if sections else None
     comment(repo, number, BLOCKING_MARKER, blocks, f"**gate / judge**: nothing blocks at {head[:7]}.")
-    items = [f"- [ ] **{name}**: {answer['sentence']}" for name, answer, _ in found["minor"]]
+    items = [f"- [ ] **{step.name}**: {answer['sentence']}" for step, answer, _ in found["minor"]]
     minors = "\n".join([f"**gate / judge** minor changes to check, at {head[:7]}:\n", *items]) if items else None
     comment(repo, number, MINOR_MARKER, minors, f"**gate / judge**: no minor changes at {head[:7]}.")
     return 1 if found["blocking"] else 0

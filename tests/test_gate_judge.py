@@ -104,3 +104,32 @@ def test_an_answer_out_of_shape_fails(pr: FakeGitHub) -> None:
 
     assert run.returncode == 1
     assert "no verdict for 1-home" in run.stderr
+
+
+def rated_step(pr: FakeGitHub, name: str) -> None:
+    step = pr.work / "screenshot-diff" / name
+    step.mkdir(parents=True)
+    (step / "new.png").write_bytes(b"png")
+    (step / "step.json").write_text(json.dumps({"line": f"The {name} screen shows the title.", "path": f"e2e/shots/{name}.png"}))
+
+
+def test_a_step_with_no_baseline_is_rated_on_its_one_image_and_can_block(pr: FakeGitHub) -> None:
+    rated_step(pr, "1-home")
+    changed_step(pr, "2-login")
+    pr.reply(answer("blocking", "The title is cut off.", "text cut off"), answer("minor", "The button moved."))
+
+    run = pr.run(JUDGE, **INPUTS)
+
+    assert run.returncode == 1
+    rated, changed = (json.loads(c["stdin"])["message"]["content"] for c in pr.claude_calls)
+    assert [part["type"] for part in rated].count("image") == 1
+    assert "one screenshot" in rated[0]["text"] and "no baseline" in rated[0]["text"]
+    assert "shows one of these faults: text cut off; broken layout" in rated[0]["text"]
+    assert "The 1-home screen shows the title." in rated[0]["text"]
+    assert "change" not in rated[0]["text"]
+    assert [part["type"] for part in changed].count("image") == 3
+    blocking, minor = pr.state["comments"]
+    assert "### 1-home\n\nThe title is cut off." in blocking["body"]
+    assert f"kc/app/blob/{pr.env['BASE_SHA']}/" not in blocking["body"]
+    assert blocking["body"].count(f"kc/app/blob/{pr.env['HEAD_SHA']}/e2e/shots/1-home.png?raw=true") == 1
+    assert "- [ ] **2-login**: The button moved." in minor["body"]
