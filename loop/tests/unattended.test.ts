@@ -168,6 +168,30 @@ test("a stacked ticket whose auto-merge does not turn on after the retarget logs
   expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED", "MERGED"]);
 });
 
+test("a restart starts a new session on the current ticket text, on the ticket's branch and pull request", async () => {
+  world.writeConfig("[limits]\nfix_attempts = 1\n");
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "fail" });
+  world.plan({ "DEMO-2": [1, 2, 3, 4].map((n) => ({ write: { "login.txt": `login ${n}\n` } })) });
+  expect((await world.loop("run", EPIC)).code).toBe(1);
+  const before = world.calls().length;
+  expect(world.calls()[before - 1]!.resume).toBeTruthy();
+
+  // As KC clears the flag of a stuck ticket after rewriting it.
+  world.jira.issues.get("DEMO-2")!.flagged = false;
+  await world.loop("run", EPIC);
+
+  const [restart, fix] = world.calls().slice(before);
+  expect(restart!.resume).toBeNull();
+  expect(restart!.prompt).toBe(`/implement ${world.state}/${EPIC}/runs/DEMO-2/ticket.md`);
+  expect(restart!.cwd).toBe(`${world.state}/${EPIC}/worktrees/DEMO-2`);
+  const sessions = world.decisions().filter((line) => line.step === "agent").map((line) => line.session);
+  expect(fix!.resume).toBe(sessions[before]);
+  expect(sessions[before]).not.toBe(sessions[before - 1]);
+  expect(world.steps().filter((step) => step.startsWith("DEMO-2 start"))).toEqual(["DEMO-2 start new", "DEMO-2 start restart"]);
+  expect(world.prs()).toHaveLength(1);
+});
+
 test("a usage limit pauses the run, and the run resumes the session when the limit resets", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });

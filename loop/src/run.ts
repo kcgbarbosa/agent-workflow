@@ -518,12 +518,18 @@ export class Run {
     }
   }
 
-  /** A run of the head agent, which waits out each usage limit that resets in time and resumes its session. */
+  /**
+   * A run of the head agent, which waits out each usage limit that resets in time and resumes its session. It
+   * resumes only a session of this run, after the ticket's last start line, so a restart starts a new session
+   * that builds to the current ticket text.
+   */
   private async agent(key: string, prompt: string, worktree: string, runDir: string, slot: number): Promise<Session> {
     for (;;) {
       await this.untilResumed();
       const stack = await this.stackEnv(key, slot);
-      const resume = this.log.lines().findLast((line) => line.ticket === key && line.step === "agent" && line.session)?.session;
+      const lines = this.log.lines();
+      const started = lines.findLastIndex((line) => line.ticket === key && line.step === "start" && (line.result === "new" || line.result === "restart"));
+      const resume = lines.slice(started + 1).findLast((line) => line.ticket === key && line.step === "agent" && line.session)?.session;
       const meter = this.meterLogger(key);
       const session = await ask({
         prompt,
