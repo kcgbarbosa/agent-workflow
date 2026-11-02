@@ -2,7 +2,6 @@ name: gate
 
 # The shared merge gate. A repo calls it from the pull-request workflow that setup-repo writes, so every repo runs the same checks.
 # The repo's own `make check` decides what green means. The review starts beside it, so its wait does not add to the check's.
-# A repo with a long check splits it with `checks`, into jobs that run at once, and `check` passes when each of them passes.
 # The judge runs after it, for its screenshots.
 on:
   workflow_call:
@@ -15,10 +14,6 @@ on:
         description: The command that runs everything the repo needs green.
         type: string
         default: make check
-      checks:
-        description: "The repo's check split into jobs that run at once, one `<name>: <command>` on each line. Empty runs `check` as one job."
-        type: string
-        default: ""
       docs-check:
         description: The command that a docs-only pull request runs instead.
         type: string
@@ -59,7 +54,6 @@ jobs:
       contents: read
     outputs:
       docs-only: ${{ steps.paths.outputs.docs-only }}
-      checks: ${{ steps.checks.outputs.checks }}
     steps:
       - uses: actions/checkout@v7
         if: inputs.docs-only
@@ -73,68 +67,28 @@ jobs:
           if [ -n "$changed" ] && ! grep -qvE '(\.md$|^docs/)' <<<"$changed"; then
             echo "docs-only=true" >> "$GITHUB_OUTPUT"
           fi
-      # The matrix of the `checks` job, as JSON. A docs-only pull request runs its one command in `check` instead.
-      - id: checks
-        if: inputs.checks != '' && steps.paths.outputs.docs-only != 'true'
-        run: |
-          checks='[]' n=0
-          while IFS= read -r line || [ -n "$line" ]; do
-            n=$((n + 1))
-            line=${line%$'\r'}
-            [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
-            if [[ ! $line =~ ^[[:space:]]*([A-Za-z0-9_.-]+):[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]]; then
-              echo "::error::checks line $n is not <name>: <command>"
-              exit 1
-            fi
-            name=${BASH_REMATCH[1]} command=${BASH_REMATCH[2]}
-            if jq -e --arg name "$name" 'any(.name == $name)' <<<"$checks" > /dev/null; then
-              echo "::error::checks line $n repeats the name $name"
-              exit 1
-            fi
-            checks=$(jq -c --arg name "$name" --arg command "$command" '. + [{name: $name, command: $command}]' <<<"$checks")
-          done <<<"$CHECKS"
-          if [ "$checks" = '[]' ]; then
-            echo "::error::checks has no <name>: <command> line"
-            exit 1
-          fi
-          echo "checks=$checks" >> "$GITHUB_OUTPUT"
-        env:
-          CHECKS: ${{ inputs.checks }}
 
   # A failed `paths` leaves docs-only unset, so the check and the review run in full and a skip never passes the gate.
-  # The job runs the command itself when the repo does not split its check, and on a docs-only pull request.
-  # Else it waits on the `checks` jobs, so `gate / check` stays the one result that the loop and the judge read.
-  # A failed `paths` then skips the `checks` jobs, and the check fails.
   check:
-    needs: [paths, checks]
+    needs: paths
     if: ${{ !cancelled() }}
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
     outputs:
       screenshots: ${{ steps.screenshots.outputs.screenshots }}
-    # The shared steps read these, so they run the same in the `checks` jobs.
-    env:
-      GATE_RUNS: ${{ inputs.checks == '' || needs.paths.outputs.docs-only == 'true' }}
-      GATE_JOB: check
-      COMMAND: ${{ needs.paths.outputs.docs-only == 'true' && inputs.docs-check || inputs.check }}
     steps:
-      - &checkout
-        if: env.GATE_RUNS == 'true'
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # The repo's pinned toolchain, so the runner uses the same versions as the T14.
-      - &mise
-        if: env.GATE_RUNS == 'true' && hashFiles('mise.toml', '.mise.toml', '.tool-versions', '.config/mise.toml') != ''
+      - if: hashFiles('mise.toml', '.mise.toml', '.tool-versions', '.config/mise.toml') != ''
         uses: jdx/mise-action@v5
         env:
           MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
       # The command goes in through env, so it runs as the caller wrote it.
       # Each CHECK_ENV value is masked before the command prints anything, and only the command gets them. A `%` is escaped, or the mask would miss it.
-      - &run
-        if: env.GATE_RUNS == 'true'
-        run: |
+      - run: |
           n=0
           while IFS= read -r line || [ -n "$line" ]; do
             n=$((n + 1))
@@ -152,25 +106,10 @@ jobs:
           unset CHECK_ENV
           bash -c "$COMMAND"
         env:
+          COMMAND: ${{ needs.paths.outputs.docs-only == 'true' && inputs.docs-check || inputs.check }}
           CHECK_ENV: ${{ secrets.CHECK_ENV }}
-      - if: env.GATE_RUNS != 'true'
-        run: |
-          if [ "$RESULT" != success ]; then
-            echo "::error::A job of checks ended $RESULT, so the check fails."
-            exit 1
-          fi
-        env:
-          RESULT: ${{ needs.checks.result }}
-      # Each `checks` job uploads its own screenshots, which make one folder here as in the judge.
-      - if: env.GATE_RUNS != 'true'
-        uses: actions/download-artifact@v8
-        with:
-          pattern: screenshot-diff-*
-          merge-multiple: true
-          path: screenshot-diff
       # actions/judge/action.yml gives the folder that the repo's browser tests write.
-      - &screenshots
-        id: screenshots
+      - id: screenshots
         run: |
           found=false
           if compgen -G 'screenshot-diff/*/new.png' > /dev/null; then
@@ -184,35 +123,11 @@ jobs:
           if [ "$found" = true ]; then
             echo "screenshots=true" >> "$GITHUB_OUTPUT"
           fi
-      - &upload
-        if: env.GATE_RUNS == 'true' && steps.screenshots.outputs.screenshots == 'true'
+      - if: steps.screenshots.outputs.screenshots == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: screenshot-diff-${{ env.GATE_JOB }}
+          name: screenshot-diff
           path: screenshot-diff/
-
-  # One job for each line of `checks`, all at once. A red one leaves the others running, so its fix sees every failure.
-  checks:
-    needs: paths
-    if: needs.paths.outputs.checks != ''
-    name: check (${{ matrix.name }})
-    runs-on: ${{ inputs.runner }}
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.paths.outputs.checks) }}
-    env:
-      GATE_RUNS: "true"
-      GATE_JOB: ${{ matrix.name }}
-      COMMAND: ${{ matrix.command }}
-    steps:
-      - *checkout
-      - *mise
-      - *run
-      - *screenshots
-      - *upload
 
   # A docs-only pull request skips the review, and a skipped job reports success.
   review:
@@ -243,7 +158,7 @@ jobs:
           effort: ${{ inputs.review-effort }}
           skip: ${{ inputs.review-skip }}
 
-  # Runs only when a check job uploaded a screenshot diff, and a skipped job reports success.
+  # Runs only when the check uploaded a screenshot diff, and a skipped job reports success.
   judge:
     needs: check
     if: needs.check.outputs.screenshots == 'true'
@@ -258,8 +173,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
       - uses: actions/download-artifact@v8
         with:
-          pattern: screenshot-diff-*
-          merge-multiple: true
+          name: screenshot-diff
           path: screenshot-diff
       - uses: actions/checkout@v7
         with:
