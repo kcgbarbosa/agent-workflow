@@ -75,7 +75,7 @@ def test_write_puts_a_repo_on_the_shared_gate(python_repo: Path, env: dict[str, 
     assert "CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" in caller
     assert "CHECK_ENV: ${{ secrets.CHECK_ENV }}" in caller
     assert len(caller.splitlines()) <= 19
-    assert "hold" in (python_repo / ".github" / "workflows" / "hold.yml").read_text()
+    assert not (python_repo / ".github" / "workflows" / "hold.yml").exists()
     assert (python_repo / "mise.toml").read_text() == '[tools]\nnode = "22.4.0"\nuv = "0.9.1"\n'
     assert "[review]\nenabled = true\n" in (python_repo / "loop.toml").read_text()
 
@@ -130,7 +130,7 @@ def test_protect_requires_the_gate_and_allows_squash_only(python_repo: Path, env
     gate(python_repo, env, "protect")
 
     log = (tmp_path / "gh.log").read_text()
-    assert "gh label create hold --force" in log
+    assert "gh label create hold" not in log
     settings = log.split("gh api -X PATCH repos/{owner}/{repo} ")[1].splitlines()[0].split()
     assert settings == [
         "-F", "allow_squash_merge=true",
@@ -146,8 +146,6 @@ def test_protect_requires_the_gate_and_allows_squash_only(python_repo: Path, env
     assert [check["context"] for check in protection["required_status_checks"]["checks"]] == [
         "gate / check",
         "gate / review",
-        "gate / judge",
-        "hold",
     ]
     assert protection["required_pull_request_reviews"]["required_approving_review_count"] == 0
     assert protection["allow_force_pushes"] is False

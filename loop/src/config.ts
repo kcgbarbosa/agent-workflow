@@ -14,7 +14,8 @@ const PLAN_KEYS = ["pro", "max-5x", "max-20x"];
 const DROPPED: Record<string, string> = {
   gates: "the merge gate runs the checks on the pull request",
   acceptance: "the merge gate runs the acceptance tests",
-  "ui.skill": "the merge gate's judge reviews the UI",
+  "ui.skill": "the owner reviews the UI on staging",
+  "ui.blocking": "the owner reviews the UI on staging",
   demo: "the loop no longer opens an Epic pull request with a demo",
   "tracker.name_landed_keys_only": "the loop no longer opens the Epic pull request it named the landed keys in",
 };
@@ -245,11 +246,9 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     return { plan, since, exact };
   });
 
-  // Keys the loop checks and uses for nothing: `[ui]` `path`, `accepted_unchecked`, and `blocking` are settings
-  // of the gate's judge.
+  // Keys the loop checks and uses for nothing: `[ui]` `path` and `accepted_unchecked` describe the repo's UI.
   ui.text("path", null);
   ui.texts("accepted_unchecked", []);
-  ui.texts("blocking", []);
 
   const config: Config = {
     repo,

@@ -441,8 +441,8 @@ enabled = true
 
   expect(ran.code, ran.stderr).toBe(0);
   const warnings = ran.stderr.split("\n").filter((line) => line.includes("is no longer read"));
-  expect(warnings).toHaveLength(5);
-  for (const key of ["[gates]", "[acceptance]", "[ui].skill", "[demo]", "[tracker].name_landed_keys_only"]) {
+  expect(warnings).toHaveLength(6);
+  for (const key of ["[gates]", "[acceptance]", "[ui].skill", "[ui].blocking", "[demo]", "[tracker].name_landed_keys_only"]) {
     expect(warnings.filter((line) => line.startsWith(`loop.toml: ${key} `))).toHaveLength(1);
   }
 });

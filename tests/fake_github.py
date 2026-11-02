@@ -1,6 +1,6 @@
 """A fake `gh` that keeps a pull request's reviews and comments in a JSON file, and a fake `claude` that replays answers.
 
-The gate's review and judge tests put both on PATH, so no test reaches GitHub or a model.
+The gate's review tests put both on PATH, so no test reaches GitHub or a model.
 """
 
 from __future__ import annotations

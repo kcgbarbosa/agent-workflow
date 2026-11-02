@@ -9,7 +9,7 @@ concurrency:
 jobs:
   gate:
     uses: ./.github/workflows/gate.yml
-    # The review and the judge comment on the pull request, and bill the plan of the token or the API of the key.
+    # The review comments on the pull request, and bill the plan of the token or the API of the key.
     permissions:
       contents: read
       pull-requests: write
