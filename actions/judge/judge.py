@@ -1,4 +1,4 @@
-"""The gate's UI judge: one model call per screenshot step, with no tools, and a comment for what it finds.
+"""The gate's UI judge: model calls with no tools, one per changed step and one per batch of rated steps, and a comment for what it finds.
 
 It runs in a checkout of the base, for its loop.toml, with the diff folder beside it. action.yml gives the folder and the env it reads.
 Exit 1 means a blocking verdict.
@@ -14,7 +14,9 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 VERDICTS = ("blocking", "minor", "fine")
@@ -22,6 +24,8 @@ IMAGES = (("baseline.png", "The baseline, from the base branch:"), ("new.png", "
 RATED_IMAGES = (("new.png", "The screenshot:"),)
 BLOCKING_MARKER = "<!-- gate judge blocking -->"
 MINOR_MARKER = "<!-- gate judge minor -->"
+NO_VERDICT = {"verdict": "minor", "sentence": "The judge gave no verdict for this step."}
+PARALLEL = 4
 
 
 def blocking_list() -> list[str]:
@@ -59,42 +63,40 @@ def find_steps(folder: Path) -> list[Step]:
     return steps
 
 
-def prompt(line: str, blocking: list[str], baseline: bool = True) -> str:
-    if not baseline:
-        rule = (
-            f"The screen is blocking only when it shows one of these faults: {'; '.join(blocking)}. Any other fault is minor."
-            if blocking
-            else "Nothing is blocking in this repo, so every screen is minor or fine."
-        )
-        return (
-            "You judge one screenshot of a pull request. It has no baseline, so judge the screen as it is.\n"
-            f"The ticket line for this step: {line}\n"
-            f"{rule} Fine means the screen is what the ticket line asks for and looks right.\n"
-            'Answer with JSON only, in the shape {"verdict": "blocking" | "minor" | "fine", "sentence": "<one sentence>"}. '
-            'A blocking answer adds "fault": the item of the list that the screen shows.'
-        )
-    rule = (
-        f"A change is blocking only when it shows one of these: {'; '.join(blocking)}. Anything else is minor or fine."
-        if blocking
-        else "Nothing is blocking in this repo, so every change is minor or fine."
-    )
+def rule(blocking: list[str], subject: str, fault_word: str) -> str:
+    if not blocking:
+        return f"Nothing is blocking in this repo, so every {subject} is minor or fine."
+    return f"A {subject} is blocking only when it shows one of these{fault_word}: {'; '.join(blocking)}. Anything else is minor or fine."
+
+
+def prompt(line: str, blocking: list[str]) -> str:
     return (
         "You judge one changed screenshot of a pull request. You see the baseline, the new screenshot, and the diff.\n"
         f"The ticket line for this step: {line}\n"
-        f"{rule} Fine means the change is what the ticket line asks for and looks right.\n"
+        f"{rule(blocking, 'change', '')} Fine means the change is what the ticket line asks for and looks right.\n"
         'Answer with JSON only, in the shape {"verdict": "blocking" | "minor" | "fine", "sentence": "<one sentence>"}. '
         'A blocking answer adds "fault": the item of the list that the change shows.'
     )
 
 
-def ask(step: Step, blocking: list[str]) -> dict:
-    content: list[dict] = [{"type": "text", "text": prompt(step.meta["line"], blocking, baseline=not step.rated)}]
-    for file, caption in step.images:
-        data = base64.b64encode(file.read_bytes()).decode()
-        content += [
-            {"type": "text", "text": caption},
-            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}},
-        ]
+def batch_prompt(blocking: list[str]) -> str:
+    return (
+        "You judge screenshots of a pull request, one per step. They have no baseline, so judge each screen as it is.\n"
+        "Each screenshot follows its step name and the ticket line for that step.\n"
+        f"{rule(blocking, 'screen', ' faults')} Fine means the screen is what its ticket line asks for and looks right.\n"
+        "Answer with JSON only: one key per step name, each in the shape "
+        '{"verdict": "blocking" | "minor" | "fine", "sentence": "<one sentence>"}. '
+        'A blocking answer adds "fault": the item of the list that the screen shows.'
+    )
+
+
+def picture(file: Path) -> dict:
+    data = base64.b64encode(file.read_bytes()).decode()
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": data}}
+
+
+def call(content: list[dict]) -> tuple[dict | None, str]:
+    """One model call with no tools. It returns the answer's JSON object, or None, and the text to log when that fails."""
     message = {"type": "user", "message": {"role": "user", "content": content}}
     claude = shutil.which("claude")
     command = [claude] if claude else ["npx", "-y", "@anthropic-ai/claude-code"]
@@ -119,12 +121,35 @@ def ask(step: Step, blocking: list[str]) -> dict:
     text = next((event.get("result") or "" for event in events if event.get("type") == "result"), "")
     match = re.search(r"\{.*\}", text, re.DOTALL)
     try:
-        answer = json.loads(match[0]) if match else {}
+        return (json.loads(match[0]) if match else None), f"{result.stderr}{text}"
     except json.JSONDecodeError:
-        answer = {}
-    if answer.get("verdict") not in VERDICTS or not isinstance(answer.get("sentence"), str):
-        sys.exit(f"The judge gave no verdict for {step.name}:\n{result.stderr}{text}")
-    return answer
+        return None, f"{result.stderr}{text}"
+
+
+def valid(answer: object) -> bool:
+    return isinstance(answer, dict) and answer.get("verdict") in VERDICTS and isinstance(answer.get("sentence"), str)
+
+
+def ask(step: Step, blocking: list[str]) -> dict[str, dict]:
+    """A changed step keeps one call of its own, for its three images."""
+    content: list[dict] = [{"type": "text", "text": prompt(step.meta["line"], blocking)}]
+    for file, caption in step.images:
+        content += [{"type": "text", "text": caption}, picture(file)]
+    answer, log = call(content)
+    if not valid(answer):
+        sys.exit(f"The judge gave no verdict for {step.name}:\n{log}")
+    return {step.name: answer}
+
+
+def ask_batch(batch: list[Step], blocking: list[str]) -> dict[str, dict]:
+    """Rated steps share one call. A step the answer does not name is minor, so a lost verdict still reaches the checklist."""
+    content: list[dict] = [{"type": "text", "text": batch_prompt(blocking)}]
+    for step in batch:
+        content += [{"type": "text", "text": f"Step {step.name}. Its ticket line: {step.meta['line']}"}, picture(step.images[0][0])]
+    answers, log = call(content)
+    if answers is None:
+        sys.exit(f"The judge gave no verdict for {', '.join(step.name for step in batch)}:\n{log}")
+    return {step.name: answers[step.name] if valid(answers.get(step.name)) else NO_VERDICT for step in batch}
 
 
 def image(repo: str, sha: str, path: str, alt: str) -> str:
@@ -172,9 +197,18 @@ def main() -> int:
     repo, number = os.environ["GITHUB_REPOSITORY"], os.environ["PR_NUMBER"]
     base, head = os.environ["BASE_SHA"], os.environ["HEAD_SHA"]
     blocking = blocking_list()
+    size = int(os.environ.get("JUDGE_BATCH_SIZE") or 10)
+    rated = [step for step in steps if step.rated]
+    jobs = [partial(ask, step, blocking) for step in steps if not step.rated]
+    jobs += [partial(ask_batch, rated[start : start + size], blocking) for start in range(0, len(rated), size)]
+    answers: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+        for result in pool.map(lambda job: job(), jobs):
+            answers |= result
+
     found: dict[str, list[tuple[Step, dict]]] = {verdict: [] for verdict in VERDICTS}
     for step in steps:
-        answer = ask(step, blocking)
+        answer = answers[step.name]
         if answer["verdict"] == "blocking" and not on_list(answer, blocking):
             answer = {"verdict": "minor", "sentence": f"{answer['sentence']} (Not on the blocking list.)"}
         found[answer["verdict"]].append((step, answer))

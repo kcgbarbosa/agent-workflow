@@ -51,15 +51,19 @@ json.dump(state, open(state_path, "w"))
 """
 
 CLAUDE = """
-import json, os, sys
+import fcntl, json, os, sys
 calls_path, replies_path = {calls!r}, {replies!r}
 stdin = "" if sys.stdin.isatty() else sys.stdin.read()
-calls = json.load(open(calls_path))
-calls.append({{"argv": sys.argv[1:], "stdin": stdin, "api_key": os.environ.get("ANTHROPIC_API_KEY")}})
-json.dump(calls, open(calls_path, "w"))
-replies = json.load(open(replies_path))
-print(replies.pop(0))
-json.dump(replies, open(replies_path, "w"))
+with open(calls_path + ".lock", "w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    calls = json.load(open(calls_path))
+    calls.append({{"argv": sys.argv[1:], "stdin": stdin, "api_key": os.environ.get("ANTHROPIC_API_KEY")}})
+    json.dump(calls, open(calls_path, "w"))
+    replies = json.load(open(replies_path))
+    reply = next(r for r in replies if not isinstance(r, dict) or r["when"] in stdin)
+    replies.remove(reply)
+    print(reply["print"] if isinstance(reply, dict) else reply)
+    json.dump(replies, open(replies_path, "w"))
 """
 
 
@@ -114,6 +118,10 @@ class FakeGitHub:
     def reply(self, *outputs: object) -> None:
         """Queues what each next `claude` run prints."""
         self.replies_path.write_text(json.dumps([o if isinstance(o, str) else json.dumps(o) for o in outputs]))
+
+    def reply_to(self, outputs: dict[str, object]) -> None:
+        """Queues what the `claude` run whose input holds each key prints, for calls that run at once."""
+        self.replies_path.write_text(json.dumps([{"when": k, "print": o if isinstance(o, str) else json.dumps(o)} for k, o in outputs.items()]))
 
     def run(self, script: Path, **env: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, str(script)], cwd=self.work, env={**self.env, **env}, capture_output=True, text=True)
