@@ -1,7 +1,8 @@
 // A run turns each ticket of the frontier into one pull request. A ticket is a fixed list of steps: build,
 // push, pull request, wait, merge. The gate on GitHub checks the work, so the loop runs no gate, no review,
-// no landing, and no Epic branch of its own. A red gate resumes the agent as a fix attempt, and a ticket whose
-// blocker has an open pull request stacks on it. A restart starts each ticket at its first step.
+// no landing, and no Epic branch of its own. A red gate resumes the agent as a fix attempt, a green gate with
+// blocking review findings resumes it once to answer them, and a ticket whose blocker has an open pull request
+// stacks on it. A restart starts each ticket at its first step.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -45,9 +46,6 @@ const DONE = "Done";
 
 /** The lines of a failed setup's output that the stuck reason quotes. */
 const SETUP_TAIL = 20;
-
-/** The required check that fails while the pull request has the hold label. It is a pause, not a red gate, as a draft is. */
-const HOLD_CHECK = "hold";
 
 /** The types of a ticket's branch and commit scope: `fix` for a Bug, `feat` for the rest. */
 const BRANCH_TYPES = ["feat", "fix"];
@@ -146,6 +144,8 @@ export class Run {
   /** Until when, in epoch milliseconds, the run waits for a usage limit to reset. */
   private pausedUntil = 0;
   private wake: () => void = () => {};
+  /** The check names that branch protection requires on the main branch, read once per run. */
+  private required: string[] = [];
   /** The spare slot each ticket slot moved to for the rest of the run, because another project held a port. */
   private readonly slotMoves = new Map<number, number>();
 
@@ -178,6 +178,12 @@ export class Run {
     }
     for (const ticket of tickets) this.byKey.set(ticket.key, ticket);
     await git(this.config.repo, "fetch", "--prune", "--quiet", "origin");
+    try {
+      this.required = await github.requiredChecks(this.config.repo, this.config.mainBranch);
+      this.log.write(this.name, "required-checks", "ok", { detail: this.required.join(", ") });
+    } catch (error) {
+      this.log.write(this.name, "required-checks", "fail", { detail: (error as Error).message });
+    }
     const mergedBefore = new Map<string, github.PullRequest>();
     for (const ticket of tickets) {
       const { branch } = await this.branchOf(ticket);
@@ -387,6 +393,8 @@ export class Run {
     let prompt = `/implement ${join(runDir, "ticket.md")}`;
     let url: string | null = null;
     let autoMerge = false;
+    // The review's blocking findings get one response pass in a run, so they never keep a ticket from merging.
+    let answered = false;
     let red = "";
     let failed: github.Check[] = [];
     for (let attempt = 1; ; attempt++) {
@@ -405,7 +413,7 @@ export class Run {
         this.log.write(key, "build", "fail", { commit: before, detail: error.message });
         return this.stuck(key, error.message, url);
       }
-      const commit = await git(worktree, "rev-parse", "HEAD");
+      let commit = await git(worktree, "rev-parse", "HEAD");
       if (session.result !== "done") {
         this.log.write(key, "build", session.result === "blocked" ? "blocked" : "fail", { commit, session: session.session, detail: session.detail });
         return "stopped";
@@ -433,8 +441,8 @@ export class Run {
         }
       }
 
-      // Pull request. A stacked one targets its blocker's branch, and gets auto-merge once it targets main,
-      // so that GitHub never merges it into the blocker's branch.
+      // Pull request, with auto-merge off, so a green gate does not merge it before the review is answered. A
+      // stacked one targets its blocker's branch, and GitHub never merges it there.
       if (url === null) {
         try {
           url = await this.pullRequest(ticket, branch, runDir, base, session.output?.reason ?? "");
@@ -442,25 +450,22 @@ export class Run {
           this.log.write(key, "pr", "fail", { commit, detail: (error as Error).message });
           return "stopped";
         }
-        let detail = "";
         const onMain = (await github.view(repo, url)).baseRefName === main;
-        if (onMain) {
-          [autoMerge, detail] = await this.autoMerge(url);
-        } else {
-          detail = `It stacks on ${base}, so auto-merge waits until it targets ${main}.`;
-        }
+        const detail = onMain
+          ? "Auto-merge turns on once the checks are green and the review is answered."
+          : `It stacks on ${base}, so auto-merge waits until it targets ${main}.`;
         // An open question of the agent goes in the log, not in the body, where it would read as a blocker.
         const decisions = session.output?.decisions ?? [];
         this.log.write(key, "pr", "open", { commit, pr: url, auto_merge: autoMerge, detail, ...(decisions.length ? { decisions } : {}) });
-        if (onMain && !autoMerge) this.log.write(key, "auto-merge", "fail", { pr: url, detail });
         this.open.set(key, { url, branch });
         this.wake();
         await this.status(key, this.config.inReview);
       }
 
-      // Wait. A stacked pull request that is green waits for its base to merge, then waits on its checks
-      // again with auto-merge on, since green so far may predate the review, so a check that turns red after
-      // the retarget still gets a fix attempt. When auto-merge does not turn on, the loop merges on that green.
+      // Wait. On the first green, a stacked pull request waits for its base to merge, and the agent answers
+      // the review's blocking findings once, which can push a commit that the gate checks again. Then auto-merge
+      // turns on and the loop waits on the checks again, since a required check may not have reported yet, so
+      // a check that turns red still gets a fix attempt. When auto-merge does not turn on, the loop merges on green.
       let checks: Awaited<ReturnType<Run["wait"]>>;
       for (;;) {
         checks = await this.wait(key, url, autoMerge, commit, rerun);
@@ -470,14 +475,25 @@ export class Run {
           checks: checks.checks.map(logged),
           detail: checks.detail,
         });
-        if (checks.result !== "green" || autoMerge || !stack) break;
-        if ((await github.view(repo, url)).baseRefName !== main) {
+        if (checks.result !== "green" || autoMerge) break;
+        if (stack && (await github.view(repo, url)).baseRefName !== main) {
           const result = await this.untilMain(url, stack.key);
           this.log.write(key, "base", result, { pr: url, detail: result === "main" ? `${stack.key} merged.` : `${stack.key} did not merge.` });
           if (result !== "main") return "stopped";
         }
+        if (!answered) {
+          answered = true;
+          const pushed = await this.respond(key, url, branch, worktree, runDir, slot, commit);
+          if (pushed === "stopped") return "stopped";
+          if (pushed) {
+            commit = pushed;
+            rerun = new Set();
+            continue;
+          }
+        }
         autoMerge = await this.turnOnAutoMerge(key, url);
-        if (!autoMerge) break;
+        // A pull request whose required checks have all passed merges as auto-merge turns on.
+        if (!autoMerge || (await github.view(repo, url)).state === "MERGED") break;
       }
       if (checks.result === "green") break;
       if (checks.result !== "red" || checks.closed) return "stopped";
@@ -643,7 +659,7 @@ export class Run {
    * that run again, which the wait reads as pending until their new jobs report.
    */
   private async rerun(key: string, url: string, checks: github.Check[], commit: string): Promise<Set<string>> {
-    const red = redChecks(checks).filter((check) => check.name !== HOLD_CHECK);
+    const red = redChecks(checks);
     const rerun = new Set<string>();
     const errors: string[] = [];
     for (const run of new Set(red.map((check) => github.runOf(check.link)).filter((run) => run !== null))) {
@@ -663,7 +679,7 @@ export class Run {
   private async fixPrompt(url: string, checks: github.Check[]): Promise<string> {
     const repo = this.config.repo;
     let text = `The merge gate is red on ${url}. Fix the cause and commit the fix. Do not push: the loop pushes, and the gate runs again.\n`;
-    for (const check of redChecks(checks).filter((item) => item.name !== HOLD_CHECK)) {
+    for (const check of redChecks(checks)) {
       text += `\n## ${check.name}\n\n`;
       try {
         const log = await github.failedLog(repo, check.link, LOG_TAIL_LINES);
@@ -674,14 +690,57 @@ export class Run {
     }
     try {
       const findings = await github.blockingFindings(repo, Number(url.split("/").at(-1)));
-      if (findings.length) {
-        text += "\n## The review's blocking findings\n\n";
-        text += findings.map((item) => `- \`${item.path}${item.line ? `:${item.line}` : ""}\` ${item.sentence}`).join("\n") + "\n";
-      }
+      if (findings.length) text += `\n## The review's blocking findings\n\n${listed(findings)}`;
     } catch (error) {
       text += `\nThe loop could not read the review: ${(error as Error).message}\n`;
     }
     return text;
+  }
+
+  /**
+   * Resumes the session once with the blocking findings of the gate's review at the head, if any. Returns the
+   * commit it pushed, null when it pushed none, or "stopped" when the push failed. A response that fails or
+   * ends with no commit is no failure: the ticket goes on to merge.
+   */
+  private async respond(key: string, url: string, branch: string, worktree: string, runDir: string, slot: number, commit: string): Promise<string | null | "stopped"> {
+    let findings: github.Finding[];
+    try {
+      findings = await github.blockingFindings(this.config.repo, Number(url.split("/").at(-1)), commit);
+    } catch (error) {
+      this.log.write(key, "respond", "fail", { commit, pr: url, detail: `The loop could not read the review: ${(error as Error).message}` });
+      return null;
+    }
+    if (!findings.length) return null;
+    this.log.write(key, "respond", "started", { commit, pr: url, detail: `${findings.length} blocking findings.` });
+    const prompt =
+      `The merge gate is green on ${url}, and the gate's review has blocking findings. Answer each finding once: ` +
+      `fix it and commit, or reply on the pull request with \`gh pr comment ${url} --body ...\` giving the reason it is not a fault. ` +
+      "Do not push: the loop pushes, waits for the gate, and merges.\n\n## The review's blocking findings\n\n" +
+      listed(findings);
+    let session: Session;
+    try {
+      session = await this.agent(key, prompt, worktree, runDir, slot);
+    } catch (error) {
+      if (!(error instanceof PortsTaken)) throw error;
+      this.log.write(key, "respond", "fail", { commit, pr: url, detail: error.message });
+      return null;
+    }
+    const head = await git(worktree, "rev-parse", "HEAD");
+    if (session.result !== "done" || head === commit) {
+      const result = session.result === "done" ? "pass" : session.result === "blocked" ? "blocked" : "fail";
+      const detail = session.result === "done" ? "The response returned done with no new commit." : session.detail;
+      this.log.write(key, "respond", result, { commit, session: session.session, pr: url, detail });
+      return null;
+    }
+    this.log.write(key, "respond", "pass", { commit: head, session: session.session, pr: url, detail: session.detail });
+    try {
+      await git(worktree, "push", "--quiet", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`);
+      this.log.write(key, "push", "ok", { commit: head });
+    } catch (error) {
+      this.log.write(key, "push", "fail", { commit: head, detail: (error as Error).message });
+      return "stopped";
+    }
+    return head;
   }
 
   /** Flags the ticket, comments the reason and the pull request, and notifies. Its pull request stays open. */
@@ -813,7 +872,7 @@ export class Run {
       "Do not push, and do not open a pull request.\n" +
       (stack ? `- The branch stacks on \`${stack.branch}\`, the open pull request of ${stack.key}, and its pull request targets that branch.\n` : "") +
       `- The run folder is \`${runDir}\`.\n` +
-      "- After you return done, the loop pushes the branch and opens a pull request with auto-merge on. " +
+      "- After you return done, the loop pushes the branch, opens a pull request, and merges it once it is green. " +
       "The merge gate runs every check on it. Run the tests that cover your change.\n";
     if (this.config.agentHint) text += `- ${this.config.agentHint}\n`;
     writeFileSync(join(runDir, "ticket.md"), text);
@@ -882,9 +941,9 @@ export class Run {
    * Polls until a check fails, the pull request merges, or the wait runs out. With auto-merge on, GitHub
    * merges once every required check passes, so a check that has not reported yet keeps the loop waiting.
    * With auto-merge off, every check reported so far passing is green, and the loop merges. The checks count
-   * once the pull request's head is the pushed commit, so the checks of the commit before a fix never do. The
-   * `hold` check fails while the hold label is on, and GitHub turns auto-merge off on a draft: each is a pause
-   * the loop waits out, not a red gate, and the wait's limit does not run while it lasts.
+   * once the pull request's head is the pushed commit, so the checks of the commit before a fix never do. Only
+   * the required checks count, and a required one that has not reported yet is pending. A draft is a pause the loop waits out, and the wait's limit does not run while it
+   * lasts. GitHub turns auto-merge off on a draft.
    */
   private async wait(
     key: string,
@@ -912,14 +971,12 @@ export class Run {
         } catch (error) {
           console.error((error as Error).message);
         }
-        const red = redChecks(checks).filter((check) => check.name !== HOLD_CHECK);
+        const red = redChecks(checks);
         if (red.length) return { result: "red", checks, detail: `Failed: ${red.map((check) => check.name).join(", ")}`, closed: false };
-        const holdOn = redChecks(checks).some((check) => check.name === HOLD_CHECK);
-        if (holdOn || pr.isDraft) {
+        if (pr.isDraft) {
           deadline = Date.now() + WAIT_MINUTES * 60_000;
           if (!held) {
-            const why = pr.isDraft ? "The pull request is a draft." : "The hold label is on.";
-            this.log.write(key, "wait", "held", { commit, pr: url, checks: checks.map(logged), detail: `${why} The loop waits until it is not.` });
+            this.log.write(key, "wait", "held", { commit, pr: url, checks: checks.map(logged), detail: "The pull request is a draft. The loop waits until it is not." });
           }
           held = true;
         } else {
@@ -928,7 +985,10 @@ export class Run {
             autoMerge = await this.turnOnAutoMerge(key, url);
           }
           held = false;
-          const passed = checks.length > 0 && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
+          const passed =
+            checks.length > 0 &&
+            checks.every((check) => check.bucket === "pass" || check.bucket === "skipping") &&
+            this.required.every((name) => checks.some((check) => check.name === name));
           if (passed && !autoMerge) return { result: "green", checks, detail: "", closed: false };
         }
       }
@@ -1054,6 +1114,11 @@ export class Run {
       this.log.write(this.name, "notify", "fail", { detail: `${message}: ${(error as Error).message}` });
     }
   }
+}
+
+/** The findings as a Markdown list, each with its path and line. */
+function listed(findings: github.Finding[]): string {
+  return findings.map((item) => `- \`${item.path}${item.line ? `:${item.line}` : ""}\` ${item.sentence}`).join("\n") + "\n";
 }
 
 function nextLog(runDir: string): string {

@@ -2,7 +2,7 @@
 // FAKE_DIR/plan.json for the ticket of the run folder. A ticket with no plan writes one file and commits.
 //
 // A step holds `write` ({path: text}) and `commit` (the message), `status` ("done" or "blocked"), `reason`, and `decisions`.
-// `{}` returns done with no change. `limit` ({resetsIn: seconds}) ends the run at a usage limit that resets
+// `gh` (the arguments) runs `gh` first, as an agent that comments on the pull request. `{}` returns done with no change. `limit` ({resetsIn: seconds}) ends the run at a usage limit that resets
 // that long from now, with no change. `meet` (a ticket key) waits until that ticket's agent runs too. `meter`
 // ({window: [start, end]}) reads the plan meter twice, at the start and the end of the run, and `pause`
 // (milliseconds) waits after the readings.
@@ -77,6 +77,7 @@ async function play(prompt) {
     });
     return;
   }
+  if (now.gh) execFileSync("gh", now.gh);
   if (now.write) {
     for (const [path, text] of Object.entries(now.write)) {
       mkdirSync(dirname(path), { recursive: true });

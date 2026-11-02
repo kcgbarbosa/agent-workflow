@@ -157,7 +157,7 @@ test("a log with checks that have no link shows them with none", async () => {
 test("a held pull request's result is held", async () => {
   world.record([
     ...redThenFixed(process.pid).slice(0, 7),
-    { ticket: "DEMO-2", step: "wait", result: "held", pr: PR, checks: [{ name: "hold", bucket: "fail" }], detail: "The hold label is on. The loop waits until it is not." },
+    { ticket: "DEMO-2", step: "wait", result: "held", pr: PR, checks: [{ name: "gate / check", bucket: "pass" }], detail: "The pull request is a draft. The loop waits until it is not." },
   ]);
   watching = await world.watch();
 
@@ -264,7 +264,7 @@ function opened(key: string, pr: string): object[] {
   ];
 }
 
-const HOLD = "The hold label is on. The loop waits until it is not.";
+const HOLD = "The pull request is a draft. The loop waits until it is not.";
 
 /** A killed run with one ticket of each needs-KC kind: held, stuck with no pull request, timed out, and not merged. */
 function eachKind(): object[] {
@@ -272,7 +272,7 @@ function eachKind(): object[] {
     { ticket: EPIC, step: "start", result: "ok", pid: deadPid() },
     FRONTIER,
     ...opened("DEMO-2", `${PR}2`),
-    { ticket: "DEMO-2", step: "wait", result: "held", pr: `${PR}2`, checks: [{ name: "hold", bucket: "fail" }], detail: HOLD },
+    { ticket: "DEMO-2", step: "wait", result: "held", pr: `${PR}2`, checks: [{ name: "gate / check", bucket: "pass" }], detail: HOLD },
     { ticket: "DEMO-3", step: "start", result: "new", detail: "feat/DEMO-3", slot: 1 },
     { ticket: "DEMO-3", step: "build", result: "started", attempt: 1 },
     { ticket: "DEMO-3", step: "build", result: "blocked", detail: "The spec does not say which page." },
@@ -311,7 +311,7 @@ test("a run with nothing to act on gives an empty needs-KC list", async () => {
 });
 
 test("a held pull request released by a later wait leaves the list, and a merged one leaves it", async () => {
-  const held = { ticket: "DEMO-2", step: "wait", result: "held", pr: `${PR}2`, checks: [{ name: "hold", bucket: "fail" }], detail: HOLD };
+  const held = { ticket: "DEMO-2", step: "wait", result: "held", pr: `${PR}2`, checks: [{ name: "gate / check", bucket: "pass" }], detail: HOLD };
   world.record([
     { ticket: EPIC, step: "start", result: "ok", pid: process.pid },
     FRONTIER,
@@ -557,7 +557,7 @@ function fourProjects(): void {
     { ticket: "BETA-2", step: "build", result: "pass", commit: "b1", detail: `Built with token ${SECRET}` },
     { ticket: "BETA-2", step: "push", result: "ok", commit: "b1" },
     { ticket: "BETA-2", step: "pr", result: "open", commit: "b1", pr: `${PR}b` },
-    { ticket: "BETA-2", step: "wait", result: "held", pr: `${PR}b`, checks: [{ name: "hold", bucket: "fail" }], detail: HOLD },
+    { ticket: "BETA-2", step: "wait", result: "held", pr: `${PR}b`, checks: [{ name: "gate / check", bucket: "pass" }], detail: HOLD },
     { ticket: "BETA-2", step: "notify", result: "ok", detail: "Held." },
   ]), "BETA-1", "beta");
   const gamma = world.project("gamma");

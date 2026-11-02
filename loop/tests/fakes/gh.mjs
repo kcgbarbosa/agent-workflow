@@ -7,7 +7,8 @@
 // FAKE_DIR/no-retarget exists. A new pull request gets the review of FAKE_DIR/reviews.json by ticket key, in
 // the shape the gate's review posts: the findings in the diff as comments, and the others in the body. A draft
 // pull request does not merge, as on GitHub. Auto-merge also waits for each check that FAKE_DIR/required.json
-// names to report, as branch protection's required checks do. Another repo is a bare origin beside FAKE_ORIGIN,
+// names to report, as branch protection's required checks do, and ignores the other checks, which `gh pr
+// checks --required` leaves out. With no FAKE_DIR/required.json, every check is required. Another repo is a bare origin beside FAKE_ORIGIN,
 // `<name>.git`: `gh repo clone` clones it, and a call in its clone acts on its pull requests only.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
@@ -59,9 +60,10 @@ const fail = (message, code = 1) => {
 };
 const STATES = { pass: "SUCCESS", fail: "FAILURE", pending: "PENDING", skipping: "SKIPPED", cancel: "CANCELLED" };
 const required = existsSync(join(fakes, "required.json")) ? JSON.parse(readFileSync(join(fakes, "required.json"), "utf8")) : [];
+const isRequired = (check) => !required.length || required.includes(check.name);
 const green = (pr) =>
   pr.checks.length > 0 &&
-  pr.checks.every((check) => check.bucket === "pass" || check.bucket === "skipping") &&
+  pr.checks.filter(isRequired).every((check) => check.bucket === "pass" || check.bucket === "skipping") &&
   required.every((name) => pr.checks.some((check) => check.name === name));
 const originOf = (pr) => pr.origin ?? origin;
 const gitAt = (at, ...command) => execFileSync("git", ["-C", at, ...command], { encoding: "utf8" }).trim();
@@ -125,7 +127,7 @@ if (settled) save();
 
 const [noun, verb] = args;
 const show = (pr) => {
-  const { checks, body, autoMerge, pushes, reruns, reviews, ...rest } = pr;
+  const { checks, body, autoMerge, pushes, reruns, reviews, comments, ...rest } = pr;
   return { ...rest, autoMergeRequest: autoMerge, ...((option("json") ?? "").split(",").includes("body") ? { body } : {}) };
 };
 if (noun === "run" && verb === "view") {
@@ -144,6 +146,12 @@ if (noun === "run" && verb === "rerun") {
   pr.reruns = (pr.reruns ?? 0) + 1;
   pr.checks = [check(pr)];
   save();
+  process.exit(0);
+}
+if (noun === "api" && /^repos\/\{owner\}\/\{repo\}\/branches\/[^/]+\/protection\/required_status_checks$/.test(args[1])) {
+  // Branch protection's required checks, from FAKE_DIR/required.json. With none, the branch is not protected.
+  if (!existsSync(join(fakes, "required.json"))) fail("gh: Branch not protected (HTTP 404)");
+  console.log(JSON.stringify(required));
   process.exit(0);
 }
 if (noun === "api") {
@@ -220,12 +228,18 @@ if (verb === "list") {
   if (option("base")) pr.baseRefName = option("base");
   if (option("body-file")) pr.body = readFileSync(option("body-file"), "utf8");
   save();
+} else if (verb === "comment") {
+  const pr = find(args[2]);
+  pr.comments = [...(pr.comments ?? []), option("body")];
+  save();
 } else if (verb === "checks") {
   const pr = find(args[2]);
-  if (!pr.checks.length) fail(`no checks reported on the '${pr.headRefName}' branch`);
-  console.log(JSON.stringify(pr.checks));
-  if (pr.checks.some((check) => check.bucket === "fail" || check.bucket === "cancel")) process.exit(1);
-  if (pr.checks.some((check) => check.bucket === "pending")) process.exit(8);
+  const wanted = args.includes("--required");
+  const checks = wanted ? pr.checks.filter(isRequired) : pr.checks;
+  if (!checks.length) fail(`no ${wanted ? "required " : ""}checks reported on the '${pr.headRefName}' branch`);
+  console.log(JSON.stringify(checks));
+  if (checks.some((check) => check.bucket === "fail" || check.bucket === "cancel")) process.exit(1);
+  if (checks.some((check) => check.bucket === "pending")) process.exit(8);
 } else {
   fail(`fake gh: no pr ${verb}`);
 }

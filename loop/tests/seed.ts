@@ -126,10 +126,9 @@ function lines(home: string): object[] {
       commit: "d1",
       pr: pr(4),
       checks: [
-        { name: "hold", bucket: "fail", link: link(41) },
         { name: "gate / check", bucket: "pass", link: link(42) },
       ],
-      detail: "The hold label is on. The loop waits until it is not.",
+      detail: "The pull request is a draft. The loop waits until it is not.",
     },
     { ticket: "DEMO-6", step: "start", result: "new", detail: "feat/DEMO-6", slot: 0 },
     { ticket: "DEMO-6", step: "build", result: "started", attempt: 1 },
@@ -141,7 +140,7 @@ function lines(home: string): object[] {
     { ticket: "DEMO-8", step: "wait", result: "green", commit: "DEMO-8-1", pr: pr(6), checks: [{ name: "gate / check", bucket: "pass", link: link(61) }] },
     { ticket: "DEMO-8", step: "merge", result: "fail", pr: pr(6), detail: "The pull request did not merge." },
     ...opened("DEMO-9", 7),
-    { ticket: "DEMO-9", step: "wait", result: "held", commit: "DEMO-9-1", pr: pr(7), checks: [{ name: "hold", bucket: "fail", link: link(71) }], detail: "The hold label is on. The loop waits until it is not." },
+    { ticket: "DEMO-9", step: "wait", result: "held", commit: "DEMO-9-1", pr: pr(7), checks: [{ name: "gate / check", bucket: "pass", link: link(71) }], detail: "The pull request is a draft. The loop waits until it is not." },
     { ticket: "DEMO-9", step: "wait", result: "green", commit: "DEMO-9-1", pr: pr(7), checks: [{ name: "gate / check", bucket: "pass", link: link(72) }] },
   ];
 }

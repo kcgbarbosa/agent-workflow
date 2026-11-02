@@ -48,6 +48,145 @@ test("a red gate resumes the agent with the failing job's log tail and the revie
   expect(world.git(world.origin, "show", "main:login.txt")).toBe("fixed");
 });
 
+const FINDINGS = [
+  { path: "src/login.ts", line: 12, severity: "blocking" as const, sentence: "The password is logged in plain text." },
+  { path: "src/session.ts", line: 3, severity: "blocking" as const, sentence: "The session never expires.", outside: true },
+  { path: "src/login.ts", line: 20, severity: "minor" as const, sentence: "The name could be clearer." },
+];
+
+test("a green gate with blocking findings resumes the agent once to answer them, then the fix merges", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
+  world.reviews({ "DEMO-2": FINDINGS });
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { write: { "login.txt": "fixed\n" }, commit: "fix(DEMO-2): answer the review" }] });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const [build, response] = world.calls();
+  expect(world.calls()).toHaveLength(2);
+  expect(response!.resume).toBe(world.decisions().find((line) => line.step === "agent")!.session);
+  expect(response!.prompt).toContain(`gh pr comment ${world.prs()[0]!.url} --body`);
+  expect(response!.prompt).toContain("Do not push");
+  expect(response!.prompt).toContain("`src/login.ts:12` The password is logged in plain text.");
+  expect(response!.prompt).toContain("`src/session.ts:3` The session never expires.");
+  expect(response!.prompt).not.toContain("The name could be clearer.");
+  expect(build!.prompt).toMatch(/^\/implement /);
+  expect(world.steps().filter((step) => /^DEMO-2 (build|respond|push|wait|merge)/.test(step))).toEqual([
+    "DEMO-2 build started",
+    "DEMO-2 build pass",
+    "DEMO-2 push ok",
+    "DEMO-2 wait green",
+    "DEMO-2 respond started",
+    "DEMO-2 respond pass",
+    "DEMO-2 push ok",
+    "DEMO-2 wait green",
+    "DEMO-2 merge merged",
+  ]);
+  expect(world.prs()[0]).toMatchObject({ state: "MERGED", pushes: 2 });
+  expect(world.git(world.origin, "show", "main:login.txt")).toBe("fixed");
+});
+
+test("a response that only replies on the pull request merges, and the ticket is not stuck", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
+  world.reviews({ "DEMO-2": FINDINGS });
+  const url = "https://github.com/kcgbarbosa/demo/pull/100";
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { gh: ["pr", "comment", url, "--body", "The log line holds no password."] }] });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.calls()).toHaveLength(2);
+  expect(world.prs()[0]).toMatchObject({ url, state: "MERGED", pushes: 1, comments: ["The log line holds no password."] });
+  expect(world.decisions().find((line) => line.step === "respond" && line.result !== "started")).toMatchObject({
+    result: "pass",
+    detail: "The response returned done with no new commit.",
+  });
+  expect(world.jira.issues.get("DEMO-2")!.flagged).toBe(false);
+  expect(world.steps()).not.toContain("DEMO-2 stuck started");
+});
+
+test("a green gate with no blocking findings merges with no response", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "pass" });
+  world.reviews({ "DEMO-2": [FINDINGS[2]!] });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.calls()).toHaveLength(1);
+  expect(world.steps().some((step) => step.startsWith("DEMO-2 respond"))).toBe(false);
+  expect(world.prs()[0]!.state).toBe("MERGED");
+});
+
+test("a response pass is no fix attempt, and a red gate after it gets one", async () => {
+  world.writeConfig("[limits]\nfix_attempts = 1\n");
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": ["pass", "fail", "pass"] });
+  world.reviews({ "DEMO-2": FINDINGS });
+  world.plan({
+    "DEMO-2": [
+      { write: { "login.txt": "login\n" } },
+      { write: { "login.txt": "answered\n" } },
+      { write: { "login.txt": "fixed\n" } },
+    ],
+  });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.calls()).toHaveLength(3);
+  expect(world.calls()[2]!.prompt).toContain("The merge gate is red");
+  expect(world.decisions().filter((line) => line.step === "build" && line.result === "started").map((line) => line.attempt)).toEqual([1, 2]);
+  expect(world.steps().filter((step) => step === "DEMO-2 respond started")).toHaveLength(1);
+  expect(world.prs()[0]!.state).toBe("MERGED");
+  expect(world.git(world.origin, "show", "main:login.txt")).toBe("fixed");
+});
+
+test("a required check that has not reported keeps the loop waiting, and the review it posts is answered before the merge", async () => {
+  world.required(["gate / check", "gate / review"]);
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.reviews({ "DEMO-2": FINDINGS });
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, {}] });
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.steps().includes("DEMO-2 pr open"), "the pull request");
+  world.setChecks("DEMO-2", { "gate / check": "pass" });
+  const polls = world.ghCalls().length;
+  await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
+  expect(world.steps().some((step) => /^DEMO-2 (wait|respond)/.test(step))).toBe(false);
+  expect(world.prs()[0]!.state).toBe("OPEN");
+  world.setChecks("DEMO-2", { "gate / review": "pass" });
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.decisions().find((line) => line.step === "required-checks")).toMatchObject({ result: "ok", detail: "gate / check, gate / review" });
+  expect(world.calls()).toHaveLength(2);
+  expect(world.calls()[1]!.prompt).toContain("`src/login.ts:12` The password is logged in plain text.");
+  const steps = world.steps();
+  expect(steps.indexOf("DEMO-2 wait green")).toBeLessThan(steps.indexOf("DEMO-2 respond started"));
+  expect(steps.indexOf("DEMO-2 respond pass")).toBeLessThan(steps.indexOf("DEMO-2 merge merged"));
+  expect(world.prs()[0]!.state).toBe("MERGED");
+});
+
+test("a failing check that is not required sends no fix prompt, and the pull request merges", async () => {
+  world.required(["gate / check"]);
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.steps().includes("DEMO-2 pr open"), "the pull request");
+  world.setChecks("DEMO-2", { lint: "fail", "gate / check": "pass" });
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.calls()).toHaveLength(1);
+  expect(world.steps().filter((step) => step.startsWith("DEMO-2 wait"))).toEqual(["DEMO-2 wait green"]);
+  expect(world.decisions().find((line) => line.step === "wait")!.checks).toEqual([{ name: "gate / check", bucket: "pass" }]);
+  expect(world.ghCalls().filter((args) => args[1] === "checks").every((args) => args.includes("--required"))).toBe(true);
+  expect(world.prs()[0]!.state).toBe("MERGED");
+});
+
 test("a ticket still red after the attempt limit is flagged with the reason and the pull request link", async () => {
   world.writeConfig("[limits]\nfix_attempts = 1\n");
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
@@ -116,7 +255,7 @@ test.each([
   expect(world.mainLog().slice(0, 2)).toEqual(["feat(DEMO-3): Add the logout button (#101)", "feat(DEMO-2): Add the login page (#100)"]);
 });
 
-test("a stacked ticket waits on its checks again after the retarget, and a late red check gets a fix attempt", async () => {
+test("a stacked ticket waits after the retarget for every required check, and a red one gets a fix attempt", async () => {
   world.writeConfig("[limits]\nparallel = 2\n");
   world.required(["gate / check", "gate / review"]);
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
@@ -131,8 +270,10 @@ test("a stacked ticket waits on its checks again after the retarget, and a late 
   world.setChecks("DEMO-2", { "gate / check": "pass", "gate / review": "pass" });
   await world.until(() => demo3()!.baseRefName === "main", "the retarget to main");
   world.setCheck("DEMO-3", "pass");
-  await world.until(() => world.steps().includes("DEMO-3 wait green"), "the stacked pull request's first green");
-  // The review reports after that green, so auto-merge has not merged it.
+  // The review has not reported, so the gate is not green yet, and it then reports red.
+  const polls = world.ghCalls().length;
+  await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
+  expect(world.steps().some((step) => step.startsWith("DEMO-3 wait"))).toBe(false);
   world.setChecks("DEMO-3", { "gate / review": "fail" });
   await world.until(() => (demo3() as { pushes?: number }).pushes === 2, "the fix attempt's push");
   world.setChecks("DEMO-3", { "gate / check": "pass", "gate / review": "pass" });
@@ -141,7 +282,7 @@ test("a stacked ticket waits on its checks again after the retarget, and a late 
   expect(ran.code, ran.stderr).toBe(0);
   expect(world.steps().some((step) => step.startsWith("DEMO-3 base"))).toBe(false);
   const waits = world.steps().filter((step) => step.startsWith("DEMO-3 wait"));
-  expect(waits.slice(0, 2)).toEqual(["DEMO-3 wait green", "DEMO-3 wait red"]);
+  expect(waits).toEqual(["DEMO-3 wait red", "DEMO-3 wait green"]);
   expect(world.calls().filter((call) => call.key === "DEMO-3")).toHaveLength(2);
   expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED", "MERGED"]);
   expect(world.git(world.origin, "show", "main:logout.txt")).toBe("fixed");
@@ -331,7 +472,8 @@ test("two tickets build at the same time, each on its own stack slot", async () 
     { key: "DEMO-2", port: "3020", compose: "demo-demo-2", met: true },
     { key: "DEMO-3", port: "3030", compose: "demo-demo-3", met: true },
   ]);
-  expect(world.decisions().filter((line) => line.step === "start" && line.ticket !== EPIC).map((line) => line.slot)).toEqual([2, 3]);
+  const slots = world.decisions().filter((line) => line.step === "start" && line.ticket !== EPIC).map((line) => [line.ticket, line.slot]);
+  expect(Object.fromEntries(slots)).toEqual({ "DEMO-2": 2, "DEMO-3": 3 });
 });
 
 test("a slot whose port another Compose project holds moves to a spare slot", async () => {
