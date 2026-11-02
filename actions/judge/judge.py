@@ -120,10 +120,11 @@ def call(content: list[dict]) -> tuple[dict | None, str]:
     events = [json.loads(row) for row in result.stdout.splitlines() if row.startswith("{")]
     text = next((event.get("result") or "" for event in events if event.get("type") == "result"), "")
     match = re.search(r"\{.*\}", text, re.DOTALL)
+    log = f"claude exited {result.returncode}.\n{result.stderr}{text}"
     try:
-        return (json.loads(match[0]) if match else None), f"{result.stderr}{text}"
+        return (json.loads(match[0]) if match else None), log
     except json.JSONDecodeError:
-        return None, f"{result.stderr}{text}"
+        return None, log
 
 
 def valid(answer: object) -> bool:
@@ -142,13 +143,16 @@ def ask(step: Step, blocking: list[str]) -> dict[str, dict]:
 
 
 def ask_batch(batch: list[Step], blocking: list[str]) -> dict[str, dict]:
-    """Rated steps share one call. A step the answer does not name is minor, so a lost verdict still reaches the checklist."""
+    """Rated steps share one call, tried twice. A step with no verdict is minor, so a lost answer reaches the checklist and blocks nothing."""
     content: list[dict] = [{"type": "text", "text": batch_prompt(blocking)}]
     for step in batch:
         content += [{"type": "text", "text": f"Step {step.name}. Its ticket line: {step.meta['line']}"}, picture(step.images[0][0])]
     answers, log = call(content)
     if answers is None:
-        sys.exit(f"The judge gave no verdict for {', '.join(step.name for step in batch)}:\n{log}")
+        answers, log = call(content)
+    if answers is None:
+        print(f"The judge gave no verdict for {', '.join(step.name for step in batch)}:\n{log}", file=sys.stderr)
+        answers = {}
     return {step.name: answers[step.name] if valid(answers.get(step.name)) else NO_VERDICT for step in batch}
 
 
