@@ -160,7 +160,7 @@ def images(repo: str, base: str, head: str, step: Step) -> str:
     """With no path in the repo, the comment has no link, and the screenshot is in the run's artifact."""
     path = step.meta.get("path")
     if not path:
-        return "The screenshot has no path in the repo, so it is only in the run's `screenshot-diff-*` artifacts."
+        return "The screenshot has no path in the repo, so it is only in the run's `screenshot-diff` artifact."
     if step.rated:
         return f"| Screenshot |\n| --- |\n| {image(repo, head, path, 'screenshot')} |"
     return f"| Before | After |\n| --- | --- |\n| {image(repo, base, path, 'before')} | {image(repo, head, path, 'after')} |"
