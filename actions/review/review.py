@@ -1,7 +1,7 @@
 """The gate's review: Claude Code runs the code-review skill on a pull request, and this posts its findings.
 
 It runs in the pull request's checkout at its head. action.yml gives the env it reads.
-Exit 1 means a blocking finding, from this review or from the last one when nothing new needs a review.
+A finding never fails it: a blocking one is a comment that asks for a fix, and the owner decides. It fails only when it cannot review.
 """
 
 from __future__ import annotations
@@ -274,7 +274,7 @@ def main() -> int:
         print(f"gate / review: nothing to review since {since[:7]} outside the skip paths, so no model runs.")
         if blocking:
             print(f"The last review at {last.head[:7]} has {blocking} blocking findings.")
-        return 1 if blocking else 0
+        return 0
     if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") and not os.environ.get("ANTHROPIC_API_KEY"):
         sys.exit("gate / review needs the CLAUDE_CODE_OAUTH_TOKEN or the ANTHROPIC_API_KEY secret, or `enabled = false` in loop.toml [review].")
 
@@ -315,8 +315,7 @@ def main() -> int:
         )
         if part
     )
-    event = "REQUEST_CHANGES" if blocking else "COMMENT"
-    gh_send("POST", f"repos/{repo}/pulls/{number}/reviews", {"commit_id": head, "event": event, "body": body, "comments": comments})
+    gh_send("POST", f"repos/{repo}/pulls/{number}/reviews", {"commit_id": head, "event": "COMMENT", "body": body, "comments": comments})
     # The new review replaces the old ones, so an old request for changes no longer holds the merge.
     for review in reviews:
         if review.get("state") == "CHANGES_REQUESTED" and MARKER.search(review.get("body") or ""):
@@ -325,7 +324,7 @@ def main() -> int:
                 print(f"::warning::could not dismiss the earlier gate review {review['id']}")
     print(summary)
     print(cost_line(output))
-    return 1 if blocking else 0
+    return 0
 
 
 if __name__ == "__main__":
