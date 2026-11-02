@@ -123,7 +123,7 @@ With `parallel = 2`, the highest slot is 3, so a port moves by at most 30. The b
 **Choose.**
 
 - `path` is the one folder prefix that holds the screens. Choose the narrowest folder that holds all of them, because backend code under the prefix starts a review for nothing. Test files never count.
-- The gate's judge reviews the UI, from the screenshot diffs that the repo's browser tests write in the gate's `check` job. `blocking` lists the faults that fail `gate / judge`, and anything else is minor. The browser tests tap through each line of what the user sees as each role. A screenshot of a page as it loads proves nothing about a tap, a search, or a jump.
+- The owner reviews the look of the UI on staging. The browser tests tap through each line of what the user sees as each role. A screenshot of a page as it loads proves nothing about a tap, a search, or a jump.
 - Check at the narrowest supported width, because a layout that fits there usually fits wider. Add a desktop width only when the layout differs. Use Chromium, and add WebKit when users reach the product on Safari or iOS, because WebKit shows faults Chromium hides. Check each language the product ships, because a longer string breaks a layout and a missing key shows. Check as each role that the diff affects, because roles see different screens.
 - The browser tests also run the checks that need no eyes: horizontal overflow (`scrollWidth > clientWidth`), console errors, failed requests, and untranslated keys.
 - A script costs no context on a turn. A Playwright MCP server in `.mcp.json` adds its tool list to every turn (Connectors), so add one only for a flow the script cannot cover.
@@ -219,6 +219,5 @@ Each host gets the `loop` command from `install.sh`, linger with `loginctl enabl
 | A build fails with "address already in use"      | `ports`, `port_step`, or a process left on a slot port          |
 | A check passes once and fails once               | The check itself. It is flaky, and a fix attempt cannot cure it |
 | A check fails for a missing key on the gate only | A secret the check needs. Use a development default             |
-| The judge gets no screenshots                    | The sign-in, the browser tests, or their diff folder            |
 | The watch page shows red tool calls              | An action that auto mode denies. Make it in a setup session     |
 | The run costs more than the plan allows          | `effort`, then `parallel`                                       |

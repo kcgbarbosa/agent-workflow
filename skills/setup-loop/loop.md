@@ -65,7 +65,7 @@ Settles where the key goes in commits. The script names each branch `feat/<KEY>-
 
 ### Gate
 
-Settles the checks that decide a pull request. The shared merge gate, `.github/workflows/gate.yml` in agent-workflow, runs the repo's `make check` with `gate / review` beside it, and `gate / judge` after it; `setup-repo` puts a repo on it. Only the deterministic checks decide a merge. The review and the judge comment their findings and pass once they have run, and the owner decides on each finding, as with a CodeRabbit review. `agent_hint` adds a line to each ticket file for what the gate does not say, such as what the tests need from the stack. The `[review]` table, with `enabled`, `model`, `effort`, and `skip`, and `[ui]` `blocking` are settings of the gate, which `actions/review/action.yml` and `actions/judge/action.yml` read. The script checks their types, logs the review's model and effort in `setup`, and uses none of them. The `hold` label on a pull request makes the required `hold` check fail, so GitHub keeps a green pull request from merging until the label goes, and the script waits with it (rule 5).
+Settles the checks that decide a pull request. The shared merge gate, `.github/workflows/gate.yml` in agent-workflow, runs the repo's `make check` with `gate / review` beside it; `setup-repo` puts a repo on it. Only the deterministic checks decide a merge. The review comments its findings and passes once it has run, and the owner decides on each finding, as with a CodeRabbit review. `agent_hint` adds a line to each ticket file for what the gate does not say, such as what the tests need from the stack. The `[review]` table, with `enabled`, `model`, `effort`, and `skip`, holds settings of the gate, which `actions/review/action.yml` reads. The script checks their types, logs the review's model and effort in `setup`, and uses none of them. A draft pull request does not merge, and the script waits with it (rule 5).
 
 ### Stack per worktree
 
@@ -74,7 +74,7 @@ Slot 0 is the main checkout, so a person's own stack keeps the base ports, and s
 
 ### UI review
 
-Settles the UI paths and what the gate's judge checks. `[ui]` gives `path`, one folder prefix of the UI, `accepted_unchecked`, phrases for the parts that a review is known not to check, and `blocking`, the faults that `gate / judge` comments as blocking. The script checks them and uses none of them. A repo's browser tests write each screenshot to `screenshot-diff/` as a flat pair, `<step>.png` and `<step>.json`, which `actions/judge/action.yml` describes. A repo with no UI leaves it out.
+Settles the UI paths. `[ui]` gives `path`, one folder prefix of the UI, and `accepted_unchecked`, phrases for the parts that a review is known not to check. The script checks them and uses none of them. The owner reviews the look of the UI on staging. A repo with no UI leaves it out.
 
 ### Agent
 
