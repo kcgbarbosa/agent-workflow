@@ -371,6 +371,7 @@ test("the decisions log has one line per step, and no gate, review, land, or Epi
   expect(ran.code, ran.stderr).toBe(0);
   expect(world.steps()).toEqual([
     "DEMO-1 start ok",
+    "DEMO-1 required-checks ok",
     "DEMO-1 frontier ok",
     "DEMO-2 start new",
     "DEMO-2 tracker-status ok",

@@ -144,6 +144,32 @@ test("a response pass is no fix attempt, and a red gate after it gets one", asyn
   expect(world.git(world.origin, "show", "main:login.txt")).toBe("fixed");
 });
 
+test("a required check that has not reported keeps the loop waiting, and the review it posts is answered before the merge", async () => {
+  world.required(["gate / check", "gate / review"]);
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.reviews({ "DEMO-2": FINDINGS });
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, {}] });
+
+  const running = world.loop("run", EPIC);
+  await world.until(() => world.steps().includes("DEMO-2 pr open"), "the pull request");
+  world.setChecks("DEMO-2", { "gate / check": "pass" });
+  const polls = world.ghCalls().length;
+  await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
+  expect(world.steps().some((step) => /^DEMO-2 (wait|respond)/.test(step))).toBe(false);
+  expect(world.prs()[0]!.state).toBe("OPEN");
+  world.setChecks("DEMO-2", { "gate / review": "pass" });
+  const ran = await running;
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.decisions().find((line) => line.step === "required-checks")).toMatchObject({ result: "ok", detail: "gate / check, gate / review" });
+  expect(world.calls()).toHaveLength(2);
+  expect(world.calls()[1]!.prompt).toContain("`src/login.ts:12` The password is logged in plain text.");
+  const steps = world.steps();
+  expect(steps.indexOf("DEMO-2 wait green")).toBeLessThan(steps.indexOf("DEMO-2 respond started"));
+  expect(steps.indexOf("DEMO-2 respond pass")).toBeLessThan(steps.indexOf("DEMO-2 merge merged"));
+  expect(world.prs()[0]!.state).toBe("MERGED");
+});
+
 test("a failing check that is not required sends no fix prompt, and the pull request merges", async () => {
   world.required(["gate / check"]);
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
@@ -229,7 +255,7 @@ test.each([
   expect(world.mainLog().slice(0, 2)).toEqual(["feat(DEMO-3): Add the logout button (#101)", "feat(DEMO-2): Add the login page (#100)"]);
 });
 
-test("a stacked ticket waits on its checks again after the retarget, and a late red check gets a fix attempt", async () => {
+test("a stacked ticket waits after the retarget for every required check, and a red one gets a fix attempt", async () => {
   world.writeConfig("[limits]\nparallel = 2\n");
   world.required(["gate / check", "gate / review"]);
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
@@ -244,8 +270,10 @@ test("a stacked ticket waits on its checks again after the retarget, and a late 
   world.setChecks("DEMO-2", { "gate / check": "pass", "gate / review": "pass" });
   await world.until(() => demo3()!.baseRefName === "main", "the retarget to main");
   world.setCheck("DEMO-3", "pass");
-  await world.until(() => world.steps().includes("DEMO-3 wait green"), "the stacked pull request's first green");
-  // The review reports after that green, so auto-merge has not merged it.
+  // The review has not reported, so the gate is not green yet, and it then reports red.
+  const polls = world.ghCalls().length;
+  await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
+  expect(world.steps().some((step) => step.startsWith("DEMO-3 wait"))).toBe(false);
   world.setChecks("DEMO-3", { "gate / review": "fail" });
   await world.until(() => (demo3() as { pushes?: number }).pushes === 2, "the fix attempt's push");
   world.setChecks("DEMO-3", { "gate / check": "pass", "gate / review": "pass" });
@@ -254,7 +282,7 @@ test("a stacked ticket waits on its checks again after the retarget, and a late 
   expect(ran.code, ran.stderr).toBe(0);
   expect(world.steps().some((step) => step.startsWith("DEMO-3 base"))).toBe(false);
   const waits = world.steps().filter((step) => step.startsWith("DEMO-3 wait"));
-  expect(waits.slice(0, 2)).toEqual(["DEMO-3 wait green", "DEMO-3 wait red"]);
+  expect(waits).toEqual(["DEMO-3 wait red", "DEMO-3 wait green"]);
   expect(world.calls().filter((call) => call.key === "DEMO-3")).toHaveLength(2);
   expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED", "MERGED"]);
   expect(world.git(world.origin, "show", "main:logout.txt")).toBe("fixed");

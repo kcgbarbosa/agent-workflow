@@ -103,6 +103,18 @@ export async function checks(cwd: string, url: string): Promise<Check[]> {
   throw new GhError(`gh pr checks: ${(done.stderr || done.stdout).trim()}`);
 }
 
+/**
+ * The check names that branch protection requires on the branch, which `gh pr checks --required` lists only
+ * once they report. A branch with no protection requires none.
+ */
+export async function requiredChecks(cwd: string, branch: string): Promise<string[]> {
+  const endpoint = `repos/{owner}/{repo}/branches/${branch}/protection/required_status_checks`;
+  const done = await gh(cwd, ["api", endpoint, "--jq", ".contexts"], () => true);
+  if (done.code === 0) return JSON.parse(done.stdout.trim() || "[]") as string[];
+  if (/\(HTTP 404\)/.test(done.stderr)) return [];
+  throw new GhError(`gh api ${endpoint}: ${(done.stderr || done.stdout).trim()}`);
+}
+
 /** The end of a failed Actions job's log, from the job id in the check's link, or null for a check that is no job. */
 export async function failedLog(cwd: string, link: string, lines: number): Promise<string | null> {
   const job = /\/actions\/runs\/\d+\/job\/(\d+)/.exec(link)?.[1];

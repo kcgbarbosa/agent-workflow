@@ -144,6 +144,8 @@ export class Run {
   /** Until when, in epoch milliseconds, the run waits for a usage limit to reset. */
   private pausedUntil = 0;
   private wake: () => void = () => {};
+  /** The check names that branch protection requires on the main branch, read once per run. */
+  private required: string[] = [];
   /** The spare slot each ticket slot moved to for the rest of the run, because another project held a port. */
   private readonly slotMoves = new Map<number, number>();
 
@@ -176,6 +178,12 @@ export class Run {
     }
     for (const ticket of tickets) this.byKey.set(ticket.key, ticket);
     await git(this.config.repo, "fetch", "--prune", "--quiet", "origin");
+    try {
+      this.required = await github.requiredChecks(this.config.repo, this.config.mainBranch);
+      this.log.write(this.name, "required-checks", "ok", { detail: this.required.join(", ") });
+    } catch (error) {
+      this.log.write(this.name, "required-checks", "fail", { detail: (error as Error).message });
+    }
     const mergedBefore = new Map<string, github.PullRequest>();
     for (const ticket of tickets) {
       const { branch } = await this.branchOf(ticket);
@@ -934,7 +942,7 @@ export class Run {
    * merges once every required check passes, so a check that has not reported yet keeps the loop waiting.
    * With auto-merge off, every check reported so far passing is green, and the loop merges. The checks count
    * once the pull request's head is the pushed commit, so the checks of the commit before a fix never do. Only
-   * the required checks count. A draft is a pause the loop waits out, and the wait's limit does not run while it
+   * the required checks count, and a required one that has not reported yet is pending. A draft is a pause the loop waits out, and the wait's limit does not run while it
    * lasts. GitHub turns auto-merge off on a draft.
    */
   private async wait(
@@ -977,7 +985,10 @@ export class Run {
             autoMerge = await this.turnOnAutoMerge(key, url);
           }
           held = false;
-          const passed = checks.length > 0 && checks.every((check) => check.bucket === "pass" || check.bucket === "skipping");
+          const passed =
+            checks.length > 0 &&
+            checks.every((check) => check.bucket === "pass" || check.bucket === "skipping") &&
+            this.required.every((name) => checks.some((check) => check.name === name));
           if (passed && !autoMerge) return { result: "green", checks, detail: "", closed: false };
         }
       }

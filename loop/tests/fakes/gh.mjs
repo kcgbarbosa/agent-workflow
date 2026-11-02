@@ -148,6 +148,12 @@ if (noun === "run" && verb === "rerun") {
   save();
   process.exit(0);
 }
+if (noun === "api" && /^repos\/\{owner\}\/\{repo\}\/branches\/[^/]+\/protection\/required_status_checks$/.test(args[1])) {
+  // Branch protection's required checks, from FAKE_DIR/required.json. With none, the branch is not protected.
+  if (!existsSync(join(fakes, "required.json"))) fail("gh: Branch not protected (HTTP 404)");
+  console.log(JSON.stringify(required));
+  process.exit(0);
+}
 if (noun === "api") {
   // Only the reads the loop makes: a pull request's reviews, and one review's comments.
   const [, number, id] = /^repos\/\{owner\}\/\{repo\}\/pulls\/(\d+)\/reviews(?:\/(\d+)\/comments)?$/.exec(args[1]) ?? [];
