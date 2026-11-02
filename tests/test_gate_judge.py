@@ -133,3 +133,44 @@ def test_a_step_with_no_baseline_is_rated_on_its_one_image_and_can_block(pr: Fak
     assert f"kc/app/blob/{pr.env['BASE_SHA']}/" not in blocking["body"]
     assert blocking["body"].count(f"kc/app/blob/{pr.env['HEAD_SHA']}/e2e/shots/1-home.png?raw=true") == 1
     assert "- [ ] **2-login**: The button moved." in minor["body"]
+
+
+def flat_pair(pr: FakeGitHub, name: str, path: str | None = None) -> None:
+    folder = pr.work / "screenshot-diff"
+    folder.mkdir(exist_ok=True)
+    (folder / f"{name}.png").write_bytes(b"png")
+    (folder / f"{name}.json").write_text(json.dumps({"line": f"The {name} screen shows the title."} | ({"path": path} if path else {})))
+
+
+def test_a_flat_pair_is_rated_on_its_one_image_and_can_block(pr: FakeGitHub) -> None:
+    flat_pair(pr, "1-home", "e2e/shots/1-home.png")
+    flat_pair(pr, "2-login")
+    changed_step(pr, "3-list")
+    pr.reply(answer("blocking", "The title is cut off.", "text cut off"), answer("blocking", "The form overlaps.", "broken layout"), answer("fine", "As asked."))
+
+    run = pr.run(JUDGE, **INPUTS)
+
+    assert run.returncode == 1, run.stderr
+    home, login, changed = (json.loads(c["stdin"])["message"]["content"] for c in pr.claude_calls)
+    assert [part["type"] for part in home].count("image") == 1
+    assert "one screenshot" in home[0]["text"] and "no baseline" in home[0]["text"]
+    assert "The 1-home screen shows the title." in home[0]["text"]
+    assert "The 2-login screen shows the title." in login[0]["text"]
+    assert [part["type"] for part in changed].count("image") == 3
+    [blocking] = pr.state["comments"]
+    assert "### 1-home\n\nThe title is cut off." in blocking["body"]
+    assert blocking["body"].count(f"kc/app/blob/{pr.env['HEAD_SHA']}/e2e/shots/1-home.png?raw=true") == 1
+    assert "### 2-login\n\nThe form overlaps." in blocking["body"]
+    assert "2-login.png" not in blocking["body"]
+
+
+def test_a_png_with_no_json_is_not_a_step_and_the_judge_logs_it(pr: FakeGitHub) -> None:
+    flat_pair(pr, "1-home")
+    (pr.work / "screenshot-diff" / "stray.png").write_bytes(b"png")
+    pr.reply(answer("fine", "As asked."))
+
+    run = pr.run(JUDGE, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert len(pr.claude_calls) == 1
+    assert "stray.png" in run.stdout

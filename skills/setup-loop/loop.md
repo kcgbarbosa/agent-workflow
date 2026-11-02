@@ -74,7 +74,7 @@ Slot 0 is the main checkout, so a person's own stack keeps the base ports, and s
 
 ### UI review
 
-Settles the UI paths and what the gate's judge checks. `[ui]` gives `path`, one folder prefix of the UI, `accepted_unchecked`, phrases for the parts that a review is known not to check, and `blocking`, the faults that fail `gate / judge`. The script checks them and uses none of them. A repo with no UI leaves it out.
+Settles the UI paths and what the gate's judge checks. `[ui]` gives `path`, one folder prefix of the UI, `accepted_unchecked`, phrases for the parts that a review is known not to check, and `blocking`, the faults that fail `gate / judge`. The script checks them and uses none of them. A repo's browser tests write each screenshot to `screenshot-diff/` as a flat pair, `<step>.png` and `<step>.json`, which `actions/judge/action.yml` describes. A repo with no UI leaves it out.
 
 ### Agent
 
