@@ -92,11 +92,14 @@ export async function merge(cwd: string, url: string): Promise<void> {
   await gh(cwd, ["pr", "merge", url, "--squash"]);
 }
 
-/** The check runs. `gh pr checks` exits 8 while one is pending and 1 when one failed or none exist yet. */
+/**
+ * The required check runs, so a failing check that branch protection does not require never reads as red.
+ * `gh pr checks` exits 8 while one is pending and 1 when one failed or none exist yet.
+ */
 export async function checks(cwd: string, url: string): Promise<Check[]> {
-  const done = await gh(cwd, ["pr", "checks", url, "--json", "name,state,bucket,link"], () => true);
+  const done = await gh(cwd, ["pr", "checks", url, "--required", "--json", "name,state,bucket,link"], () => true);
   if (done.stdout.trim().startsWith("[")) return JSON.parse(done.stdout) as Check[];
-  if (/no checks reported/i.test(done.stderr)) return [];
+  if (/no (?:required )?checks reported/i.test(done.stderr)) return [];
   throw new GhError(`gh pr checks: ${(done.stderr || done.stdout).trim()}`);
 }
 
@@ -123,15 +126,16 @@ export async function rerunFailed(cwd: string, run: string): Promise<void> {
 const MARKER = /<!-- gate review head=([0-9a-f]+) blocking=(\d+) -->/;
 const BLOCKING = /^\*\*blocking\*\*: (.*)$/s;
 
-/** The blocking findings of the gate's newest review of the pull request. */
-export async function blockingFindings(cwd: string, number: number): Promise<Finding[]> {
+/** The blocking findings of the gate's newest review of the pull request, none when `head` is given and the review is of another head. */
+export async function blockingFindings(cwd: string, number: number, head?: string): Promise<Finding[]> {
   const list = async (endpoint: string) => {
     const done = await gh(cwd, ["api", endpoint, "--paginate", "--jq", ".[]"]);
     return done.stdout.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
   };
   const reviews = (await list(`repos/{owner}/{repo}/pulls/${number}/reviews`)).filter((review) => MARKER.test(review.body ?? ""));
   const last = reviews.at(-1);
-  if (!last || MARKER.exec(last.body)![2] === "0") return [];
+  const marker = last ? MARKER.exec(last.body)! : null;
+  if (!marker || marker[2] === "0" || (head && !head.startsWith(marker[1]!))) return [];
   const findings: Finding[] = [];
   for (const comment of await list(`repos/{owner}/{repo}/pulls/${number}/reviews/${last.id}/comments`)) {
     const sentence = BLOCKING.exec(comment.body ?? "")?.[1];

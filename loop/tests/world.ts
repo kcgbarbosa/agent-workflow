@@ -38,6 +38,7 @@ export type PullRequest = {
   mergeCommit: { oid: string } | null;
   checks: { name: string; bucket: string; state: string }[];
   pushes?: number;
+  comments?: string[];
 };
 
 function which(tool: string): string {

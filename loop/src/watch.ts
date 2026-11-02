@@ -494,7 +494,7 @@ export function epicView(stateDir: string, epic: string, running?: boolean, hist
   };
 }
 
-/** What needs KC on the tickets, kind by kind: a pull request held by the hold label, a stuck ticket, checks that
+/** What needs KC on the tickets, kind by kind: a draft pull request the loop waits on, a stuck ticket, checks that
  * timed out, and a pull request that did not merge. A merged ticket needs nothing.
  */
 function needsKc(tickets: TicketView[], everyByTicket: Map<string, Line[]>): NeedsKc[] {
@@ -977,7 +977,7 @@ function currentStep(lines: Line[], hasPullRequest: boolean, paused: boolean): S
 }
 
 /** The step a step line opens, or null when it opens none. A red wait goes back to build, as a fix round. A
- * held wait, with the hold label on, stays in wait.
+ * held wait, on a draft pull request, stays in wait.
  */
 function stepOpenedBy(line: Line, hasPullRequest: boolean): string | null {
   const { step, result } = line;
