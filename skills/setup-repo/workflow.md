@@ -15,7 +15,7 @@ Each skill holds its own steps. Where a skill publishes something, `docs/agents/
 | 6   | Gate          | None                                         | `gate / check` and `gate / review`. All green: GitHub squashes the pull request to one commit on the default branch | The git host                                |
 | 7   | Acceptance    | None                                         | The deployed result checked against each ticket's "What the user sees"                                              | Jira                                        |
 
-The owner makes every decision in a grill, approves a PRD before `/to-prd` writes it, and approves the tickets before they are published. Nobody merges by hand: the gate decides, and auto-merge merges. The `hold` label keeps a green pull request waiting until the owner takes it off. `loop.toml` turns the review on or off.
+The owner makes every decision in a grill, approves a PRD before `/to-prd` writes it, and approves the tickets before they are published. Nobody merges by hand: the gate decides, and auto-merge merges. A draft pull request waits until the owner marks it ready. `loop.toml` turns the review on or off.
 A repo off the gate, such as machines, has no auto-merge, and the owner merges.
 
 Steps 1 to 3 share one context window. When it fills up, `/handoff` writes a summary and a new window continues from it.
