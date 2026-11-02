@@ -254,6 +254,29 @@ def test_a_step_the_batch_answer_leaves_out_is_minor_with_a_note(pr: FakeGitHub)
     assert "1-home" not in minor["body"]
 
 
+def test_a_batch_with_no_answer_is_tried_again(pr: FakeGitHub) -> None:
+    flat_pair(pr, "1-home")
+    pr.reply("", batch(("1-home", "fine", "As asked.")))
+
+    run = pr.run(JUDGE, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert len(pr.claude_calls) == 2
+    assert pr.state["comments"] == []
+
+
+def test_a_batch_with_no_answer_twice_is_minor_and_blocks_nothing(pr: FakeGitHub) -> None:
+    flat_pair(pr, "1-home")
+    pr.reply("", "")
+
+    run = pr.run(JUDGE, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert "claude exited 0." in run.stderr
+    [minor] = pr.state["comments"]
+    assert "- [ ] **1-home**: The judge gave no verdict for this step." in minor["body"]
+
+
 def test_a_changed_step_keeps_a_call_of_its_own_beside_a_batch(pr: FakeGitHub) -> None:
     flat_pair(pr, "1-home")
     flat_pair(pr, "2-login")
