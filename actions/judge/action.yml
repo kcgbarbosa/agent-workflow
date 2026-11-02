@@ -10,7 +10,7 @@ description: >-
   tools, answers blocking, minor, or fine for each of its steps. The rated steps go in batches of up to `batch_size` images
   in one call, each image with its step name and ticket line, and the answer names each step. A step the answer leaves out
   is minor, with a note that the judge gave no verdict. A changed step keeps one call of its own for its three images. Up
-  to 4 calls run at a time. Only a fault on `loop.toml [ui] blocking` can block. A blocking verdict fails the step and
+  to 4 calls run at a time. Only a fault on `loop.toml [ui] blocking` can be blocking. A verdict never fails the step: a blocking one
   comments the step, the sentence, and the two images, or the one image of a rated step. Minor verdicts collect in one
   checklist comment.
 inputs:

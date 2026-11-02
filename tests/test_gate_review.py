@@ -1,4 +1,4 @@
-"""The gate's review posts one pull request review, fails on a blocking finding, and runs no model when it has nothing to review."""
+"""The gate's review posts one pull request review, never fails on a finding, and runs no model when it has nothing to review."""
 
 from __future__ import annotations
 
@@ -30,14 +30,14 @@ def pr(tmp_path: Path) -> FakeGitHub:
     return fake
 
 
-def test_a_blocking_finding_posts_one_review_at_its_line_and_fails(pr: FakeGitHub) -> None:
+def test_a_blocking_finding_posts_one_comment_review_at_its_line_and_passes(pr: FakeGitHub) -> None:
     pr.reply(result(finding("a.py", 2, "blocking", "Two is wrong."), finding("a.py", 40, "minor", "Far away.")))
 
     run = pr.run(REVIEW, **INPUTS)
 
-    assert run.returncode == 1, run.stderr
+    assert run.returncode == 0, run.stderr
     [review] = pr.state["reviews"]
-    assert review["event"] == "REQUEST_CHANGES"
+    assert review["event"] == "COMMENT"
     assert review["commit_id"] == pr.env["HEAD_SHA"]
     assert review["comments"] == [{"path": "a.py", "line": 2, "side": "RIGHT", "body": "**blocking**: Two is wrong."}]
     assert "`a.py:40` **minor**: Far away." in review["body"]
@@ -74,7 +74,7 @@ def test_the_log_shows_each_tool_call_while_the_review_runs(pr: FakeGitHub) -> N
 def test_a_later_push_reviews_only_the_commits_since_the_last_review(pr: FakeGitHub) -> None:
     first = pr.env["HEAD_SHA"]
     pr.reply(result(finding("a.py", 2, "blocking", "Two is wrong.")))
-    assert pr.run(REVIEW, **INPUTS).returncode == 1
+    assert pr.run(REVIEW, **INPUTS).returncode == 0
 
     pr.commit({"a.py": "one\n2\nthree\n"})
     pr.reply(result())
@@ -84,16 +84,16 @@ def test_a_later_push_reviews_only_the_commits_since_the_last_review(pr: FakeGit
     prompt = pr.claude_calls[1]["argv"][pr.claude_calls[1]["argv"].index("-p") + 1]
     assert f"The fixed point is {first}" in prompt
     assert "earlier-review.json" in prompt
-    assert [r["state"] for r in pr.state["reviews"]] == ["DISMISSED", "COMMENTED"]
+    assert [r["state"] for r in pr.state["reviews"]] == ["COMMENTED", "COMMENTED"]
 
 
 def test_a_rerun_at_the_reviewed_commit_keeps_the_verdict_with_no_model_run(pr: FakeGitHub) -> None:
     pr.reply(result(finding("a.py", 2, "blocking", "Two is wrong.")))
-    assert pr.run(REVIEW, **INPUTS).returncode == 1
+    assert pr.run(REVIEW, **INPUTS).returncode == 0
 
     run = pr.run(REVIEW, **INPUTS)
 
-    assert run.returncode == 1
+    assert run.returncode == 0
     assert len(pr.claude_calls) == 1
 
 
@@ -154,7 +154,7 @@ def update_branch(pr: FakeGitHub, files: dict[str, str]) -> None:
 
 def test_a_later_push_after_a_merge_of_main_reviews_only_the_pull_requests_commits(pr: FakeGitHub) -> None:
     pr.reply(result(finding("a.py", 2, "blocking", "Two is wrong.")))
-    assert pr.run(REVIEW, **INPUTS).returncode == 1
+    assert pr.run(REVIEW, **INPUTS).returncode == 0
     update_branch(pr, {"b.py": "from main\n"})
     pr.commit({"a.py": "one\n2\nthree\n"})
     pr.reply(result())
@@ -183,7 +183,7 @@ def test_a_merge_of_main_does_not_count_against_the_skip_paths(pr: FakeGitHub) -
 
 def test_a_fix_in_a_skip_path_after_a_blocking_finding_gets_a_model_run_that_clears_it(pr: FakeGitHub) -> None:
     pr.reply(result(finding("docs/spec.md", 4, "blocking", "The spec says auto mode.")))
-    assert pr.run(REVIEW, **INPUTS).returncode == 1
+    assert pr.run(REVIEW, **INPUTS).returncode == 0
 
     pr.commit({"docs/spec.md": "bypass mode\n"})
     pr.reply(result())

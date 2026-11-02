@@ -1,7 +1,7 @@
 """The gate's UI judge: model calls with no tools, one per changed step and one per batch of rated steps, and a comment for what it finds.
 
 It runs in a checkout of the base, for its loop.toml, with the diff folder beside it. action.yml gives the folder and the env it reads.
-Exit 1 means a blocking verdict.
+A verdict never fails it: a blocking one is a comment, and the owner decides. It fails only when it cannot judge.
 """
 
 from __future__ import annotations
@@ -219,12 +219,12 @@ def main() -> int:
         print(f"{step.name}: {answer['verdict']}, {answer['sentence']}")
 
     sections = [f"### {step.name}\n\n{answer['sentence']}\n\n{images(repo, base, head, step)}" for step, answer in found["blocking"]]
-    blocks = "\n\n".join([f"**gate / judge** blocks at {head[:7]}.", *sections]) if sections else None
-    comment(repo, number, BLOCKING_MARKER, blocks, f"**gate / judge**: nothing blocks at {head[:7]}.")
+    blocks = "\n\n".join([f"**gate / judge** finds these faults at {head[:7]}. They do not block the merge.", *sections]) if sections else None
+    comment(repo, number, BLOCKING_MARKER, blocks, f"**gate / judge**: no fault at {head[:7]}.")
     items = [f"- [ ] **{step.name}**: {answer['sentence']}" for step, answer in found["minor"]]
     minors = "\n".join([f"**gate / judge** minor changes to check, at {head[:7]}:\n", *items]) if items else None
     comment(repo, number, MINOR_MARKER, minors, f"**gate / judge**: no minor changes at {head[:7]}.")
-    return 1 if found["blocking"] else 0
+    return 0
 
 
 if __name__ == "__main__":

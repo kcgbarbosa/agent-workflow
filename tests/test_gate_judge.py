@@ -1,4 +1,4 @@
-"""The gate's UI judge asks once per changed screenshot and once per batch of rated ones, blocks only on the repo's list, and collects minor verdicts."""
+"""The gate's UI judge asks once per changed screenshot and once per batch of rated ones, comments a blocking verdict only on the repo's list, never fails on a verdict, and collects minor verdicts."""
 
 from __future__ import annotations
 
@@ -56,14 +56,14 @@ def test_no_changed_screenshot_runs_no_model(pr: FakeGitHub) -> None:
     assert pr.state["calls"] == []
 
 
-def test_a_blocking_verdict_fails_and_comments_the_step_the_sentence_and_both_images(pr: FakeGitHub) -> None:
+def test_a_blocking_verdict_passes_and_comments_the_step_the_sentence_and_both_images(pr: FakeGitHub) -> None:
     for name in ("1-home", "2-login", "3-list"):
         changed_step(pr, name)
     pr.reply_to({"The 1-home screen": answer("blocking", "The title is cut off.", "Text cut off"), "The 2-login screen": answer("minor", "The button moved."), "The 3-list screen": answer("fine", "As asked.")})
 
     run = pr.run(JUDGE, **INPUTS)
 
-    assert run.returncode == 1
+    assert run.returncode == 0
     calls = pr.claude_calls
     assert len(calls) == 3
     assert all("--tools" in c["argv"] and c["argv"][c["argv"].index("--tools") + 1] == "" for c in calls)
@@ -84,10 +84,10 @@ def test_each_verdict_keeps_one_comment_and_a_cleared_one_says_so(pr: FakeGitHub
     changed_step(pr, "1-home")
     changed_step(pr, "2-login")
     pr.reply_to({"The 1-home screen": answer("blocking", "The title is cut off.", "text cut off"), "The 2-login screen": answer("minor", "The button moved.")})
-    assert pr.run(JUDGE, **INPUTS).returncode == 1
+    assert pr.run(JUDGE, **INPUTS).returncode == 0
 
     pr.reply_to({"The 1-home screen": answer("blocking", "The title is still cut off.", "text cut off"), "The 2-login screen": answer("minor", "The button moved left.")})
-    assert pr.run(JUDGE, **INPUTS).returncode == 1
+    assert pr.run(JUDGE, **INPUTS).returncode == 0
     blocking, minor = pr.state["comments"]
     assert "The title is still cut off." in blocking["body"]
     assert "The button moved left." in minor["body"]
@@ -95,7 +95,7 @@ def test_each_verdict_keeps_one_comment_and_a_cleared_one_says_so(pr: FakeGitHub
     pr.reply(answer("fine", "As asked."), answer("fine", "As asked."))
     assert pr.run(JUDGE, **INPUTS).returncode == 0
     blocking, minor = pr.state["comments"]
-    assert "nothing blocks at" in blocking["body"]
+    assert "no fault at" in blocking["body"]
     assert "no minor changes at" in minor["body"]
 
 
@@ -136,7 +136,7 @@ def test_a_step_with_no_baseline_is_rated_on_its_one_image_and_can_block(pr: Fak
 
     run = pr.run(JUDGE, **INPUTS)
 
-    assert run.returncode == 1, run.stderr
+    assert run.returncode == 0, run.stderr
     rated, changed = call_for(pr, "Step 1-home."), call_for(pr, "The 2-login screen")
     assert [part["type"] for part in rated].count("image") == 1
     assert "no baseline" in rated[0]["text"]
@@ -171,7 +171,7 @@ def test_a_flat_pair_is_rated_on_its_one_image_and_can_block(pr: FakeGitHub) -> 
 
     run = pr.run(JUDGE, **INPUTS)
 
-    assert run.returncode == 1, run.stderr
+    assert run.returncode == 0, run.stderr
     assert len(pr.claude_calls) == 2
     rated = call_for(pr, "Step 1-home.")
     assert [part["type"] for part in rated].count("image") == 2
@@ -232,7 +232,7 @@ def test_a_blocking_verdict_in_a_batch_blocks_only_its_step(pr: FakeGitHub) -> N
 
     run = pr.run(JUDGE, **INPUTS)
 
-    assert run.returncode == 1, run.stderr
+    assert run.returncode == 0, run.stderr
     assert len(pr.claude_calls) == 1
     blocking, minor = pr.state["comments"]
     assert "### 2-login\n\nThe title is cut off." in blocking["body"]
