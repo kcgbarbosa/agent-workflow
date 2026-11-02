@@ -54,7 +54,7 @@ const AGENT_STEPS = new Set(["build"]);
 // quiet agent past 15 runs no command.
 const STALL_MINUTES = 15;
 // The lines that name a ticket's step: the steps of a ticket in order, and the stuck step.
-const STEP_LINES = new Set(["build", "push", "pr", "wait", "base", "merge", "stuck"]);
+const STEP_LINES = new Set(["build", "push", "rerun", "pr", "wait", "base", "merge", "stuck"]);
 // The check buckets that make a wait red.
 const RED_BUCKETS = new Set(["fail", "cancel"]);
 // The images a run folder holds, which the page lists apart from the files and serves raw.
@@ -984,6 +984,7 @@ function stepOpenedBy(line: Line, hasPullRequest: boolean): string | null {
   if (step === "build" && result === "started") return "build";
   if (step === "build" && result === "pass") return "push";
   if (step === "push" && result === "ok") return hasPullRequest ? "wait" : "pr";
+  if (step === "rerun") return "wait";
   if ((step === "pr" && result === "open") || (step === "wait" && result === "held")) return "wait";
   if ((step === "wait" && result === "green") || (step === "base" && result === "main")) return "merge";
   if (step === "wait" && result === "red") return "build";

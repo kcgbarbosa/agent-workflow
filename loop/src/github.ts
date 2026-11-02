@@ -55,6 +55,15 @@ export async function create(cwd: string, head: string, base: string, title: str
   return url;
 }
 
+/** The body of the pull request. */
+export async function body(cwd: string, url: string): Promise<string> {
+  return (JSON.parse((await gh(cwd, ["pr", "view", url, "--json", "body"])).stdout) as { body?: string }).body ?? "";
+}
+
+export async function editBody(cwd: string, url: string, bodyFile: string): Promise<void> {
+  await gh(cwd, ["pr", "edit", url, "--body-file", bodyFile]);
+}
+
 /** Auto-merge as a squash, so the pull request title becomes the commit on main. */
 export async function autoMerge(cwd: string, url: string): Promise<void> {
   await gh(cwd, ["pr", "merge", url, "--auto", "--squash"]);
@@ -97,6 +106,16 @@ export async function failedLog(cwd: string, link: string, lines: number): Promi
   if (!job) return null;
   const done = await gh(cwd, ["run", "view", "--job", job, "--log-failed"]);
   return done.stdout.trimEnd().split("\n").slice(-lines).join("\n");
+}
+
+/** The Actions run id in a check's link, or null for a check that is no Actions job. */
+export function runOf(link: string): string | null {
+  return /\/actions\/runs\/(\d+)\//.exec(link)?.[1] ?? null;
+}
+
+/** Runs the failed jobs of an Actions run again, on the same head. Each gets a new job, so a new link. */
+export async function rerunFailed(cwd: string, run: string): Promise<void> {
+  await gh(cwd, ["run", "rerun", run, "--failed"]);
 }
 
 // The gate's review starts each review body with this marker. The newest review holds the findings at the

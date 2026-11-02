@@ -106,6 +106,13 @@ function logged({ name, bucket, link }: github.Check): { name: string; bucket: s
   return link ? { name, bucket, link } : { name, bucket };
 }
 
+/** The body with its `## Ticket` section, which the loop writes last, holding the ticket text. */
+function withTicket(body: string, text: string): string {
+  const section = `## Ticket\n\n${text.trim()}\n`;
+  const at = body.search(/^## Ticket$/m);
+  return at < 0 ? `${body.trimEnd()}${body.trim() ? "\n\n" : ""}${section}` : body.slice(0, at) + section;
+}
+
 /** The checks that make the gate red. */
 function redChecks(checks: github.Check[]): github.Check[] {
   return checks.filter((check) => check.bucket === "fail" || check.bucket === "cancel");
@@ -369,6 +376,7 @@ export class Run {
     this.log.write(key, "start", restart ? "restart" : "new", { detail: branch, slot, ...(stack ? { base, pr: stack.url } : {}) });
     if (ticket.status !== this.config.inProgress) await this.status(key, this.config.inProgress);
     await this.writeTicket(ticket, branch, runDir, stack);
+    if (restart) await this.freshBody(ticket, branch, runDir);
     // A restart runs it again when the setup of the earlier run did not pass.
     const setUp = this.log.lines().some((line) => line.ticket === key && line.step === "worktree" && line.result === "setup");
     if (this.config.setup.length && (added || !setUp)) {
@@ -380,6 +388,7 @@ export class Run {
     let url: string | null = null;
     let autoMerge = false;
     let red = "";
+    let failed: github.Check[] = [];
     for (let attempt = 1; ; attempt++) {
       if (attempt > 1 && this.fixes(key) >= this.config.fixAttempts) {
         return this.stuck(key, `The gate stayed red after ${this.config.fixAttempts} fix attempts. ${red}`, url);
@@ -405,20 +414,23 @@ export class Run {
         this.log.write(key, "build", "fail", { commit, session: session.session, detail: "The agent returned done with no commit on the branch." });
         return "stopped";
       }
+      // A fix attempt with no new commit may find the red was a flake. Its failed checks run again on the same
+      // head, and the gate's result counts: green merges, and red again ends the attempt.
+      let rerun = new Set<string>();
       if (attempt > 1 && commit === before) {
-        // The gate would give the same result, so the next attempt gets the same message.
-        this.log.write(key, "build", "fail", { commit, session: session.session, detail: "The fix attempt returned done with no new commit." });
-        continue;
-      }
-      this.log.write(key, "build", "pass", { commit, session: session.session, detail: session.detail });
+        this.log.write(key, "build", "pass", { commit, session: session.session, detail: "The fix attempt returned done with no new commit." });
+        rerun = await this.rerun(key, url!, failed, commit);
+      } else {
+        this.log.write(key, "build", "pass", { commit, session: session.session, detail: session.detail });
 
-      // Push
-      try {
-        await git(worktree, "push", "--quiet", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`);
-        this.log.write(key, "push", "ok", { commit });
-      } catch (error) {
-        this.log.write(key, "push", "fail", { commit, detail: (error as Error).message });
-        return "stopped";
+        // Push
+        try {
+          await git(worktree, "push", "--quiet", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`);
+          this.log.write(key, "push", "ok", { commit });
+        } catch (error) {
+          this.log.write(key, "push", "fail", { commit, detail: (error as Error).message });
+          return "stopped";
+        }
       }
 
       // Pull request. A stacked one targets its blocker's branch, and gets auto-merge once it targets main,
@@ -451,7 +463,7 @@ export class Run {
       // the retarget still gets a fix attempt. When auto-merge does not turn on, the loop merges on that green.
       let checks: Awaited<ReturnType<Run["wait"]>>;
       for (;;) {
-        checks = await this.wait(key, url, autoMerge, commit);
+        checks = await this.wait(key, url, autoMerge, commit, rerun);
         this.log.write(key, "wait", checks.result, {
           commit,
           pr: url,
@@ -470,6 +482,7 @@ export class Run {
       if (checks.result === "green") break;
       if (checks.result !== "red" || checks.closed) return "stopped";
       red = checks.detail;
+      failed = checks.checks;
       prompt = await this.fixPrompt(url, checks.checks);
     }
 
@@ -618,15 +631,32 @@ export class Run {
     while (Date.now() < this.pausedUntil) await sleep((this.pausedUntil - Date.now()) / 1000);
   }
 
-  /** The fix attempts since the ticket was last stuck, from the log, so a restart keeps the count. */
+  /** The fix attempts since the ticket's last start line, from the log, so a restart starts at 0. */
   private fixes(key: string): number {
-    let count = 0;
-    for (const line of this.log.lines()) {
-      if (line.ticket !== key) continue;
-      if (line.step === "stuck" && line.result === "started") count = 0;
-      if (line.step === "build" && line.result === "started" && Number(line.attempt) > 1) count++;
+    const lines = this.log.lines().filter((line) => line.ticket === key);
+    const started = lines.findLastIndex((line) => line.step === "start" && (line.result === "new" || line.result === "restart"));
+    return lines.slice(started + 1).filter((line) => line.step === "build" && line.result === "started" && Number(line.attempt) > 1).length;
+  }
+
+  /**
+   * Runs the failed Actions jobs of the red checks again on the same head, and returns the links of the checks
+   * that run again, which the wait reads as pending until their new jobs report.
+   */
+  private async rerun(key: string, url: string, checks: github.Check[], commit: string): Promise<Set<string>> {
+    const red = redChecks(checks).filter((check) => check.name !== HOLD_CHECK);
+    const rerun = new Set<string>();
+    const errors: string[] = [];
+    for (const run of new Set(red.map((check) => github.runOf(check.link)).filter((run) => run !== null))) {
+      try {
+        await github.rerunFailed(this.config.repo, run);
+        for (const check of red) if (github.runOf(check.link) === run) rerun.add(check.link);
+      } catch (error) {
+        errors.push((error as Error).message);
+      }
     }
-    return count;
+    const detail = errors.length ? errors.join("\n") : rerun.size ? "" : "No failed check is an Actions job, so none runs again.";
+    this.log.write(key, "rerun", rerun.size && !errors.length ? "ok" : "fail", { commit, pr: url, checks: red.map(logged), ...(detail ? { detail } : {}) });
+    return rerun;
   }
 
   /** One message with the end of each failed job's log and the review's blocking findings. */
@@ -797,16 +827,35 @@ export class Run {
     const repo = this.config.repo;
     const open = (await github.pullRequestsOf(repo, ticket.key, branch, branchPrefixes(ticket.key))).find((pr) => pr.state === "OPEN");
     if (open) return open.url;
+    // Written each time, since a file of an earlier run holds the ticket text as it was then.
     const bodyFile = join(runDir, "pr-body.md");
-    if (!existsSync(bodyFile)) {
-      const browse = `${this.config.trackerUrl.replace(/\/$/, "")}/browse/${ticket.key}`;
-      const spec = await this.specLine(ticket);
-      let body = `[${ticket.key}](${browse}): ${ticket.summary}.${spec ? ` ${spec}` : ""}\n\n`;
-      if (reason) body += `${reason}\n\n`;
-      body += `## Ticket\n\n${ticket.text.trim()}\n`;
-      writeFileSync(bodyFile, body);
-    }
+    const browse = `${this.config.trackerUrl.replace(/\/$/, "")}/browse/${ticket.key}`;
+    const spec = await this.specLine(ticket);
+    let body = `[${ticket.key}](${browse}): ${ticket.summary}.${spec ? ` ${spec}` : ""}\n\n`;
+    if (reason) body += `${reason}\n\n`;
+    writeFileSync(bodyFile, withTicket(body, ticket.text));
     return github.create(repo, branch, base, `${typeOf(ticket)}(${ticket.key}): ${ticket.summary}`, bodyFile);
+  }
+
+  /**
+   * On a restart, replaces the `## Ticket` section of the open pull request's body with the current ticket text,
+   * so the gate's review reads the work against the ticket as it is now. The rest of the body stays.
+   */
+  private async freshBody(ticket: Ticket, branch: string, runDir: string): Promise<void> {
+    const repo = this.config.repo;
+    try {
+      const open = (await github.pullRequestsOf(repo, ticket.key, branch, branchPrefixes(ticket.key))).find((pr) => pr.state === "OPEN");
+      if (!open) return;
+      const body = await github.body(repo, open.url);
+      const fresh = withTicket(body, ticket.text);
+      if (fresh === body) return;
+      const bodyFile = join(runDir, "pr-body.md");
+      writeFileSync(bodyFile, fresh);
+      await github.editBody(repo, open.url, bodyFile);
+      this.log.write(ticket.key, "pr-body", "ok", { pr: open.url, detail: "The Ticket section holds the current ticket text." });
+    } catch (error) {
+      this.log.write(ticket.key, "pr-body", "fail", { detail: (error as Error).message });
+    }
   }
 
   /**
@@ -842,6 +891,7 @@ export class Run {
     url: string,
     autoMerge: boolean,
     commit: string,
+    rerun: Set<string> = new Set(),
   ): Promise<{ result: "green" | "red" | "timeout"; checks: github.Check[]; detail: string; closed: boolean }> {
     const repo = this.config.repo;
     let deadline = Date.now() + WAIT_MINUTES * 60_000;
@@ -857,7 +907,8 @@ export class Run {
       if (pr?.state === "CLOSED") return { result: "red", checks, detail: "The pull request was closed.", closed: true };
       if (pr?.headRefOid === commit) {
         try {
-          checks = await github.checks(repo, url);
+          // A check that runs again reads as pending until its new job reports.
+          checks = (await github.checks(repo, url)).map((check) => (rerun.has(check.link) ? { ...check, bucket: "pending", state: "PENDING" } : check));
         } catch (error) {
           console.error((error as Error).message);
         }

@@ -1,8 +1,8 @@
 // The fake `gh`. It keeps the pull requests and their check runs in FAKE_DIR/github.json, and records each
 // call in FAKE_DIR/gh.jsonl. A pull request with auto-merge on merges as a squash into the bare origin
 // (FAKE_ORIGIN) once every check passes. Each push to a pull request's branch runs its check again, which
-// takes its bucket from FAKE_DIR/verdicts.json by ticket key: one bucket, or one per push with the last one
-// kept. With no verdict, the check stays pending until a test sets it. A failed job's log is
+// takes its bucket from FAKE_DIR/verdicts.json by ticket key: one bucket, or one per run with the last one
+// kept, where a run is a push or a rerun of the failed checks. With no verdict, the check stays pending until a test sets it. A failed job's log is
 // FAKE_DIR/job-log.txt. GitHub retargets the pull requests on a merged branch to its base, unless
 // FAKE_DIR/no-retarget exists. A new pull request gets the review of FAKE_DIR/reviews.json by ticket key, in
 // the shape the gate's review posts: the findings in the diff as comments, and the others in the body. A draft
@@ -78,11 +78,12 @@ function review(pr, findings) {
   return { id: pr.number * 10, body, comments };
 }
 
-/** The check of the pull request's nth push, as its verdict gives it. */
+/** The check of the pull request's nth run, as its verdict gives it. A rerun keeps the run id and gets a new job. */
 function check(pr) {
+  const reruns = pr.reruns ?? 0;
   const verdict = verdicts[keyOf(pr.headRefName)] ?? "pending";
-  const bucket = Array.isArray(verdict) ? verdict[Math.min(pr.pushes, verdict.length) - 1] : verdict;
-  const link = `https://github.com/kcgbarbosa/demo/actions/runs/${pr.number}${pr.pushes}/job/${pr.number}${pr.pushes}0`;
+  const bucket = Array.isArray(verdict) ? verdict[Math.min(pr.pushes + reruns, verdict.length) - 1] : verdict;
+  const link = `https://github.com/kcgbarbosa/demo/actions/runs/${pr.number}${pr.pushes}/job/${pr.number}${pr.pushes}${reruns}`;
   return { name: "gate / check", bucket, state: STATES[bucket], link };
 }
 
@@ -124,14 +125,25 @@ if (settled) save();
 
 const [noun, verb] = args;
 const show = (pr) => {
-  const { checks, body, autoMerge, pushes, reviews, ...rest } = pr;
-  return { ...rest, autoMergeRequest: autoMerge };
+  const { checks, body, autoMerge, pushes, reruns, reviews, ...rest } = pr;
+  return { ...rest, autoMergeRequest: autoMerge, ...((option("json") ?? "").split(",").includes("body") ? { body } : {}) };
 };
 if (noun === "run" && verb === "view") {
   // Only the call the loop makes: the failed steps of one job.
   if (!option("job") || !args.includes("--log-failed")) fail("fake gh: only run view --job <id> --log-failed");
   const log = join(fakes, "job-log.txt");
   process.stdout.write(existsSync(log) ? readFileSync(log, "utf8") : "check\tRun make check\tmake: *** [check] Error 1\n");
+  process.exit(0);
+}
+if (noun === "run" && verb === "rerun") {
+  // Only the call the loop makes: the failed jobs of one run, which run again on the same head.
+  if (!args.includes("--failed")) fail("fake gh: only run rerun <id> --failed");
+  const pr = state.prs.find((item) => item.checks.some((one) => one.link?.includes(`/actions/runs/${args[2]}/`)));
+  if (!pr) fail(`could not find any workflow run with ID ${args[2]}`);
+  if (!pr.checks.some((one) => one.bucket === "fail" || one.bucket === "cancel")) fail(`run ${args[2]} cannot be rerun; its workflow file may be broken`);
+  pr.reruns = (pr.reruns ?? 0) + 1;
+  pr.checks = [check(pr)];
+  save();
   process.exit(0);
 }
 if (noun === "api") {
@@ -206,6 +218,7 @@ if (verb === "list") {
 } else if (verb === "edit") {
   const pr = find(args[2]);
   if (option("base")) pr.baseRefName = option("base");
+  if (option("body-file")) pr.body = readFileSync(option("body-file"), "utf8");
   save();
 } else if (verb === "checks") {
   const pr = find(args[2]);
