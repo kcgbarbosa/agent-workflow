@@ -37,6 +37,7 @@ export type PullRequest = {
   autoMerge: { mergeMethod: string } | null;
   mergeCommit: { oid: string } | null;
   checks: { name: string; bucket: string; state: string }[];
+  pushes?: number;
 };
 
 function which(tool: string): string {

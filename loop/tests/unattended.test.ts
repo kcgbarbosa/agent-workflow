@@ -1,6 +1,6 @@
 // The behaviours that let a long Epic run unattended: fix attempts on a red gate, stacked tickets, the usage
 // pause, and stack slots.
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { EPIC, World } from "./world.ts";
@@ -190,6 +190,91 @@ test("a restart starts a new session on the current ticket text, on the ticket's
   expect(sessions[before]).not.toBe(sessions[before - 1]);
   expect(world.steps().filter((step) => step.startsWith("DEMO-2 start"))).toEqual(["DEMO-2 start new", "DEMO-2 start restart"]);
   expect(world.prs()).toHaveLength(1);
+});
+
+test("a restart with no open pull request writes its body from the current ticket, not from an earlier run's file", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC, body: ["Goal. A user signs in with a passkey."] });
+  world.verdicts({ "DEMO-2": "pass" });
+  // As an earlier run left it, for a pull request that was then closed.
+  mkdirSync(join(world.state, EPIC, "runs", "DEMO-2"), { recursive: true });
+  writeFileSync(join(world.state, EPIC, "runs", "DEMO-2", "pr-body.md"), "## Ticket\n\nGoal. A user signs in with a password.\n");
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.prs()[0]!.body).toContain("## Ticket\n\nGoal. A user signs in with a passkey.");
+  expect(world.prs()[0]!.body).not.toContain("password");
+});
+
+test("a restart with an open pull request replaces the Ticket section of its body and keeps the rest", async () => {
+  world.writeConfig("[limits]\nfix_attempts = 1\n");
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC, body: ["Goal. A user signs in with a password."] });
+  world.verdicts({ "DEMO-2": "fail" });
+  world.plan({ "DEMO-2": [1, 2, 3, 4].map((n) => ({ write: { "login.txt": `login ${n}\n` }, reason: "Added the page." })) });
+  expect((await world.loop("run", EPIC)).code).toBe(1);
+  const before = world.prs()[0]!.body!;
+
+  world.jira.issues.get("DEMO-2")!.body = ["Goal. A user signs in with a passkey."];
+  world.jira.issues.get("DEMO-2")!.flagged = false;
+  await world.loop("run", EPIC);
+
+  const body = world.prs()[0]!.body!;
+  expect(body).toBe(before.replace("password", "passkey"));
+  expect(body).toContain("Added the page.\n\n## Ticket\n\nGoal. A user signs in with a passkey.\n");
+});
+
+test("a restart counts only the fix attempts of its own run", async () => {
+  world.writeConfig("[limits]\nfix_attempts = 2\n");
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "fail" });
+  // The first run stops in its first fix attempt, so it is not stuck.
+  world.plan({
+    "DEMO-2": [{ write: { "login.txt": "login 1\n" } }, { status: "blocked", reason: "The spec leaves the provider open." }, ...[2, 3, 4].map((n) => ({ write: { "login.txt": `login ${n}\n` } }))],
+  });
+  expect((await world.loop("run", EPIC)).code).toBe(1);
+  const before = world.calls().length;
+
+  await world.loop("run", EPIC);
+
+  expect(world.calls().length - before).toBe(3);
+  expect(world.jira.issues.get("DEMO-2")!.comments.at(-1)).toContain("The gate stayed red after 2 fix attempts.");
+});
+
+test("a fix with no new commit runs the failed checks again, and a green gate merges", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": ["fail", "pass"] });
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, {}] });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.calls()).toHaveLength(2);
+  expect(world.ghCalls().filter((args) => args[0] === "run" && args[1] === "rerun")).toEqual([["run", "rerun", "1001", "--failed"]]);
+  expect(world.steps().filter((step) => /^DEMO-2 (build|push|rerun|wait)/.test(step))).toEqual([
+    "DEMO-2 build started",
+    "DEMO-2 build pass",
+    "DEMO-2 push ok",
+    "DEMO-2 wait red",
+    "DEMO-2 build started",
+    "DEMO-2 build pass",
+    "DEMO-2 rerun ok",
+    "DEMO-2 wait green",
+  ]);
+  expect(world.prs()[0]).toMatchObject({ state: "MERGED", pushes: 1 });
+});
+
+test("a fix with no new commit whose gate stays red counts as one fix attempt", async () => {
+  world.writeConfig("[limits]\nfix_attempts = 1\n");
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": "fail" });
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, {}] });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code).toBe(1);
+  expect(world.calls()).toHaveLength(2);
+  expect(world.steps().filter((step) => step.startsWith("DEMO-2 wait"))).toEqual(["DEMO-2 wait red", "DEMO-2 wait red"]);
+  expect(world.jira.issues.get("DEMO-2")!.comments[0]).toContain("The gate stayed red after 1 fix attempts.");
 });
 
 test("a usage limit pauses the run, and the run resumes the session when the limit resets", async () => {
