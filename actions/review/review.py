@@ -1,7 +1,7 @@
 """The gate's review: Claude Code runs the code-review skill on a pull request, and this posts its findings.
 
 It runs in the pull request's checkout at its head. action.yml gives the env it reads.
-A finding never fails it: a blocking one is a comment that asks for a fix, and the owner decides. It fails only when it cannot review.
+A finding never fails it: a blocking one is a comment that asks for a fix, and the owner decides. It fails only when a review that ran cannot finish.
 """
 
 from __future__ import annotations
@@ -275,8 +275,10 @@ def main() -> int:
         if blocking:
             print(f"The last review at {last.head[:7]} has {blocking} blocking findings.")
         return 0
+    # A run with no token, such as a Dependabot pull request's, reviews nothing and blocks nothing.
     if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") and not os.environ.get("ANTHROPIC_API_KEY"):
-        sys.exit("gate / review needs the CLAUDE_CODE_OAUTH_TOKEN or the ANTHROPIC_API_KEY secret, or `enabled = false` in loop.toml [review].")
+        print("::warning::gate / review has no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY secret, so it reviews nothing.")
+        return 0
 
     temp = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
     pr = json.loads(subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"], capture_output=True, text=True, check=True).stdout)
@@ -316,12 +318,6 @@ def main() -> int:
         if part
     )
     gh_send("POST", f"repos/{repo}/pulls/{number}/reviews", {"commit_id": head, "event": "COMMENT", "body": body, "comments": comments})
-    # The new review replaces the old ones, so an old request for changes no longer holds the merge.
-    for review in reviews:
-        if review.get("state") == "CHANGES_REQUESTED" and MARKER.search(review.get("body") or ""):
-            dismissal = {"message": "A later gate review replaces this one.", "event": "DISMISS"}
-            if not gh_send("PUT", f"repos/{repo}/pulls/{number}/reviews/{review['id']}/dismissals", dismissal, check=False):
-                print(f"::warning::could not dismiss the earlier gate review {review['id']}")
     print(summary)
     print(cost_line(output))
     return 0

@@ -225,3 +225,12 @@ def test_the_review_runs_on_an_api_key_with_no_plan_token(pr: FakeGitHub) -> Non
     assert run.returncode == 0, run.stderr
     [call] = pr.claude_calls
     assert call["api_key"] == "key"
+
+
+def test_a_run_with_no_token_reviews_nothing_and_passes(pr: FakeGitHub) -> None:
+    run = pr.run(REVIEW, **INPUTS, CLAUDE_CODE_OAUTH_TOKEN="", ANTHROPIC_API_KEY="")
+
+    assert run.returncode == 0, run.stderr
+    assert "reviews nothing" in run.stdout
+    assert pr.claude_calls == []
+    assert pr.state["reviews"] == []

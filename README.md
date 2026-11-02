@@ -15,7 +15,7 @@ install.sh       makes the links and installs the loop command. Safe to run agai
 tests/           the repo checks on Vitest, and the gate scripts' tests on pytest. make check runs them after the checks of lefthook.yml
 lefthook.yml     every format, lint and policy check of this repo, run at each commit and first in make check
 .github/         the shared merge gate, workflows/gate.yml, which every repo calls, and this repo's own call to it
-actions/         the gate's review and UI judge, composite actions that the gate runs beside and after the check
+actions/         the gate's review, a composite action that the gate runs beside the check
 Makefile         make check, the gate's check for this repo
 licenses/        upstream licenses. Keep
 ```
