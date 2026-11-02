@@ -39,7 +39,7 @@ Every repo keeps these rules. Change a rule here, on purpose, and give the reaso
 
 ## Settings
 
-Each section names what it settles, and its `loop.toml` key when the script reads one. A repo's `docs/agents/loop.md` keeps these headings. A value with a key lives in `loop.toml` only, and the repo doc points there; the doc holds the values the script cannot read. A key that the old loop read and this one dropped, `[gates]`, `[acceptance]`, `[ui]` `skill`, `[demo]`, and `[tracker]` `name_landed_keys_only`, prints a warning that names it and is ignored. Any other unknown key refuses the file.
+Each section names what it settles, and its `loop.toml` key when the script reads one. A repo's `docs/agents/loop.md` keeps these headings. A value with a key lives in `loop.toml` only, and the repo doc points there; the doc holds the values the script cannot read. A key that the old loop read and this one dropped, `[gates]`, `[acceptance]`, `[ui]` `skill`, `[ui]` `blocking`, `[demo]`, and `[tracker]` `name_landed_keys_only`, prints a warning that names it and is ignored. Any other unknown key refuses the file.
 
 The machine README, `~/dev/machines/README.md`, holds how to reach each machine and how secrets get onto it. Secrets and Hosts link to it.
 

@@ -76,7 +76,7 @@ Write the rule in the issue tracker doc, so `to-tickets` follows it:
 
 - `make check` passes on a clean checkout of the main branch. A red main makes every ticket's gate red, and each one spends its fix attempts on it.
 - Run `make check` twice in a row. A check that passes once and fails once spends the fix attempts of a ticket on noise.
-- An old `loop.toml` with `[gates]`, `[acceptance]`, `[demo]`, or `[ui]` `skill` warns at each start. Delete those keys.
+- An old `loop.toml` with `[gates]`, `[acceptance]`, `[demo]`, `[ui]` `skill`, or `[ui]` `blocking` warns at each start. Delete those keys.
 
 ## Stack per worktree
 
