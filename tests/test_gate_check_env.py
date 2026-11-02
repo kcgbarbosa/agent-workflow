@@ -20,7 +20,7 @@ def jobs() -> dict:
 
 
 def run_check(check_env: str, command: str = SHOW) -> subprocess.CompletedProcess[str]:
-    [step] = [s for s in jobs()["check"]["steps"] if "COMMAND" in s.get("env", {})]
+    [step] = [s for s in jobs()["check"]["steps"] if "CHECK_ENV" in s.get("env", {})]
     env = {"PATH": os.environ["PATH"], "CHECK_ENV": check_env, "COMMAND": command}
     return subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]], env=env, capture_output=True, text=True)
 
@@ -52,5 +52,5 @@ def test_a_malformed_line_fails_with_its_number_and_no_value() -> None:
     assert "ran" not in run.stdout.splitlines()
 
 
-def test_only_the_check_job_gets_the_secret() -> None:
-    assert [name for name, job in jobs().items() if "secrets.CHECK_ENV" in yaml.safe_dump(job)] == ["check"]
+def test_only_the_jobs_that_run_the_check_get_the_secret() -> None:
+    assert [name for name, job in jobs().items() if "secrets.CHECK_ENV" in yaml.safe_dump(job)] == ["check", "checks"]
