@@ -32,6 +32,9 @@ inputs:
 runs:
   using: composite
   steps:
+    # One install before the calls, which run at once, so they never race on the npx cache.
+    - shell: bash
+      run: command -v claude > /dev/null || npm install --global --silent @anthropic-ai/claude-code
     - shell: bash
       run: python3 "$GITHUB_ACTION_PATH/judge.py"
       env:
