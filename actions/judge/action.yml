@@ -1,13 +1,15 @@
 name: judge
 description: >-
   The gate's UI judge. It reads the screenshot folder that the repo's browser tests write, `screenshot-diff/` at the repo root,
-  with one folder per step and two kinds of step. A changed step holds `baseline.png`, `new.png`, and `diff.png`: the tests
-  leave out a change below their tolerance, and the pull request commits the new screenshots as the baselines. A rated step
-  holds only `new.png`, for a screen whose baseline would not stay stable, and the judge asks if that screen shows a fault of
-  the list rather than a change. Each step holds `step.json`, with `line`, the step's ticket line, and `path`, the
-  screenshot's path in the repo. One model call per step, with no tools, answers blocking, minor, or fine. Only a fault on
-  `loop.toml [ui] blocking` can block. A blocking verdict fails the step and comments the step, the sentence, and the two
-  images, or the one image of a rated step. Minor verdicts collect in one checklist comment.
+  with two kinds of step. A rated step is a flat pair at the top of the folder, `<step>.png` and `<step>.json`, as the tests
+  write it, and the judge asks if that screen shows a fault of the list rather than a change. A step folder holds `new.png`,
+  and a changed step adds `baseline.png` and `diff.png`: the tests leave out a change below their tolerance, and the pull
+  request commits the new screenshots as the baselines. A folder with only `new.png` is a rated step too. A step folder holds
+  `step.json`. Each JSON holds `line`, the step's ticket line, and can hold `path`, the screenshot's path in the repo, for the
+  images of a comment. A PNG with no JSON beside it is not a step, and the judge logs its name. One model call per step, with
+  no tools, answers blocking, minor, or fine. Only a fault on `loop.toml [ui] blocking` can block. A blocking verdict fails
+  the step and comments the step, the sentence, and the two images, or the one image of a rated step. Minor verdicts collect
+  in one checklist comment.
 inputs:
   claude_code_oauth_token:
     description: The Claude Code token of the plan the judge bills. One of the two tokens is needed.

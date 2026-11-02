@@ -111,7 +111,16 @@ jobs:
       # actions/judge/action.yml gives the folder that the repo's browser tests write.
       - id: screenshots
         run: |
+          found=false
           if compgen -G 'screenshot-diff/*/new.png' > /dev/null; then
+            found=true
+          fi
+          for meta in screenshot-diff/*.json; do
+            if [ -f "${meta%.json}.png" ]; then
+              found=true
+            fi
+          done
+          if [ "$found" = true ]; then
             echo "screenshots=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.screenshots.outputs.screenshots == 'true'
