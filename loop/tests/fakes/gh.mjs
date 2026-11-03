@@ -84,7 +84,10 @@ function review(pr, findings) {
 function check(pr) {
   const reruns = pr.reruns ?? 0;
   const verdict = verdicts[keyOf(pr.headRefName)] ?? "pending";
-  const bucket = Array.isArray(verdict) ? verdict[Math.min(pr.pushes + reruns, verdict.length) - 1] : verdict;
+  const given = Array.isArray(verdict) ? verdict[Math.min(pr.pushes + reruns, verdict.length) - 1] : verdict;
+  // A `conflict` verdict makes the run's head conflict with the base, and GitHub then runs no check on it.
+  pr.mergeable = given === "conflict" ? "CONFLICTING" : "MERGEABLE";
+  const bucket = given === "conflict" ? "pending" : given;
   const link = `https://github.com/kcgbarbosa/demo/actions/runs/${pr.number}${pr.pushes}/job/${pr.number}${pr.pushes}${reruns}`;
   return { name: "gate / check", bucket, state: STATES[bucket], link };
 }

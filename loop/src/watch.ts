@@ -24,6 +24,7 @@ import {
   runHomes,
   ticketKey,
 } from "./report.ts";
+import { isTicketHome, runHome, runLineOf, ticketDir, WORKTREE, worktreeOf } from "./layout.ts";
 import { DECISIONS, isRecord, type Line } from "./log.ts";
 import { run } from "./spawn.ts";
 
@@ -231,12 +232,13 @@ class Masker {
 
 /** Whether the Epic's latest run is running: its latest start line has a pid that is alive, and no finish or stop line follows it. */
 function isRunning(lines: Line[], epic: string): boolean {
-  const index = lines.findLastIndex((line) => line.ticket === epic && line.step === "start" && line.result === "ok");
+  const own = runLineOf(epic, lines);
+  const index = lines.findLastIndex((line) => own(line) && line.step === "start" && line.result === "ok");
   if (index < 0) return false;
   const pid = lines[index].pid;
   if (typeof pid !== "number") return false;
   // A ticket logs its own `stop loop-error` and the run goes on, so only the run's end line counts.
-  if (lines.slice(index + 1).some((line) => line.ticket === epic && (line.step === "finish" || line.step === "stop"))) return false;
+  if (lines.slice(index + 1).some((line) => own(line) && (line.step === "finish" || line.step === "stop"))) return false;
   return alive(pid);
 }
 
@@ -305,6 +307,7 @@ export function hostView(stateDir: string): HostProject[] {
 const UNLOGGED = new Set(["meter", "tracker-status", "frontier", "notify", "agent"]);
 const LOG_LINES = 50;
 
+
 /** The latest lines of every run of every project on this host, or of one project, newest first. */
 export function hostLog(stateDir: string, project?: string): LogEntry[] {
   const entries: LogEntry[] = [];
@@ -340,11 +343,12 @@ export function comparison(stateDir: string, epic?: string, against?: string) {
  * project, which a caller that views each Epic reads once.
  */
 export function epicView(stateDir: string, epic: string, running?: boolean, history = allRuns(stateDir)): EpicView {
-  const home = join(stateDir, epic);
+  const home = runHome(stateDir, epic);
   const lines = readLines(join(home, DECISIONS));
+  const own = runLineOf(epic, lines);
   const live = running ?? isRunning(lines, epic);
   // The latest run starts at the last start line of the Epic.
-  const starts = lines.flatMap((line, index) => (line.ticket === epic && line.step === "start" ? [index] : []));
+  const starts = lines.flatMap((line, index) => (own(line) && line.step === "start" ? [index] : []));
   const runLines = starts.length ? lines.slice(starts[starts.length - 1]) : lines;
 
   // The latest frontier gives the summary and the tickets, in the order the loop reads them.
@@ -370,7 +374,7 @@ export function epicView(stateDir: string, epic: string, running?: boolean, hist
   const merged = new Set<string>();
   for (const line of lines) {
     const key = ticketKey(line);
-    if (key !== epic) addTo(everyByTicket, key, line);
+    if (!own(line)) addTo(everyByTicket, key, line);
     if ((line.step === "merge" && line.result === "merged") || (line.step === "start" && line.result === "merged-before")) {
       merged.add(key);
     }
@@ -387,7 +391,7 @@ export function epicView(stateDir: string, epic: string, running?: boolean, hist
   for (const line of runLines) {
     const { step, result } = line;
     const key = ticketKey(line);
-    if (key === epic) {
+    if (own(line)) {
       if (step === "stop") {
         ended = true;
         state = "stopped";
@@ -441,7 +445,7 @@ export function epicView(stateDir: string, epic: string, running?: boolean, hist
     else column = "waiting";
 
     const isLive = column === "running";
-    const runDir = join(home, "runs", ticket.key);
+    const runDir = ticketDir(home, ticket.key);
     const agents = agentLogs(runDir);
     const newest = agents.reduce<string | null>((latest, log) => (latest === null || log.updated > latest ? log.updated : latest), null);
     const latestWait = everything.findLast((line) => line.step === "wait");
@@ -489,8 +493,8 @@ export function epicView(stateDir: string, epic: string, running?: boolean, hist
     stats: ticketStats(columns, byTicket),
     plan: planView(totals, typicalShare(history, runLines.length ? runLines[0].time : null)),
     events,
-    epic_files: runFiles(home, join(home, "runs", epic)),
-    epic_agents: agentLogs(join(home, "runs", epic)).map(({ number, updated }) => ({ number, updated })),
+    epic_files: isTicketHome(home) ? [] : runFiles(home, join(home, "runs", epic)),
+    epic_agents: isTicketHome(home) ? [] : agentLogs(join(home, "runs", epic)).map(({ number, updated }) => ({ number, updated })),
   };
 }
 
@@ -659,7 +663,7 @@ function recentActivity(home: string, key: string, runDir: string, agents: Agent
     return [];
   }
   if (size > TAIL_BYTES) data = data.subarray(data.indexOf(10) + 1);
-  const roots: [string, string] = [`${home}/worktrees/${key}/`, `${home}/runs/${key}/`];
+  const roots: [string, string] = [`${worktreeOf(home, key)}/`, `${ticketDir(home, key)}/`];
   const items: Item[] = [];
   for (const event of eventsOf(data)) {
     items.push(...itemsOf(event, roots).filter((item) => item.kind === "tool" || item.kind === "text"));
@@ -709,7 +713,8 @@ function eventOf(home: string, line: Line): EventView {
     event.turns = usage.num_turns;
   }
   // A gate or stuck line names its log, which the page links to.
-  for (const [, match] of detail.matchAll(new RegExp(`${escapeRegExp(home)}/(runs/\\S+)`, "g"))) {
+  const logs = isTicketHome(home) ? "agent-\\d+\\.\\S+" : "runs/\\S+";
+  for (const [, match] of detail.matchAll(new RegExp(`${escapeRegExp(home)}/(${logs})`, "g"))) {
     if (isFile(join(home, match))) {
       event.log = match;
       break;
@@ -729,11 +734,17 @@ function agentLogs(runDir: string): AgentLog[] {
   return logs.sort((a, b) => a.number - b.number);
 }
 
-/** The files of a run folder, relative to the state folder. Images and agent logs are left out. */
+/** The files of a run folder, relative to the state folder. Images and agent logs are left out, and a worker's log and worktree. */
 function runFiles(home: string, runDir: string): string[] {
   let names: string[];
   try {
-    names = readdirSync(runDir, { recursive: true, encoding: "utf8" });
+    names = isTicketHome(runDir)
+      ? listDir(runDir)
+          .filter((name) => name !== DECISIONS && name !== WORKTREE)
+          .flatMap((name) =>
+            isFile(join(runDir, name)) ? [name] : readdirSync(join(runDir, name), { recursive: true, encoding: "utf8" }).map((inner) => join(name, inner)),
+          )
+      : readdirSync(runDir, { recursive: true, encoding: "utf8" });
   } catch {
     return [];
   }
@@ -756,7 +767,7 @@ function activity(home: string, ticket: string, path: string, offset: number): {
   const size = statSync(path).size;
   const data = readRange(path, Math.min(offset, size), CHUNK_BYTES);
   const end = data.lastIndexOf(10) + 1;
-  const roots: [string, string] = [`${home}/worktrees/${ticket}/`, `${home}/runs/${ticket}/`];
+  const roots: [string, string] = [`${worktreeOf(home, ticket)}/`, `${ticketDir(home, ticket)}/`];
   const items: Item[] = [];
   for (const event of eventsOf(data.subarray(0, end))) items.push(...itemsOf(event, roots));
   return { items, offset: offset + end, size };
@@ -1092,7 +1103,7 @@ export class Watch {
     const dir = name ? projects(this.stateDir).get(name) : this.stateDir;
     if (dir === undefined) return missing();
     if (parts.length === 3 && parts[0] === "api" && parts[1] === "epic" && RUN.test(parts[2])) {
-      if (!existsSync(join(dir, parts[2], DECISIONS))) return missing();
+      if (!existsSync(join(runHome(dir, parts[2]), DECISIONS))) return missing();
       return this.json(epicView(dir, parts[2]));
     }
     if (parts.length === 3 && parts[0] === "api" && parts[1] === "report" && RUN.test(parts[2])) {
@@ -1104,8 +1115,8 @@ export class Watch {
       return this.json({ previous: before, rows: found.rows });
     }
     if (parts.length === 5 && parts[0] === "api" && parts[1] === "agent" && RUN.test(parts[2]) && KEY.test(parts[3])) {
-      const home = join(dir, parts[2]);
-      const path = join(home, "runs", parts[3], `agent-${parts[4]}.jsonl`);
+      const home = runHome(dir, parts[2]);
+      const path = join(ticketDir(home, parts[3]), `agent-${parts[4]}.jsonl`);
       if (!/^\d+$/.test(parts[4]) || !isFile(path)) return missing();
       const raw = parsed.searchParams.get("offset") ?? "";
       if (raw !== "" && !/^\d+$/.test(raw)) {
@@ -1113,8 +1124,8 @@ export class Watch {
       }
       return this.json(activity(home, parts[3], path, raw === "" ? 0 : Number(raw)));
     }
-    if (parts.length >= 4 && parts[0] === "files" && RUN.test(parts[1]) && parts[2] === "runs") {
-      return this.file(join(dir, parts[1]), parts.slice(2).join("/"));
+    if (parts.length >= 3 && parts[0] === "files" && RUN.test(parts[1])) {
+      return this.file(runHome(dir, parts[1]), parts.slice(2).join("/"));
     }
     return missing();
   }
@@ -1123,10 +1134,13 @@ export class Watch {
     return { status: 200, type: "application/json", body: Buffer.from(JSON.stringify(this.masker.data(data))) };
   }
 
+  /** A file of a run folder: under `runs/` of an Epic run, or a worker's own, outside its worktree. */
   private file(home: string, relativePath: string): Reply {
-    const root = realPath(join(home, "runs"));
+    const worker = isTicketHome(home);
+    const root = realPath(worker ? home : join(home, "runs"));
     const path = realPath(join(home, relativePath));
     if (root === null || path === null || !path.startsWith(root + sep) || !isFile(path)) return missing();
+    if (worker && (path.startsWith(join(root, WORKTREE) + sep) || path === join(root, DECISIONS))) return missing();
     const imageType = IMAGE_TYPES[extname(path).toLowerCase()];
     if (imageType) return { status: 200, type: imageType, body: readFileSync(path) };
     const text = this.masker.text(readFileSync(path, "utf8"));

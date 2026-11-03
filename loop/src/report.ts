@@ -4,6 +4,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Meter, Usage } from "./agent.ts";
+import { runLineOf, TICKETS } from "./layout.ts";
 import { DECISIONS, isRecord, type Line } from "./log.ts";
 
 const HAIKU = "claude-haiku-5-5";
@@ -63,11 +64,17 @@ export function projects(stateDir: string): Map<string, string> {
   return found;
 }
 
-/** The folder of each run with a log in the project's state folder: an Epic, or a filter run. */
+/** The folder of each run with a log in the project's state folder: an Epic, a filter run, or a ticket worker. */
 export function runHomes(stateDir: string): string[] {
-  return folders(stateDir)
-    .filter((name) => RUN_NAME.test(name) && existsSync(join(stateDir, name, DECISIONS)))
-    .map((name) => join(stateDir, name));
+  const tickets = join(stateDir, TICKETS);
+  return [
+    ...folders(stateDir)
+      .filter((name) => RUN_NAME.test(name) && existsSync(join(stateDir, name, DECISIONS)))
+      .map((name) => join(stateDir, name)),
+    ...folders(tickets)
+      .filter((name) => KEY.test(name) && existsSync(join(tickets, name, DECISIONS)))
+      .map((name) => join(tickets, name)),
+  ];
 }
 
 /** The ticket of a line. A review session, such as `<KEY>-review`, belongs to its ticket. */
@@ -78,9 +85,10 @@ export function ticketKey(line: Line): string {
 /** The lines of each ticket of a run, by key. The run's own lines, which carry its name, are left out. */
 export function groupByTicket(run: string, lines: Line[]): Map<string, Line[]> {
   const byTicket = new Map<string, Line[]>();
+  const own = runLineOf(run, lines);
   for (const line of lines) {
     const key = ticketKey(line);
-    if (key === run) continue;
+    if (own(line)) continue;
     const group = byTicket.get(key);
     if (group) group.push(line);
     else byTicket.set(key, [line]);

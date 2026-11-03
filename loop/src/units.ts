@@ -36,10 +36,10 @@ export async function runs(project: string): Promise<string[]> {
     .filter((name): name is string => Boolean(name));
 }
 
-/** Starts `loop run` with these arguments in its unit, and returns the unit once it is active. */
-export async function startRun(repo: string, project: string, name: string, args: string[]): Promise<string> {
+/** Starts `loop run`, or another command of the loop, with these arguments in its unit, and returns the unit once it is active. */
+export async function startRun(repo: string, project: string, name: string, args: string[], command = "run"): Promise<string> {
   const unit = runUnit(project, name);
-  await inUnit(unit, repo, [LOOP, "run", ...args, "--repo", repo], RUN_PROPERTIES);
+  await inUnit(unit, repo, [LOOP, command, ...args, "--repo", repo], RUN_PROPERTIES);
   return unit;
 }
 

@@ -2,7 +2,8 @@
 // push, pull request, wait, merge. The gate on GitHub checks the work, so the loop runs no gate, no review,
 // no landing, and no Epic branch of its own. A red gate resumes the agent as a fix attempt, a green gate with
 // blocking review findings resumes it once to answer them, and a ticket whose blocker has an open pull request
-// stacks on it. A restart starts each ticket at its first step.
+// stacks on it. A restart starts each ticket at its first step. A worker, `loop run-ticket`, builds one ticket
+// in its own folder, `tickets/<KEY>/`, from the main branch, and ends merged, handed back, or stuck.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -14,7 +15,9 @@ import { git, gitOk, originUrl, slug } from "./git.ts";
 import * as github from "./github.ts";
 import { endAll, run } from "./spawn.ts";
 import { type Ticket, Jira } from "./jira.ts";
+import { ticketDir, ticketHome, worktreeOf } from "./layout.ts";
 import { Log } from "./log.ts";
+import { FIRST_SLOT, freeSlot } from "./slots.ts";
 
 /** The longest the loop waits for the checks of one pull request. */
 const WAIT_MINUTES = 120;
@@ -28,8 +31,6 @@ const MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60;
 /** The run resumes this long after the reset, so the first call after it meets no limit. */
 const PAST_RESET_SECONDS = 60;
 
-/** The slot the old loop gave the Epic branch. The tickets take the slots after it, so a repo's ports stay as they were. */
-const EPIC_SLOT = 1;
 
 /** The slots after the ticket slots that a ticket's stack moves to when another project holds its ports. */
 const SPARE_SLOTS = 8;
@@ -39,7 +40,9 @@ const PUBLISHED_PORT = /:(\d+)(?:-(\d+))?->/g;
 
 const USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work.";
 
-const STUCK_COMMENT = "The loop stopped this ticket.";
+/** The first line of a stuck comment, `Stuck: <step> <result>`, is the fingerprint of the stop. */
+const STUCK_PREFIX = "Stuck:";
+
 
 /** The status a ticket takes when its pull request merges, and an Epic when its last ticket merges. */
 const DONE = "Done";
@@ -62,14 +65,14 @@ const SPEC_LINE = /^\s*\**spec\**[.:]/i;
 /** The component of a ticket that a person does, which no loop builds. */
 const MANUAL = "manual";
 
-export type Target = { key: string } | { filter: string };
+export type Target = { key: string } | { filter: string } | { ticket: string; slot: number };
 
 /** `meterSeconds` is the least time between two plan meter lines of a running agent. */
 export type Options = { pollSeconds: number; meterSeconds: number };
 
 type State = "merged" | "done" | "flagged" | "ready" | "waiting";
 
-type Finished = "merged" | "stopped" | "stuck";
+type Finished = "merged" | "stopped" | "stuck" | "handed-back";
 
 /** A pull request this run opened and that has not merged, which a dependent ticket stacks on. */
 type OpenPr = { url: string; branch: string };
@@ -84,6 +87,7 @@ class Refused extends Error {}
 
 export function runName(target: Target): string {
   if ("key" in target) return target.key;
+  if ("ticket" in target) return target.ticket;
   return `filter-${createHash("sha256").update(target.filter).digest("hex").slice(0, 8)}`;
 }
 
@@ -125,6 +129,8 @@ export class Run {
   private readonly jira: Jira;
   private readonly name: string;
   private readonly home: string;
+  /** A worker builds one ticket, `loop run-ticket`, in its own folder and slot. */
+  private readonly worker: boolean;
   readonly log: Log;
   private epic: string | null = null;
   /** The Epic's description, whose Spec line names the spec that each pull request body names. */
@@ -156,34 +162,36 @@ export class Run {
     this.options = options;
     this.jira = new Jira(config.trackerUrl, secrets.JIRA_EMAIL ?? "", secrets.JIRA_API_TOKEN ?? "");
     this.name = runName(target);
-    this.home = join(config.stateDir, this.name);
+    this.worker = "ticket" in target;
+    this.home = this.worker ? ticketHome(config.stateDir, this.name) : join(config.stateDir, this.name);
     this.log = new Log(join(this.home, "decisions.jsonl"), this.name);
+  }
+
+  /** The run's own line. A worker's name is its ticket's key, so its own lines carry `run`. */
+  private own(step: string, result: string, extra: Record<string, unknown> = {}): void {
+    this.log.write(this.name, step, result, this.worker ? { ...extra, run: true } : extra);
   }
 
   /** Builds the frontier until no ticket is left to start, and returns the exit code. */
   async run(): Promise<number> {
+    if ("ticket" in this.target) return this.work(this.target.ticket, this.target.slot);
     const input = "key" in this.target ? this.target.key : `--filter ${this.target.filter}`;
     // The watch page tells a running run from the pid, and two runs apart from the setup.
     const setup = await runSetup(this.config);
-    this.log.write(this.name, "start", "ok", { detail: this.config.mainBranch, input, pid: process.pid, setup });
+    this.own("start", "ok", { detail: this.config.mainBranch, input, pid: process.pid, setup });
     let tickets: Ticket[];
     try {
       tickets = await this.tickets();
     } catch (error) {
       if (!(error instanceof Refused)) throw error;
       console.error(error.message);
-      this.log.write(this.name, "stop", "refused", { detail: error.message });
+      this.own("stop", "refused", { detail: error.message });
       await this.notify(`${this.name} refused: ${error.message}`);
       return 2;
     }
     for (const ticket of tickets) this.byKey.set(ticket.key, ticket);
     await git(this.config.repo, "fetch", "--prune", "--quiet", "origin");
-    try {
-      this.required = await github.requiredChecks(this.config.repo, this.config.mainBranch);
-      this.log.write(this.name, "required-checks", "ok", { detail: this.required.join(", ") });
-    } catch (error) {
-      this.log.write(this.name, "required-checks", "fail", { detail: (error as Error).message });
-    }
+    await this.readRequired();
     const mergedBefore = new Map<string, github.PullRequest>();
     for (const ticket of tickets) {
       const { branch } = await this.branchOf(ticket);
@@ -196,7 +204,7 @@ export class Run {
       this.mergedUrls.push(pr.url);
     }
     const states = new Map(tickets.map((ticket) => [ticket.key, this.state(ticket)]));
-    this.log.write(this.name, "frontier", "ok", {
+    this.own("frontier", "ok", {
       detail: tickets.map((ticket) => `${ticket.key} ${states.get(ticket.key)}`).join(", "),
       summary: this.summary,
       tickets: tickets.map((ticket) => ({
@@ -213,8 +221,7 @@ export class Run {
       await this.afterMerge(key, pr.headRefName, pr.baseRefName);
     }
 
-    // Slot 0 is the main checkout and slot 1 stays free, so the tickets take 2 and up.
-    const slots = Array.from({ length: this.config.parallel }, (_, index) => EPIC_SLOT + 1 + index);
+    const slots = Array.from({ length: this.config.parallel }, (_, index) => FIRST_SLOT + index);
     const finished = new Map<string, Finished>();
     const running = new Map<string, Promise<void>>();
     let stuckInRow = 0;
@@ -236,7 +243,7 @@ export class Run {
             if (result === "merged") stuckInRow = 0;
             if (result === "stuck" && ++stuckInRow >= this.config.circuitBreaker && !this.halt) {
               this.halt = "circuit-breaker";
-              this.log.write(this.name, "circuit-breaker", "open", { detail: `${stuckInRow} tickets in a row are stuck, so no new ticket starts.` });
+              this.own("circuit-breaker", "open", { detail: `${stuckInRow} tickets in a row are stuck, so no new ticket starts.` });
             }
           });
         running.set(ticket.key, work);
@@ -258,10 +265,59 @@ export class Run {
     if (await this.completeEpic(tickets)) parts.push(`${this.epic} is complete`);
     const detail = parts.join(". ");
     const failed = stopped.length > 0 || this.halt !== null;
-    this.log.write(this.name, "finish", failed ? "stopped" : "ok", { detail });
+    this.own("finish", failed ? "stopped" : "ok", { detail });
     await this.notify(`${this.name} finished. ${detail}`);
     return failed ? 1 : 0;
   }
+  /**
+   * Builds one ticket to merge, from the head of the main branch, and frees the worker's slot at the end. A
+   * ticket whose pull request merged before is only moved to Done. It returns 0 on a merge.
+   */
+  private async work(key: string, slot: number): Promise<number> {
+    try {
+      const setup = await runSetup(this.config);
+      this.own("start", "ok", { detail: this.config.mainBranch, input: key, pid: process.pid, setup, slot });
+      const ticket = await this.jira.ticket(key);
+      this.summary = ticket.summary;
+      this.epic = ticket.parent;
+      this.byKey.set(key, ticket);
+      await git(this.config.repo, "fetch", "--prune", "--quiet", "origin");
+      await this.readRequired();
+      this.own("frontier", "ok", {
+        detail: `${key} ready`,
+        summary: ticket.summary,
+        tickets: [{ key, summary: ticket.summary, status: ticket.status, state: "ready", blockers: ticket.blockers.map((blocker) => blocker.key) }],
+      });
+      const { branch } = await this.branchOf(ticket);
+      const prs = await github.pullRequestsOf(this.config.repo, key, branch, branchPrefixes(key));
+      const before = prs.find((pr) => pr.state === "MERGED");
+      let result: Finished;
+      if (before) {
+        this.log.write(key, "start", "merged-before", { pr: before.url, detail: "Its pull request merged before this run." });
+        await this.afterMerge(key, before.headRefName, before.baseRefName);
+        result = "merged";
+      } else {
+        result = await this.ticket(ticket, slot, prs.find((pr) => pr.state === "OPEN") ?? null);
+      }
+      const detail = result === "merged" ? "merged" : result === "handed-back" ? "handed back" : result;
+      this.own("finish", result === "merged" ? "ok" : result, { detail: `${key} ${detail}.` });
+      if (result !== "stuck") await this.notify(`${key} ${detail}`);
+      return result === "merged" ? 0 : 1;
+    } finally {
+      freeSlot(this.config.stateDir, slot, this.name);
+    }
+  }
+
+  /** The check names that branch protection requires on the main branch, read once per run. */
+  private async readRequired(): Promise<void> {
+    try {
+      this.required = await github.requiredChecks(this.config.repo, this.config.mainBranch);
+      this.own("required-checks", "ok", { detail: this.required.join(", ") });
+    } catch (error) {
+      this.own("required-checks", "fail", { detail: (error as Error).message });
+    }
+  }
+
   /**
    * When every ticket of the Epic has merged or is done, archives the Epic's spec, then marks the Epic done. A
    * run that finds the Epic done does nothing, and an archive that fails leaves it open, so the next run goes on.
@@ -281,18 +337,18 @@ export class Run {
       if (!specRepo) throw new Error(`The Spec line of ${this.epic} links no repo and no pull request of it merged, so the loop does not know the repo on GitHub.`);
       const config = specRepo.toLowerCase() === here?.toLowerCase() ? this.config : await this.cloneOf(specRepo);
       const archived = await archive(config, this.jira, epic, specRepo, this.home);
-      this.log.write(this.name, "archive", archived.result, { detail: archived.detail, pr: archived.pr });
+      this.own("archive", archived.result, { detail: archived.detail, pr: archived.pr });
       // The archive pull request merges on its own once its gate is green, and the Epic does not wait for it.
       if (archived.result === "pr-open") stillOpen = ` The archive pull request ${archived.pr} is still open.`;
     } catch (error) {
-      this.log.write(this.name, "archive", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
+      this.own("archive", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
       return false;
     }
     try {
       await this.jira.transition(this.epic, DONE);
-      this.log.write(this.name, "complete", "ok", { detail: `${this.epic} is ${DONE}.${stillOpen}` });
+      this.own("complete", "ok", { detail: `${this.epic} is ${DONE}.${stillOpen}` });
     } catch (error) {
-      this.log.write(this.name, "complete", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
+      this.own("complete", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
       return false;
     }
     await this.notify(`${this.epic} complete`);
@@ -308,7 +364,7 @@ export class Run {
     let tickets: Ticket[];
     if ("filter" in this.target) tickets = await this.jira.search(this.target.filter);
     else {
-      const ticket = await this.jira.ticket(this.target.key);
+      const ticket = await this.jira.ticket(this.name);
       this.summary = ticket.summary;
       if (ticket.issueType === "Epic") {
         this.epic = ticket.key;
@@ -366,12 +422,16 @@ export class Run {
     return { key, ...pr };
   }
 
-  private async ticket(ticket: Ticket, slot: number): Promise<Finished> {
+  /**
+   * Builds the ticket to merge. A worker's ticket with an open pull request starts again at the wait, with no
+   * build, and each ending of a worker's ticket that is not a merge flags it stuck or hands it back.
+   */
+  private async ticket(ticket: Ticket, slot: number, open: github.PullRequest | null = null): Promise<Finished> {
     const repo = this.config.repo;
     const main = this.config.mainBranch;
     const key = ticket.key;
-    const worktree = join(this.home, "worktrees", key);
-    const runDir = join(this.home, "runs", key);
+    const worktree = worktreeOf(this.home, key);
+    const runDir = ticketDir(this.home, key);
     mkdirSync(runDir, { recursive: true });
     // Only a ticket's own start lines. A run on one ticket logs its start under the same key, with the result ok.
     const restart = this.log.lines().some((line) => line.ticket === key && line.step === "start" && (line.result === "new" || line.result === "restart"));
@@ -380,14 +440,15 @@ export class Run {
     const base = stack?.branch ?? main;
     const { branch, added } = await this.worktree(ticket, worktree, base);
     this.log.write(key, "start", restart ? "restart" : "new", { detail: branch, slot, ...(stack ? { base, pr: stack.url } : {}) });
-    if (ticket.status !== this.config.inProgress) await this.status(key, this.config.inProgress);
+    const status = open ? this.config.inReview : this.config.inProgress;
+    if (ticket.status !== status) await this.status(key, status);
     await this.writeTicket(ticket, branch, runDir, stack);
     if (restart) await this.freshBody(ticket, branch, runDir);
     // A restart runs it again when the setup of the earlier run did not pass.
     const setUp = this.log.lines().some((line) => line.ticket === key && line.step === "worktree" && line.result === "setup");
     if (this.config.setup.length && (added || !setUp)) {
       const failed = await this.setup(key, worktree);
-      if (failed) return this.stuck(key, failed, null);
+      if (failed) return this.stuck(key, "setup", "fail", failed, null);
     }
 
     let prompt = `/implement ${join(runDir, "ticket.md")}`;
@@ -399,67 +460,77 @@ export class Run {
     let failed: github.Check[] = [];
     for (let attempt = 1; ; attempt++) {
       if (attempt > 1 && this.fixes(key) >= this.config.fixAttempts) {
-        return this.stuck(key, `The gate stayed red after ${this.config.fixAttempts} fix attempts. ${red}`, url);
+        return this.stuck(key, "wait", "red", `The gate stayed red after ${this.config.fixAttempts} fix attempts. ${red}`, url);
       }
 
-      // Build, or a fix attempt that resumes the session with what the gate found
-      const before = await git(worktree, "rev-parse", "HEAD");
-      this.log.write(key, "build", "started", { commit: before, attempt, ...(attempt > 1 ? { detail: red } : {}) });
-      let session: Session;
-      try {
-        session = await this.agent(key, prompt, worktree, runDir, slot);
-      } catch (error) {
-        if (!(error instanceof PortsTaken)) throw error;
-        this.log.write(key, "build", "fail", { commit: before, detail: error.message });
-        return this.stuck(key, error.message, url);
-      }
-      let commit = await git(worktree, "rev-parse", "HEAD");
-      if (session.result !== "done") {
-        this.log.write(key, "build", session.result === "blocked" ? "blocked" : "fail", { commit, session: session.session, detail: session.detail });
-        return "stopped";
-      }
-      if (attempt === 1 && !(await git(worktree, "rev-list", "--count", `origin/${base}..HEAD`)).match(/^[1-9]/)) {
-        this.log.write(key, "build", "fail", { commit, session: session.session, detail: "The agent returned done with no commit on the branch." });
-        return "stopped";
-      }
-      // A fix attempt with no new commit may find the red was a flake. Its failed checks run again on the same
-      // head, and the gate's result counts: green merges, and red again ends the attempt.
+      let commit: string;
       let rerun = new Set<string>();
-      if (attempt > 1 && commit === before) {
-        this.log.write(key, "build", "pass", { commit, session: session.session, detail: "The fix attempt returned done with no new commit." });
-        rerun = await this.rerun(key, url!, failed, commit);
+      if (attempt === 1 && open) {
+        url = open.url;
+        commit = open.headRefOid;
+        this.log.write(key, "build", "skipped", { commit, pr: url, detail: "Its pull request is open, so the ticket starts again at the wait." });
       } else {
-        this.log.write(key, "build", "pass", { commit, session: session.session, detail: session.detail });
-
-        // Push
+        // Build, or a fix attempt that resumes the session with what the gate found
+        const before = await git(worktree, "rev-parse", "HEAD");
+        this.log.write(key, "build", "started", { commit: before, attempt, ...(attempt > 1 ? { detail: red } : {}) });
+        let session: Session;
         try {
-          await git(worktree, "push", "--quiet", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`);
-          this.log.write(key, "push", "ok", { commit });
+          session = await this.agent(key, prompt, worktree, runDir, slot);
         } catch (error) {
-          this.log.write(key, "push", "fail", { commit, detail: (error as Error).message });
-          return "stopped";
+          if (!(error instanceof PortsTaken)) throw error;
+          this.log.write(key, "build", "fail", { commit: before, detail: error.message });
+          return this.stuck(key, "slot", "taken", error.message, url);
         }
-      }
+        commit = await git(worktree, "rev-parse", "HEAD");
+        if (session.result !== "done") {
+          const result = session.result === "blocked" ? "blocked" : "fail";
+          this.log.write(key, "build", result, { commit, session: session.session, detail: session.detail });
+          if (session.result === "usage-limit" && this.worker) return this.handBack(key, session.detail);
+          return this.end(key, "build", result, session.detail, url);
+        }
+        if (attempt === 1 && !(await git(worktree, "rev-list", "--count", `origin/${base}..HEAD`)).match(/^[1-9]/)) {
+          const detail = "The agent returned done with no commit on the branch.";
+          this.log.write(key, "build", "fail", { commit, session: session.session, detail });
+          return this.end(key, "build", "fail", detail, url);
+        }
+        // A fix attempt with no new commit may find the red was a flake. Its failed checks run again on the same
+        // head, and the gate's result counts: green merges, and red again ends the attempt.
+        if (attempt > 1 && commit === before) {
+          this.log.write(key, "build", "pass", { commit, session: session.session, detail: "The fix attempt returned done with no new commit." });
+          rerun = await this.rerun(key, url!, failed, commit);
+        } else {
+          this.log.write(key, "build", "pass", { commit, session: session.session, detail: session.detail });
 
-      // Pull request, with auto-merge off, so a green gate does not merge it before the review is answered. A
-      // stacked one targets its blocker's branch, and GitHub never merges it there.
-      if (url === null) {
-        try {
-          url = await this.pullRequest(ticket, branch, runDir, base, session.output?.reason ?? "");
-        } catch (error) {
-          this.log.write(key, "pr", "fail", { commit, detail: (error as Error).message });
-          return "stopped";
+          // Push
+          try {
+            await git(worktree, "push", "--quiet", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`);
+            this.log.write(key, "push", "ok", { commit });
+          } catch (error) {
+            this.log.write(key, "push", "fail", { commit, detail: (error as Error).message });
+            return this.end(key, "push", "fail", (error as Error).message, url);
+          }
         }
-        const onMain = (await github.view(repo, url)).baseRefName === main;
-        const detail = onMain
-          ? "Auto-merge turns on once the checks are green and the review is answered."
-          : `It stacks on ${base}, so auto-merge waits until it targets ${main}.`;
-        // An open question of the agent goes in the log, not in the body, where it would read as a blocker.
-        const decisions = session.output?.decisions ?? [];
-        this.log.write(key, "pr", "open", { commit, pr: url, auto_merge: autoMerge, detail, ...(decisions.length ? { decisions } : {}) });
-        this.open.set(key, { url, branch });
-        this.wake();
-        await this.status(key, this.config.inReview);
+
+        // Pull request, with auto-merge off, so a green gate does not merge it before the review is answered. A
+        // stacked one targets its blocker's branch, and GitHub never merges it there.
+        if (url === null) {
+          try {
+            url = await this.pullRequest(ticket, branch, runDir, base, session.output?.reason ?? "");
+          } catch (error) {
+            this.log.write(key, "pr", "fail", { commit, detail: (error as Error).message });
+            return this.end(key, "pr", "fail", (error as Error).message, url);
+          }
+          const onMain = (await github.view(repo, url)).baseRefName === main;
+          const detail = onMain
+            ? "Auto-merge turns on once the checks are green and the review is answered."
+            : `It stacks on ${base}, so auto-merge waits until it targets ${main}.`;
+          // An open question of the agent goes in the log, not in the body, where it would read as a blocker.
+          const decisions = session.output?.decisions ?? [];
+          this.log.write(key, "pr", "open", { commit, pr: url, auto_merge: autoMerge, detail, ...(decisions.length ? { decisions } : {}) });
+          this.open.set(key, { url, branch });
+          this.wake();
+          await this.status(key, this.config.inReview);
+        }
       }
 
       // Wait. On the first green, a stacked pull request waits for its base to merge, and the agent answers
@@ -479,12 +550,12 @@ export class Run {
         if (stack && (await github.view(repo, url)).baseRefName !== main) {
           const result = await this.untilMain(url, stack.key);
           this.log.write(key, "base", result, { pr: url, detail: result === "main" ? `${stack.key} merged.` : `${stack.key} did not merge.` });
-          if (result !== "main") return "stopped";
+          if (result !== "main") return this.end(key, "base", result, `${stack.key} did not merge.`, url);
         }
         if (!answered) {
           answered = true;
           const pushed = await this.respond(key, url, branch, worktree, runDir, slot, commit);
-          if (pushed === "stopped") return "stopped";
+          if (pushed === "stopped") return this.end(key, "push", "fail", "The push of the response to the review failed.", url);
           if (pushed) {
             commit = pushed;
             rerun = new Set();
@@ -496,17 +567,17 @@ export class Run {
         if (!autoMerge || (await github.view(repo, url)).state === "MERGED") break;
       }
       if (checks.result === "green") break;
-      if (checks.result !== "red" || checks.closed) return "stopped";
+      if (checks.result !== "red" || checks.closed) return this.end(key, "wait", checks.closed ? "closed" : checks.result, checks.detail, url);
       red = checks.detail;
       failed = checks.checks;
-      prompt = await this.fixPrompt(url, checks.checks);
+      prompt = checks.conflict ? conflictPrompt(url, checks.base) : await this.fixPrompt(url, checks.checks);
     }
 
     // Merge
     const merged = await this.merge(url);
     if (merged === null) {
       this.log.write(key, "merge", "fail", { pr: url, detail: "The pull request did not merge." });
-      return "stopped";
+      return this.end(key, "merge", "fail", "The pull request did not merge.", url);
     }
     this.log.write(key, "merge", "merged", { commit: merged, pr: url });
     this.merged.add(key);
@@ -532,7 +603,7 @@ export class Run {
    */
   private async removeWorktree(key: string, branch: string): Promise<void> {
     const repo = this.config.repo;
-    const worktree = join(this.home, "worktrees", key);
+    const worktree = worktreeOf(this.home, key);
     try {
       const hasWorktree = existsSync(worktree);
       const hasBranch = await gitOk(repo, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
@@ -743,10 +814,24 @@ export class Run {
     return head;
   }
 
-  /** Flags the ticket, comments the reason and the pull request, and notifies. Its pull request stays open. */
-  private async stuck(key: string, reason: string, url: string | null): Promise<Finished> {
+  /** How a ticket ends without a merge: a worker's ticket is stuck, and a ticket of an Epic run stops. */
+  private async end(key: string, step: string, result: string, reason: string, url: string | null): Promise<Finished> {
+    return this.worker ? this.stuck(key, step, result, reason, url) : "stopped";
+  }
+
+  /** A worker gives its ticket back with no flag, and the ticket keeps its status, so it starts again later. */
+  private async handBack(key: string, reason: string): Promise<Finished> {
+    this.log.write(key, "hand-back", "usage-limit", { detail: reason });
+    return "handed-back";
+  }
+
+  /**
+   * Flags the ticket, comments the fingerprint `Stuck: <step> <result>`, the reason, and the pull request, and
+   * notifies. Its pull request stays open.
+   */
+  private async stuck(key: string, step: string, result: string, reason: string, url: string | null): Promise<Finished> {
     const pr = url ? `The pull request is ${url}.\n` : "";
-    const comment = `${STUCK_COMMENT}\n${reason}\n${pr}The log is ${this.log.path} on ${hostname()}.`;
+    const comment = `${STUCK_PREFIX} ${step} ${result}\n${reason}\n${pr}The log is ${this.log.path} on ${hostname()}.`;
     this.log.write(key, "stuck", "started", { pr: url, detail: reason, comment });
     try {
       if (!(await this.jira.comments(key)).includes(comment)) await this.jira.comment(key, comment);
@@ -873,7 +958,10 @@ export class Run {
       (stack ? `- The branch stacks on \`${stack.branch}\`, the open pull request of ${stack.key}, and its pull request targets that branch.\n` : "") +
       `- The run folder is \`${runDir}\`.\n` +
       "- After you return done, the loop pushes the branch, opens a pull request, and merges it once it is green. " +
-      "The merge gate runs every check on it. Run the tests that cover your change.\n";
+      "The merge gate runs every check on it. Run the tests that cover your change.\n" +
+      (ticket.issueType === "Bug"
+        ? '- This is a Bug, so reproduce it first: write the acceptance test of the first "What the user sees" line, and see it fail twice on the stack before you fix it.\n'
+        : "");
     if (this.config.agentHint) text += `- ${this.config.agentHint}\n`;
     writeFileSync(join(runDir, "ticket.md"), text);
   }
@@ -951,7 +1039,7 @@ export class Run {
     autoMerge: boolean,
     commit: string,
     rerun: Set<string> = new Set(),
-  ): Promise<{ result: "green" | "red" | "timeout"; checks: github.Check[]; detail: string; closed: boolean }> {
+  ): Promise<{ result: "green" | "red" | "timeout"; checks: github.Check[]; detail: string; closed: boolean; conflict?: boolean; base?: string }> {
     const repo = this.config.repo;
     let deadline = Date.now() + WAIT_MINUTES * 60_000;
     let checks: github.Check[] = [];
@@ -970,6 +1058,10 @@ export class Run {
           checks = (await github.checks(repo, url)).map((check) => (rerun.has(check.link) ? { ...check, bucket: "pending", state: "PENDING" } : check));
         } catch (error) {
           console.error((error as Error).message);
+        }
+        // GitHub runs no check on a pull request that conflicts with its base, so a conflict is red at once.
+        if (pr.mergeable === "CONFLICTING") {
+          return { result: "red", checks, detail: `It conflicts with ${pr.baseRefName}.`, closed: false, conflict: true, base: pr.baseRefName };
         }
         const red = redChecks(checks);
         if (red.length) return { result: "red", checks, detail: `Failed: ${red.map((check) => check.name).join(", ")}`, closed: false };
@@ -1048,7 +1140,7 @@ export class Run {
     // No await from here on, so two tickets never take the same spare slot.
     const taken = this.taken(env, held);
     if (!taken) return env;
-    const first = EPIC_SLOT + this.config.parallel + 1;
+    const first = FIRST_SLOT + this.config.parallel;
     for (let spare = first; spare < first + SPARE_SLOTS; spare++) {
       const moved = this.slotEnv(spare, key);
       if (![...this.slotMoves.values()].includes(spare) && !this.taken(moved, held)) {
@@ -1087,7 +1179,8 @@ export class Run {
   /** The SIGTERM of `loop stop`. It ends every agent session, and the step in progress writes no result. */
   async stop(): Promise<void> {
     this.stopping = true;
-    this.log.write(this.name, "stop", "stopped");
+    this.own("stop", "stopped");
+    if ("ticket" in this.target) freeSlot(this.config.stateDir, this.target.slot, this.name);
     this.log.close();
     await endAll();
     await this.send(`${this.name} stopped`);
@@ -1095,7 +1188,11 @@ export class Run {
 
   /** The loop itself failed, such as on a tracker that does not answer. */
   async failed(error: Error): Promise<void> {
-    this.log.write(this.name, "stop", "loop-error", { detail: error.message });
+    this.own("stop", "loop-error", { detail: error.message });
+    if (this.worker) {
+      await this.stuck(this.name, "stop", "loop-error", error.message, null);
+      return;
+    }
     await this.notify(`${this.name} stopped`);
   }
 
@@ -1109,11 +1206,19 @@ export class Run {
     try {
       const response = await fetch(url, { method: "POST", body: message, signal: AbortSignal.timeout(30_000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      this.log.write(this.name, "notify", "ok", { detail: message });
+      this.own("notify", "ok", { detail: message });
     } catch (error) {
-      this.log.write(this.name, "notify", "fail", { detail: `${message}: ${(error as Error).message}` });
+      this.own("notify", "fail", { detail: `${message}: ${(error as Error).message}` });
     }
   }
+}
+
+/** The fix message for a pull request that conflicts with its base. */
+function conflictPrompt(url: string, base = "main"): string {
+  return (
+    `The pull request ${url} conflicts with ${base}. Rebase the branch on origin/${base}, resolve the conflicts, ` +
+    "and run the tests that cover the change. Do not push: the loop pushes, and the gate runs again."
+  );
 }
 
 /** The findings as a Markdown list, each with its path and line. */

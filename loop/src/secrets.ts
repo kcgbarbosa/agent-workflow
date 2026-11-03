@@ -40,6 +40,11 @@ export async function checkSecrets(names: string[]): Promise<void> {
  * keeps the token from the loop, so this reads the token file.
  */
 export async function storedNames(): Promise<Set<string>> {
+  return new Set((await storedSecrets()).keys());
+}
+
+/** The value of each secret that the host's machine token reads, by name, for a launcher that runs outside `bws run`. */
+export async function storedSecrets(): Promise<Map<string, string>> {
   const path = tokenFile();
   if (!existsSync(path)) throw new ConfigError(`This host has no Secrets Manager token file, ${path}. ${SETUP}`);
   const token = /^\s*BWS_ACCESS_TOKEN=["']?([^"'\n]*)["']?\s*$/m.exec(readFileSync(path, "utf8"))?.[1];
@@ -48,7 +53,7 @@ export async function storedNames(): Promise<Set<string>> {
   if (listed.code === 127) throw new ConfigError(`bws is not on the PATH. ${SETUP}`);
   if (listed.code !== 0) throw new ConfigError(`bws cannot list the secrets: ${listed.stderr.trim().split("\n")[0]}`);
   try {
-    return new Set((JSON.parse(listed.stdout) as { key: string }[]).map((secret) => secret.key));
+    return new Map((JSON.parse(listed.stdout) as { key: string; value: string }[]).map((secret) => [secret.key, secret.value]));
   } catch {
     throw new ConfigError("bws listed the secrets in a form the loop does not read.");
   }
