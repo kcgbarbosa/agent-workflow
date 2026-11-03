@@ -2,7 +2,7 @@
 // `bws` with the host's token file, and the loop's own checkout with an origin of its own, all in a temporary
 // folder with no network.
 import { execFile, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { get as httpGet } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -74,6 +74,8 @@ export class World {
       FAKE_ORIGIN: this.origin,
       LOOP_CHECKOUT: this.checkout,
       LOOP_POLL_SECONDS: "0.05",
+      LOOP_QUEUE_SECONDS: "0.1",
+      LOOP_EPIC_SECONDS: "0.5",
       NODE_OPTIONS: `--import=${join(FAKES, "offline.mjs")}`,
     };
     this.git(this.root, "init", "--quiet", "--bare", this.origin);
@@ -99,6 +101,16 @@ export class World {
   }
 
   async close(): Promise<void> {
+    // The dispatcher runs until a stop, so a test that leaves it, or a worker, running ends it here.
+    const units = join(this.fakes, "units");
+    for (const name of existsSync(units) ? readdirSync(units).filter((file) => file.endsWith(".json")) : []) {
+      const { pid } = JSON.parse(readFileSync(join(units, name), "utf8")) as { pid: number | null };
+      try {
+        if (pid !== null) process.kill(-pid, "SIGKILL");
+      } catch {
+        // It ended.
+      }
+    }
     await this.jira.close();
     rmSync(this.root, { recursive: true, force: true });
   }
@@ -151,12 +163,12 @@ ${extra}`;
     writeFileSync(join(this.fakes, "bws.json"), JSON.stringify(secrets));
   }
 
-  /** The command line and env of a loop command, as its unit runs it: `loop run`, `loop run-ticket`, and `loop
-   * watch` under `bws run`, with the host's token.
+  /** The command line and env of a loop command, as its unit runs it: `loop run`, `loop run-ticket`, `loop
+   * dispatch`, and `loop watch` under `bws run`, with the host's token.
    */
   private invocation(args: string[]): [string, string[], NodeJS.ProcessEnv] {
     const command = [LOOP, ...args, "--repo", this.repo];
-    if (!["run", "run-ticket", "watch"].includes(args[0] ?? "")) return [LOOP, command.slice(1), this.env];
+    if (!["run", "run-ticket", "dispatch", "watch"].includes(args[0] ?? "")) return [LOOP, command.slice(1), this.env];
     const [bws, ...rest] = underBws(command);
     return [bws!, rest, { ...this.env, BWS_ACCESS_TOKEN: TOKEN }];
   }

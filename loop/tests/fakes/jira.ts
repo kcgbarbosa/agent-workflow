@@ -1,5 +1,6 @@
 // The fake Jira, served in the test process on a free port. It answers the calls the loop makes, records
-// each transition, and takes a filter's tickets from `filters`.
+// each transition, and takes a filter's tickets from `filters`. It also runs the JQL the loop itself sends: an
+// Epic's children, the default queue filter, the open Epics, and the Epics whose description names a spec.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -19,7 +20,11 @@ export type Issue = {
   statuses: string[];
   /** The statuses the workflow offers no transition to. */
   unreachable: string[];
+  /** The Jira priority, Highest to Lowest. */
+  priority: string;
 };
+
+const PRIORITIES = ["Highest", "High", "Medium", "Low", "Lowest"];
 
 const STATUSES = ["To Do", "In Progress", "In Review", "Done"];
 const PAGE = 2;
@@ -34,6 +39,13 @@ function adf(paragraphs: string[]) {
     version: 1,
     content: paragraphs.map((text) => ({ type: "paragraph", content: [{ type: "text", text }] })),
   };
+}
+
+/** Jira's key order: by project, then by number. */
+function byKey(a: Issue, b: Issue): number {
+  const [projectA, numberA] = a.key.split("-");
+  const [projectB, numberB] = b.key.split("-");
+  return projectA!.localeCompare(projectB!) || Number(numberA) - Number(numberB);
 }
 
 export class FakeJira {
@@ -85,6 +97,7 @@ export class FakeJira {
       body: [`The work of ${key}.`],
       statuses: [],
       unreachable: [],
+      priority: "Medium",
       ...values,
     };
     this.issues.set(key, issue);
@@ -114,12 +127,23 @@ export class FakeJira {
   }
 
   private search(jql: string): Issue[] {
+    const all = [...this.issues.values()];
     const parent = /^parent = ([A-Z][A-Z0-9]*-\d+) ORDER BY key ASC$/.exec(jql);
-    const keys = parent
-      ? [...this.issues.values()].filter((issue) => issue.parent === parent[1]).map((issue) => issue.key).sort()
-      : this.filters.get(jql);
-    if (!keys) throw new Error(`The fake Jira knows no JQL ${jql}`);
-    return keys.map((key) => this.issues.get(key)!);
+    const queue = /^component = "([^"]+)" AND status in \(([^)]*)\) AND Flagged is EMPTY ORDER BY priority DESC, key ASC$/.exec(jql);
+    const spec = /^issuetype = Epic AND description ~ "\\"(.+)\\"" ORDER BY key ASC$/.exec(jql);
+    let found: Issue[] | undefined;
+    if (parent) found = all.filter((issue) => issue.parent === parent[1]).sort(byKey);
+    else if (queue) {
+      const statuses = JSON.parse(`[${queue[2]}]`) as string[];
+      found = all
+        .filter((issue) => issue.components.includes(queue[1]!) && statuses.includes(issue.status) && !issue.flagged)
+        .sort((a, b) => PRIORITIES.indexOf(a.priority) - PRIORITIES.indexOf(b.priority) || byKey(a, b));
+    } else if (jql === "issuetype = Epic AND statusCategory != Done ORDER BY key ASC") {
+      found = all.filter((issue) => issue.issueType === "Epic" && category(issue.status) !== "done").sort(byKey);
+    } else if (spec) found = all.filter((issue) => issue.issueType === "Epic" && issue.body.some((text) => text.includes(spec[1]!))).sort(byKey);
+    else found = this.filters.get(jql)?.map((key) => this.issues.get(key)!);
+    if (!found) throw new Error(`The fake Jira knows no JQL ${jql}`);
+    return found;
   }
 
   private answer(method: string, url: string, raw: string): [number, unknown] {

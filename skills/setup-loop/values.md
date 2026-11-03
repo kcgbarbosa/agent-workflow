@@ -8,16 +8,16 @@ The examples use an invented project, Tidepool, with tracker project `TIDE`.
 
 **Find.** How a person starts work in this repo today: the Makefile, the package scripts, the README.
 
-**Choose.** A person starts each run, with one command that is the same on every host. Add a make target, or the repo's equivalent, that runs `loop start`:
+**Choose.** A person starts the loop of the repo once, with one command that is the same on every host, and it builds each ready ticket of the queue. Add a make target, or the repo's equivalent, that runs `loop start`:
 
 ```make
 loop:
-	loop start $(epic)
+	loop start
 ```
 
-A person can also ask a remote session on the host to run it. The run is a systemd user unit, so it outlives that session, and `loop stop <Epic key>` ends it. An agent starts a run only with `loop start` (rule 12 of loop.md).
+A person can also ask a remote session on the host to run it. The dispatcher is a systemd user unit, so it outlives that session, and `loop stop` ends it with every worker. An agent starts the loop only with `loop start` or `loop ticket` (rule 12 of loop.md).
 
-**Check.** `make -n loop epic=TIDE-12` prints `loop start TIDE-12`.
+**Check.** `make -n loop` prints `loop start`.
 
 ## Tracker
 

@@ -101,3 +101,32 @@ test("the archive takes the repo from the Epic's Spec link, whichever repo's run
   expect(world.steps()).toEqual(expect.arrayContaining([`${EPIC} archive pr-open`, `${EPIC} complete ok`]));
   expect(world.jira.issues.get(EPIC)!.status).toBe("Done");
 });
+
+test("a spec that two Epics link stays on main until both are Done", async () => {
+  world.jira.add("OTHER-1", "The Loop in the other repo", { issueType: "Epic", components: ["other"], status: "In Progress", body: [`Spec: ${LINK}`] });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(world.decisions().find((line) => line.step === "archive")).toMatchObject({ result: "waiting" });
+  expect(world.decisions().find((line) => line.step === "archive")!.detail).toContain("OTHER-1 also links it and is not Done");
+  expect(world.prs().map((pr) => pr.headRefName)).not.toContain(`docs/${EPIC}-archive-spec`);
+  expect(world.git(world.origin, "ls-tree", "-r", "--name-only", "main")).toContain(SPEC);
+  expect(world.jira.issues.get(EPIC)!.body[0]).toBe(`The spec is ${LINK}.`);
+  expect(world.jira.issues.get("OTHER-1")!.body).toEqual([`Spec: ${LINK}`]);
+  expect(world.jira.issues.get(EPIC)!.status).toBe("Done");
+});
+
+test("once every Epic that links the spec is Done, it is archived and the Spec line of each is repointed", async () => {
+  world.jira.add("OTHER-1", "The Loop in the other repo", { issueType: "Epic", components: ["other"], status: "Done", body: [`Spec: ${LINK}`] });
+
+  const ran = await world.loop("run", EPIC);
+
+  expect(ran.code, ran.stderr).toBe(0);
+  const lastMerge = world.git(world.origin, "rev-parse", "main~1");
+  const pinned = `https://github.com/kcgbarbosa/demo/blob/${lastMerge}/${SPEC}`;
+  expect(world.prs().find((pr) => pr.headRefName === `docs/${EPIC}-archive-spec`)).toMatchObject({ state: "MERGED" });
+  expect(world.git(world.origin, "ls-tree", "-r", "--name-only", "main")).not.toContain(SPEC);
+  expect(world.jira.issues.get(EPIC)!.body[0]).toBe(`The spec is ${pinned}.`);
+  expect(world.jira.issues.get("OTHER-1")!.body).toEqual([`Spec: ${pinned}`]);
+});
