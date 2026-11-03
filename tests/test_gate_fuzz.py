@@ -418,6 +418,7 @@ def test_the_head_agent_cannot_stop_an_adversary_and_its_words_reach_the_log(tmp
     assert "TaskStop" in argv[argv.index("--disallowedTools") :]
     assert "fuzz says: I will wait for them." in run.stdout
     assert "Wait for every adversary to finish" in argv[argv.index("-p") + 1]
+    assert pr.claude_calls[0]["no_background"] == "1"
 
 
 def test_the_base_can_turn_it_off(tmp_path: Path) -> None:

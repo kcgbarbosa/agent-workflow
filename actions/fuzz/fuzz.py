@@ -136,6 +136,9 @@ def run_claude(text: str, config: Settings) -> tuple[dict, int]:
     claude = shutil.which("claude")
     command = [claude] if claude else ["npx", "-y", "@anthropic-ai/claude-code"]
     env = {key: value for key, value in os.environ.items() if key not in (*GITHUB_TOKENS, REVIEW_PATH)}
+    # With --json-schema, a head agent that waits on a background adversary must answer at once, and the run ends on its
+    # answer. Adversaries in the foreground hold the turn until they finish.
+    env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1"
     # stderr goes to a file, so a full stderr pipe cannot stall the run while stdout streams.
     errors = tempfile.TemporaryFile("w+")
     process = subprocess.Popen(
