@@ -36,6 +36,11 @@ plans = [
   { plan = "max-5x", since = 2026-10-14T16:48:00Z },
 ]
 
+# The fuzz gate of AW-36 reports its findings here and fails no pull request, since no one but the owner uses this repo.
+# The gate reads this from the base branch, so it lands before the fuzz job does.
+[fuzz]
+blocking = false
+
 # The shared gate's settings. actions/review/action.yml in agent-workflow gives the [review] keys.
 [review]
 enabled = true

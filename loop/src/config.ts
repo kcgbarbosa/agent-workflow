@@ -18,6 +18,7 @@ const DROPPED: Record<string, string> = {
   "ui.blocking": "the owner reviews the UI on staging",
   demo: "the loop no longer opens an Epic pull request with a demo",
   "tracker.name_landed_keys_only": "the loop no longer opens the Epic pull request it named the landed keys in",
+  fuzz: "the gate reads it, from the base branch",
 };
 
 export class ConfigError extends Error {}
