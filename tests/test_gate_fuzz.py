@@ -332,6 +332,33 @@ def test_the_pull_request_cannot_turn_off_its_own_fuzz(tmp_path: Path) -> None:
     assert len(pr.claude_calls) == 1
 
 
+def test_the_adversaries_and_the_reproductions_get_no_review_path(tmp_path: Path) -> None:
+    pr = FakeGitHub(tmp_path)
+    pr.commit({"a.py": "one\ntwo\n"})
+    (pr.work / "test_path.py").write_text('import os\nraise SystemExit("path: " + str(os.environ.get("FUZZ_REVIEW")))\n')
+    pr.reply(result(finding("test_path.py", "The path")))
+    review = tmp_path / "review.json"
+
+    run = pr.run(FUZZ, FUZZ_REVIEW=str(review), **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert pr.claude_calls[0]["fuzz_review"] is None
+    assert "path: None" in json.loads(review.read_text())["body"]
+
+
+def test_a_run_that_ends_before_its_review_leaves_no_file_to_post(tmp_path: Path) -> None:
+    pr = FakeGitHub(tmp_path)
+    pr.commit({"a.py": "one\ntwo\n"})
+    pr.reply({"type": "result", "result": "not the findings"})
+    forged = tmp_path / "review.json"
+    forged.write_text('{"commit_id": "x", "event": "COMMENT", "body": "<!-- gate fuzz head=x findings=0 -->"}')
+
+    run = pr.run(FUZZ, FUZZ_REVIEW=str(forged), **INPUTS)
+
+    assert run.returncode == 1
+    assert not forged.exists()
+
+
 def test_the_base_can_turn_it_off(tmp_path: Path) -> None:
     pr = fuzz_pr(tmp_path, "[fuzz]\nenabled = false\n")
 
@@ -389,3 +416,6 @@ def test_the_gate_runs_fuzz_beside_the_check_and_skips_it_on_a_docs_only_pull_re
     assert not [step for step in report["steps"] if step.get("uses", "").startswith("actions/checkout")]
     [post] = [step for step in report["steps"] if "run" in step]
     assert "pulls/$PR_NUMBER/reviews" in post["run"]
+    # The file comes from the job the adversaries run in, so only its body is taken.
+    assert "event: \"COMMENT\"" in post["run"] and "commit_id: $head" in post["run"]
+    assert post["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"

@@ -312,6 +312,27 @@ test("a red draft whose worker died right after it opened merges once the owner 
   expect(world.prs()[0]).toMatchObject({ isDraft: false, state: "MERGED" });
 });
 
+test("a red draft's restart hands the ticket back and frees its slot while the owner has not marked it ready", async () => {
+  const fake = resolve(import.meta.dirname, "fakes", "gh.mjs");
+  const once = join(world.fakes, "kill-once");
+  writeFileSync(once, "");
+  world.command(
+    "gh",
+    `#!/bin/sh\nif [ "$1 $2" = "pr create" ] && [ -e "${once}" ]; then\n  node "${fake}" "$@"\n  rm -f "${once}"\n  kill -9 $PPID\n  exit 0\nfi\nexec node "${fake}" "$@"\n`,
+  );
+  world.writeConfig('[blast]\nred = ["auth/**"]\n');
+  world.jira.add(KEY, "Add the login page");
+  world.verdicts({ [KEY]: "pass" });
+  world.plan({ [KEY]: [{ write: { "auth/login.ts": "login\n" }, commit: "feat(DEMO-2): login" }] });
+
+  expect((await work()).code).not.toBe(0);
+  await work();
+
+  expect(worker()).toContain(`${KEY} hand-back red`);
+  expect(worker()).not.toContain(`${KEY} wait held`);
+  expect(world.prs()[0]).toMatchObject({ isDraft: true, state: "OPEN", labels: [{ name: "blast:red" }] });
+});
+
 test("a yellow pull request whose worker died while it turned auto-merge off holds on the restart", async () => {
   const fake = resolve(import.meta.dirname, "fakes", "gh.mjs");
   const flag = join(world.fakes, "hang");

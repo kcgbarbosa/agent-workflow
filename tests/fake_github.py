@@ -59,7 +59,7 @@ stdin = "" if sys.stdin.isatty() else sys.stdin.read()
 with open(calls_path + ".lock", "w") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     calls = json.load(open(calls_path))
-    calls.append({{"argv": sys.argv[1:], "stdin": stdin, "api_key": os.environ.get("ANTHROPIC_API_KEY"), "gh_token": os.environ.get("GH_TOKEN")}})
+    calls.append({{"argv": sys.argv[1:], "stdin": stdin, "api_key": os.environ.get("ANTHROPIC_API_KEY"), "gh_token": os.environ.get("GH_TOKEN"), "fuzz_review": os.environ.get("FUZZ_REVIEW")}})
     json.dump(calls, open(calls_path, "w"))
     replies = json.load(open(replies_path))
     reply = next(r for r in replies if not isinstance(r, dict) or r["when"] in stdin)

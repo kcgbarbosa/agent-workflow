@@ -506,8 +506,13 @@ export class Run {
         // A restart takes the level of the label, the log, and the globs, since a worker that died between the
         // pull request and its label or its draft left only some of them.
         level = await this.blast(key, worktree, base, higher(labelled(open), this.logged(key)), undefined);
-        // A red pull request that is not a draft merges only when the owner marked it ready, which its timeline shows.
-        if (level === "red" && this.worker && !open.isDraft && !(await github.readied(repo, url).catch(() => false))) {
+        // A red draft waits for the owner with no worker on it. A red pull request that is not a draft merges only when
+        // the owner marked it ready, which its timeline shows.
+        if (level === "red" && this.worker && open.isDraft) {
+          await this.label(key, url, level);
+          return this.handBack(key, "red", "The blast level is red, so the pull request stays a draft until the owner marks it ready.");
+        }
+        if (level === "red" && this.worker && !(await github.readied(repo, url).catch(() => false))) {
           return this.draft(key, url, "The blast level is red, so the pull request is a draft until the owner marks it ready.");
         }
         await this.label(key, url, level);

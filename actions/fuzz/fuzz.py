@@ -53,6 +53,7 @@ DENIED = ["Bash(gh:*)", "Bash(git push:*)"]
 RUN_SECONDS = int(os.environ.get("FUZZ_RUN_SECONDS", "600"))
 GITHUB_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN")
 MODEL_TOKENS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
+REVIEW_PATH = "FUZZ_REVIEW"
 OUTPUT_LINES = 60
 REPRO_CHARS = 20000
 BODY_CHARS = 60000
@@ -130,7 +131,7 @@ def progress(event: dict) -> None:
 def run_claude(text: str, config: Settings) -> dict:
     claude = shutil.which("claude")
     command = [claude] if claude else ["npx", "-y", "@anthropic-ai/claude-code"]
-    env = {key: value for key, value in os.environ.items() if key not in GITHUB_TOKENS}
+    env = {key: value for key, value in os.environ.items() if key not in (*GITHUB_TOKENS, REVIEW_PATH)}
     # stderr goes to a file, so a full stderr pipe cannot stall the run while stdout streams.
     errors = tempfile.TemporaryFile("w+")
     process = subprocess.Popen(
@@ -200,7 +201,7 @@ def run(command: str) -> tuple[int, str]:
     """Runs a reproduction's command from the repo root, and gives its exit code and its output. The command is the
     adversaries' code, so it gets no token, as they get none. It runs in a process group of its own, so a timeout kills
     a process it left behind too."""
-    env = {key: value for key, value in os.environ.items() if key not in GITHUB_TOKENS + MODEL_TOKENS}
+    env = {key: value for key, value in os.environ.items() if key not in (*GITHUB_TOKENS, *MODEL_TOKENS, REVIEW_PATH)}
     process = subprocess.Popen(
         ["bash", "-c", command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True
     )
@@ -338,6 +339,10 @@ def cost_line(output: dict) -> str:
     return f"fuzz api cost: ${cost:.2f}" if isinstance(cost, int | float) else "fuzz api cost: unknown"
 
 
+def review_file() -> Path:
+    return Path(os.environ.get(REVIEW_PATH, Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "fuzz-review.json"))
+
+
 def main() -> int:
     config = settings()
     if not config.enabled:
@@ -391,7 +396,7 @@ def main() -> int:
         body = body[:BODY_CHARS] + "\n\n... The comment is cut at GitHub's size limit. The job's log holds the rest."
         print("\n\n".join(parts))
     review = {"commit_id": head, "event": "COMMENT", "body": body}
-    Path(os.environ.get("FUZZ_REVIEW", temp / "fuzz-review.json")).write_text(json.dumps(review))
+    review_file().write_text(json.dumps(review))
     print(summary)
     print(cost_line(output))
     if new and config.blocking:
@@ -401,4 +406,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+    except BaseException:
+        # A run that ends before its review wrote none, so a file there is not its own, and the report job posts nothing.
+        review_file().unlink(missing_ok=True)
+        raise
+    sys.exit(code)

@@ -167,8 +167,12 @@ jobs:
         with:
           name: fuzz-review
       - if: steps.review.outcome == 'success' && hashFiles('fuzz-review.json') != ''
-        run: gh api -X POST "repos/$REPO/pulls/$PR_NUMBER/reviews" --input fuzz-review.json > /dev/null
+        # The file comes from the job the adversaries run in, so only its body is taken.
+        run: |
+          jq --arg head "$HEAD_SHA" '{commit_id: $head, event: "COMMENT", body}' fuzz-review.json |
+            gh api -X POST "repos/$REPO/pulls/$PR_NUMBER/reviews" --input - > /dev/null
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
