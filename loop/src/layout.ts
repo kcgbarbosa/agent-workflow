@@ -8,6 +8,12 @@ import { DECISIONS, type Line } from "./log.ts";
 /** The folder of the state folder that holds a folder for each ticket a worker builds. */
 export const TICKETS = "tickets";
 
+/** The run name of the dispatcher's unit, `loop-<name>-dispatch`, and the ticket of its own lines. */
+export const DISPATCH = "dispatch";
+
+/** The name of the daily `correct` run: its unit's, `loop-<name>-correct`, and its folder's under the state folder. */
+export const CORRECT = "correct";
+
 /** The worktree folder of a ticket worker. */
 export const WORKTREE = "worktree";
 

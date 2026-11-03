@@ -1,6 +1,6 @@
 // The Epic check. When every child of an Epic, of every component, is Done or merged, the spec leaves the main
 // branch (archive.ts) and the Epic is set Done. The dispatcher runs it for the parent of each ticket that merged,
-// and once an hour for every open Epic, so a `manual` child that a person set Done closes its Epic too.
+// and once an hour for every open Epic, so a child that another repo's loop or a person set Done closes its Epic too.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { archive, mdLinks, specLineOf } from "./archive.ts";
@@ -37,7 +37,7 @@ export async function completeEpic(check: EpicCheck, key: string): Promise<boole
   try {
     const epic = await jira.ticket(key);
     if (epic.done) return false;
-    // Read again, since a ticket of another repo or a manual one can be done by now.
+    // Read again, since a ticket of another repo can be done by now.
     const children = await jira.search(`parent = ${key} ORDER BY key ASC`);
     if (!children.length) return false;
     for (const child of children) if (!child.done && !(await check.merged(child))) return false;

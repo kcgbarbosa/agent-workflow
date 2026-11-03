@@ -24,7 +24,7 @@ import {
   runHomes,
   ticketKey,
 } from "./report.ts";
-import { isTicketHome, runHome, runLineOf, ticketDir, WORKTREE, worktreeOf } from "./layout.ts";
+import { DISPATCH, isTicketHome, runHome, runLineOf, ticketDir, TICKETS, WORKTREE, worktreeOf } from "./layout.ts";
 import { DECISIONS, isRecord, type Line } from "./log.ts";
 import { run } from "./spawn.ts";
 
@@ -166,7 +166,17 @@ export type HostRun = {
   working: { key: string; step: string | null }[];
 };
 
-/** A project's card on the home page, from its current run: the running run, else the newest. */
+/** The queue of a project, from the dispatcher's log and the logs of `tickets/<KEY>/`. */
+export type QueueView = {
+  state: "running" | "paused" | "idle";
+  why: string | null;
+  running: { key: string; step: string; since: string }[];
+  handed_back: { key: string; why: string; pr: string | null }[];
+  waiting: { key: string; on: string }[];
+  stuck: { key: string; why: string; pr: string | null }[];
+};
+
+/** A project's card on the home page, from its queue when it has one, else from its current run: the running run, else the newest. */
 export type HostProject = {
   name: string;
   runs: HostRun[];
@@ -177,6 +187,7 @@ export type HostProject = {
   progress: { complete: number; total: number } | null;
   epic: { key: string; summary: string } | null;
   last: { key: string; status: string; at: string } | null;
+  queue?: QueueView;
 };
 
 /** A line of the home page's log, across every run of every project. */
@@ -284,13 +295,16 @@ export function hostView(stateDir: string): HostProject[] {
     const current = (runs.find((run) => run.running) ?? runs[0])?.key ?? null;
     runs.sort((a, b) => Number(b.running) - Number(a.running));
     const found = current === null ? undefined : views.get(current);
-    if (!found) return { name, runs, state: "idle", current, needs_kc: [], working: [], progress: null, epic: null, last: null };
+    const queue = queueView(home);
+    const onQueue = queue ? { queue } : {};
+    if (!found) return { name, runs, state: queue ? queueState(queue) : "idle", current, needs_kc: [], working: [], progress: null, epic: null, last: null, ...onQueue };
     const { view, at } = found;
-    const state = view.needs_kc.length ? "needs_kc" : view.status === "running" || view.status === "paused" ? "running" : "idle";
+    const state = queue ? queueState(queue) : view.needs_kc.length ? "needs_kc" : view.status === "running" || view.status === "paused" ? "running" : "idle";
     return {
       name,
       runs,
       state,
+      ...onQueue,
       current,
       needs_kc: view.needs_kc,
       working: view.tickets.flatMap((ticket) =>
@@ -301,6 +315,53 @@ export function hostView(stateDir: string): HostProject[] {
       last: state === "idle" ? { key: view.key, status: view.status, at } : null,
     };
   });
+}
+
+/** How long a stuck or handed-back ticket stays on the card. The page reads no tracker, so it cannot see one closed since. */
+const QUEUE_DAYS = 7;
+
+/** The queue of a project, or null for a project with no dispatcher log and no ticket worker. */
+function queueView(home: string): QueueView | null {
+  const dispatcher = readLines(join(home, DECISIONS));
+  const keys = listDir(join(home, TICKETS));
+  if (!dispatcher.length && !keys.length) return null;
+  const view: QueueView = { state: "idle", why: null, running: [], handed_back: [], waiting: [], stuck: [] };
+  if (isRunning(dispatcher, DISPATCH)) {
+    const breaker = dispatcher.findLast((line) => line.step === "circuit-breaker");
+    const hold = dispatcher.findLast((line) => line.step === "hold");
+    const pause = breaker?.result === "open" ? breaker : hold && typeof hold.until === "string" && Date.parse(hold.until) > Date.now() ? hold : null;
+    view.state = pause ? "paused" : "running";
+    view.why = pause ? String(pause.detail ?? "") : null;
+  }
+  const queued = dispatcher.findLast((line) => line.step === "queue")?.tickets;
+  for (const item of Array.isArray(queued) ? (queued as { key: string; state: string }[]) : []) {
+    const on = /^waiting on (.+)$/.exec(item.state)?.[1];
+    if (on) view.waiting.push({ key: item.key, on });
+  }
+  for (const key of keys) {
+    const lines = readLines(join(home, TICKETS, key, DECISIONS));
+    if (!lines.length) continue;
+    const own = runLineOf(key, lines);
+    const latest = lines.slice(Math.max(0, lines.findLastIndex((line) => own(line) && line.step === "start" && line.result === "ok")));
+    const pr = pullRequest(latest)?.url ?? null;
+    if (isRunning(lines, key)) {
+      const step = currentStep(latest, pr !== null, false);
+      view.running.push({ key, step: step?.name ?? "start", since: step?.since ?? latest[0]!.time });
+      continue;
+    }
+    if (Date.now() - Date.parse(lines.at(-1)!.time) > QUEUE_DAYS * 86_400_000) continue;
+    const ending = latest.findLast((line) => own(line) && (line.step === "finish" || line.step === "stop"));
+    const reason = (step: string) => String(latest.findLast((line) => line.step === step)?.detail ?? "");
+    if (ending?.step === "finish" && ending.result === "handed-back") view.handed_back.push({ key, why: reason("hand-back"), pr });
+    else if (ending?.result === "stuck" || ending?.result === "loop-error") view.stuck.push({ key, why: reason("stuck") || String(ending.detail ?? ""), pr });
+  }
+  return view;
+}
+
+/** A project on the queue needs KC for a stuck or handed-back ticket, and runs while its dispatcher or a worker does. */
+function queueState(queue: QueueView): HostProject["state"] {
+  if (queue.stuck.length || queue.handed_back.length) return "needs_kc";
+  return queue.state !== "idle" || queue.running.length ? "running" : "idle";
 }
 
 // The steps the home page's log leaves out: the plan meter and the loop's bookkeeping.

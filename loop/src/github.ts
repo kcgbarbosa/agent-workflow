@@ -46,6 +46,11 @@ export async function pullRequestsOf(cwd: string, key: string, branch: string, p
   return [...found.values()];
 }
 
+/** The pull requests with the label in this state, the newest first. */
+export async function labeled(cwd: string, name: string, state: "open" | "merged"): Promise<PullRequest[]> {
+  return JSON.parse((await gh(cwd, ["pr", "list", "--label", name, "--state", state, "--limit", "1", "--json", FIELDS])).stdout || "[]") as PullRequest[];
+}
+
 export async function view(cwd: string, url: string): Promise<PullRequest> {
   return JSON.parse((await gh(cwd, ["pr", "view", url, "--json", FIELDS])).stdout) as PullRequest;
 }
@@ -80,7 +85,7 @@ export async function label(cwd: string, url: string, add: string, remove: strin
   await gh(cwd, args);
 }
 
-const LABEL_COLORS: Record<string, string> = { "blast:green": "0e8a16", "blast:yellow": "fbca04", "blast:red": "b60205", hold: "5319e7" };
+const LABEL_COLORS: Record<string, string> = { "blast:green": "0e8a16", "blast:yellow": "fbca04", "blast:red": "b60205", hold: "5319e7", correct: "1d76db" };
 
 /** Converts the pull request to a draft, which does not merge and turns auto-merge off. */
 export async function toDraft(cwd: string, url: string): Promise<void> {

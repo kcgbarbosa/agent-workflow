@@ -105,7 +105,7 @@ test("loop ticket refuses a Flagged ticket, one of another component, and one wi
 
   expect(refusals[0]).toBe("DEMO-2 is Flagged. Unflag it in Jira, and `loop ticket DEMO-2` builds it.");
   expect(refusals[1]).toBe("DEMO-3 is of the component shop, not demo, so this repo's loop does not build it.");
-  expect(refusals[2]).toMatch(/^DEMO-4 has no component\./);
+  expect(refusals[2]).toBe("DEMO-4 has no component. Set its Jira component to demo, the repo it changes.");
   expect(world.systemd().filter((call) => call.tool === "systemd-run" && !call.args.some((arg) => arg.includes("loop-watch")))).toEqual([]);
   expect(existsSync(join(world.state, "slots", "2"))).toBe(false);
 });

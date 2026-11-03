@@ -201,6 +201,7 @@ if (verb === "list") {
   const wanted = option("state") ?? "open";
   const head = option("head");
   const base = option("base");
+  const label = option("label");
   // Only the search the loop makes: a phrase in the title, which GitHub matches on whole words.
   const phrase = /^"(.+)" in:title$/.exec(option("search") ?? "")?.[1];
   const words = (text) => text.split(/[^A-Za-z0-9]+/).filter(Boolean).join(" ");
@@ -210,6 +211,7 @@ if (verb === "list") {
       (wanted === "all" || pr.state === wanted.toUpperCase()) &&
       (head === undefined || pr.headRefName === head) &&
       (base === undefined || pr.baseRefName === base) &&
+      (label === undefined || (pr.labels ?? []).some((each) => each.name === label)) &&
       (phrase === undefined || ` ${words(pr.title)} `.includes(` ${words(phrase)} `)),
   );
   // Newest first, and 30 unless `--limit` says otherwise, as gh lists them.

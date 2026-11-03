@@ -26,9 +26,9 @@ A decision grill stops after step 1. Its only output is an ADR. A feature grill 
 
 | Way              | Scope                  | Pull requests                                                 | Context                                                                                                |
 | ---------------- | ---------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| The loop         | All tickets of an Epic | One for each ticket, stacked on a blocker's open pull request | A script starts a session for each ticket, and resumes it with the failing checks when the gate is red |
+| The loop         | All tickets of an Epic | One for each ticket, once its blockers have merged | A script starts a session for each ticket, and resumes it with the failing checks when the gate is red |
 | A T3 Code thread | One ticket             | One for the ticket                                            | The thread runs `implement` in its own worktree, then pushes and opens the pull request                |
 
 The owner picks one for each Epic. `/setup-loop` writes `docs/agents/loop.md` for a repo that uses the loop.
 
-After a build, the owner can run `/retro` in the same window. It looks at the session and proposes changes to the checks and the pointers an agent reads.
+With `[correct]` on in `loop.toml`, the loop runs the `correct` skill once a day, and it opens one pull request that makes the most frequent mistake class impossible. `/correct` does the same by hand.

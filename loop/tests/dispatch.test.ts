@@ -199,7 +199,7 @@ test("a limit with no reset time hands the ticket back with no flag, and the dis
 
 test("the Epic is set Done after its last merge", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
-  world.jira.add("DEMO-3", "Sign the contract", { parent: EPIC, components: ["manual"], status: "Done" });
+  world.jira.add("DEMO-3", "Sign the contract", { parent: EPIC, components: ["other"], status: "Done" });
   world.verdicts({ "DEMO-2": "pass" });
 
   await start();
@@ -210,9 +210,9 @@ test("the Epic is set Done after its last merge", async () => {
   expect(dispatched()).toContain(`${EPIC} complete ok`);
 });
 
-test("the Epic is set Done after a manual child is set Done by hand", async () => {
+test("the Epic is set Done after a child of another component is set Done", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
-  world.jira.add("DEMO-3", "Sign the contract", { parent: EPIC, components: ["manual"] });
+  world.jira.add("DEMO-3", "Sign the contract", { parent: EPIC, components: ["other"] });
   world.verdicts({ "DEMO-2": "pass" });
   await start();
   await world.until(() => dispatched().includes("DEMO-2 worker merged"), "the merge");

@@ -516,8 +516,8 @@ test("a ticket with no component refuses the run with one line that names each",
   expect(world.steps()).toContain(`${EPIC} stop refused`);
 });
 
-test("a manual ticket is never built or flagged, and a ticket that waits on it starts once it is Done", async () => {
-  world.jira.add("DEMO-2", "Cut over the host", { parent: EPIC, components: ["manual"] });
+test("a ticket of another component is never built or flagged, and a ticket that waits on it starts once it is Done", async () => {
+  world.jira.add("DEMO-2", "Cut over the host", { parent: EPIC, components: ["other"] });
   world.jira.add("DEMO-3", "Add the login page", { parent: EPIC, blockers: ["DEMO-2"] });
   world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
 

@@ -166,9 +166,26 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 ## Notifications
 
-**Choose.** The events are fixed: a stuck ticket, a pause and a stop, an Epic complete, and the finish. Use ntfy.sh unless the user runs a server, and then set `notify.url`. The topic is a long random name, for example from `openssl rand -hex 16`, kept as a secret in Bitwarden Secrets Manager. Subscribe to it in the ntfy app on the user's phone.
+**Choose.** The events are fixed: a stuck ticket, a pause and a stop, an Epic complete, and the finish. `[notify] kind` is `ntfy`, the default, or `slack`.
 
-**Check.** Post a test message to the topic with `curl -d test https://ntfy.sh/<topic>` and see it on the phone.
+- With `ntfy`, use ntfy.sh unless the user runs a server, and then set `notify.url`. The topic is a long random name, for example from `openssl rand -hex 16`, kept as a secret in Bitwarden Secrets Manager. Subscribe to it in the ntfy app on the user's phone.
+- With `slack`, make an incoming webhook for the repo's channel, and keep its URL as a secret in Bitwarden Secrets Manager under the name that `[notify] secret` gives, default `SLACK_WEBHOOK_URL`. A repo that shares the store with another names its own secret, so each posts to its own channel.
+
+**Check.** Post a test message with `curl -d test https://ntfy.sh/<topic>`, or with `curl -d '{"text":"test"}' <webhook>`, and see it arrive.
+
+## Queue
+
+**Find.** The repo's Jira component, and the statuses of the board.
+
+**Choose.** Keep the default `[queue] filter` of loop.md unless the repo needs another order or scope. `poll_minutes` is 2 by default.
+
+**Check.** The filter, run as JQL in Jira, lists the ready tickets in the order they should start.
+
+## Correct
+
+**Choose.** `[correct] enabled` is off by default. Turn it on once the repo has a few weeks of commits and loop logs. `hour` is the host's local hour it starts from, 6 by default, so it runs before the day's work.
+
+**Check.** `loop correct` by hand opens at most one pull request, with no key and the `correct` label.
 
 ## Secrets
 

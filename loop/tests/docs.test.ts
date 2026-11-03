@@ -25,3 +25,11 @@ test("the design doc's Log rule names every step the code logs", () => {
   expect([...steps].filter((step) => !rule.includes(`\`${step}\``)).sort(), "the Log rule does not name these steps").toEqual([]);
   expect(rule).not.toMatch(/`respond`/);
 });
+
+test("dispatch.md names the four principles, the laziness protocol among them", () => {
+  const dispatch = readFileSync(new URL("../src/dispatch.md", import.meta.url), "utf8");
+
+  for (const principle of ["Encode lessons in structure", "Prove it works", "Never block on the human", "Laziness protocol"]) expect(dispatch).toContain(principle);
+  expect(dispatch).toContain("the smallest change that solves the problem");
+  expect(dispatch).toContain("a Bug fix touches the files the reproduction touches");
+});

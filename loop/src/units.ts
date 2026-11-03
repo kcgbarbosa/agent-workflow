@@ -3,6 +3,7 @@
 // and runs the loop under `bws run`, which gives it the secrets as env vars.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CORRECT, DISPATCH } from "./layout.ts";
 import { tokenFile, underBws } from "./secrets.ts";
 import { run, spawnGroup } from "./spawn.ts";
 import { WATCH_PORT } from "./watch.ts";
@@ -17,9 +18,7 @@ const ENV = ["PATH", "HOME", "LANG", "SSH_AUTH_SOCK"];
  */
 const RUN_PROPERTIES = ["KillMode=control-group", "TimeoutStopSec=10min"];
 const WATCH_PROPERTIES = ["Restart=always", "RestartSec=5"];
-/** The run name of the dispatcher's unit, `loop-<name>-dispatch`. */
-export const DISPATCH = "dispatch";
-const RUN_NAME = String.raw`[A-Z][A-Z0-9]*-\d+|filter-[0-9a-f]{8}|${DISPATCH}`;
+const RUN_NAME = String.raw`[A-Z][A-Z0-9]*-\d+|filter-[0-9a-f]{8}|${DISPATCH}|${CORRECT}`;
 const LOOP = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "loop");
 
 export function runUnit(project: string, name: string): string {

@@ -30,6 +30,13 @@ A subagent that returns nothing, declines, or stops before it finishes has not a
 
 A skill that dispatches its own subagents keeps doing so.
 
+# Principles
+
+- Encode lessons in structure: a correction you make a second time becomes a lint, a type, or a check, not more text.
+- Prove it works: before you call it done, run the real thing and read the real value, since a self-report or "it compiles" proves nothing.
+- Never block on the human: on reversible work, make the call, say which, and go on.
+- Laziness protocol: the smallest change that solves the problem, and a Bug fix touches the files the reproduction touches.
+
 # Your status ends the session
 
 The session ends when your turn ends, and the status you give then is final. Nothing wakes you later, so do not end your turn to wait for a result. Run each command in the foreground, and give a long one, such as the acceptance tests, a Bash timeout long enough for it. Do not detach a command with `&`, `nohup`, or `setsid`, because the loop does not wait for it and its result is lost.

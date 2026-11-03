@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Meter, Usage } from "./agent.ts";
-import { runLineOf, TICKETS } from "./layout.ts";
+import { CORRECT, runLineOf, TICKETS } from "./layout.ts";
 import { DECISIONS, isRecord, type Line } from "./log.ts";
 
 const HAIKU = "claude-haiku-5-5";
@@ -283,8 +283,9 @@ function headDrivers(run: string, lines: Line[]): HeadDrivers {
   const tickets = new Set<string>();
   let turns = 0;
   const handoffs: Record<string, number> = {};
+  const own = runLineOf(run, lines);
   for (const line of sessions(lines)) {
-    if (line.ticket === run) continue;
+    if (own(line)) continue;
     const usage = line.usage as Usage;
     tickets.add(line.ticket);
     turns += usage.num_turns ?? 0;
@@ -577,6 +578,51 @@ function show(kind: Kind, figure: Figure): string {
   if (kind === "percent") return `${grouped(1)}%`;
   if (kind === "tokens") return grouped(0);
   return String(figure);
+}
+
+/** The host's local day of a moment in epoch seconds, as `YYYY-MM-DD`. */
+export function localDay(seconds: number): string {
+  const at = new Date(seconds * 1000);
+  return `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+}
+
+export type DayReport = {
+  day: string;
+  merged: { key: string; pr: string | null; cost: number }[];
+  plan_share: Record<string, number>;
+};
+
+/**
+ * The tickets that merged today, and the day's share of each plan window, from all of the day's lines at once:
+ * parallel workers move one meter, so a sum of their shares would count a window twice.
+ */
+export function dayReport(stateDir: string, now: number): DayReport {
+  const day = localDay(now);
+  const today = (line: Line) => localDay(lineTime(line)) === day;
+  const merged: DayReport["merged"] = [];
+  const lines: Line[] = readLines(join(stateDir, CORRECT, DECISIONS)).filter(today);
+  for (const [name, run] of allRuns(stateDir)) {
+    lines.push(...run.filter(today));
+    for (const [key, own] of groupByTicket(name, run)) {
+      const merge = own.findLast((line) => line.step === "merge" && line.result === "merged");
+      if (!merge || !today(merge)) continue;
+      const cost = own.reduce((total, line) => total + (line.step === "agent" && typeof line.cost === "number" ? line.cost : 0), 0);
+      merged.push({ key, pr: typeof merge.pr === "string" ? merge.pr : null, cost: roundHalfEven(cost, 2) });
+    }
+  }
+  return { day, merged, plan_share: planUsage(lines).used };
+}
+
+export function dayText(report: DayReport): string {
+  const rows = [
+    report.merged.length ? `Merged on ${report.day}:` : `No ticket merged on ${report.day}.`,
+    ...report.merged.map(({ key, pr, cost }) => `  ${key.padEnd(12)}${show("money", cost).padStart(10)}  ${pr ?? ""}`.trimEnd()),
+    "",
+    "The day's share of each plan window:",
+    ...Object.entries(report.plan_share).map(([window, share]) => `  ${window.padEnd(22)}${show("percent", share).padStart(8)}`),
+  ];
+  if (!Object.keys(report.plan_share).length) rows.push("  No agent read the plan meter today.");
+  return rows.join("\n");
 }
 
 function day(time: string | null): string {

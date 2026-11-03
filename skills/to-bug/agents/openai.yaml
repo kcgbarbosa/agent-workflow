@@ -1,0 +1,5 @@
+interface:
+  display_name: "To Bug"
+  short_description: "Write a Jira Bug from a report"
+policy:
+  allow_implicit_invocation: false

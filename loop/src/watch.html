@@ -517,7 +517,7 @@ async function refresh() {
     ui.view = null;
     document.getElementById("run").replaceChildren();
     renderMenu("");
-    document.getElementById("main").replaceChildren(h("div", { class: "panel empty" }, "No runs of this project on this host yet. ", h("code", {}, "loop start <Epic key>"), " starts one."));
+    document.getElementById("main").replaceChildren(h("div", { class: "panel empty" }, "No runs of this project on this host yet. ", h("code", {}, "loop start"), " builds its queue."));
     return;
   }
   if (!ui.epic || !ui.epics.some((e) => e.key === ui.epic)) {
@@ -556,7 +556,7 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menuLis
 
 // The menu redraws only when what it lists changed, so a poll does not close an open Epic picker.
 function renderMenu(active) {
-  const drawn = JSON.stringify([active, ui.project, ui.epic, ui.epics.map((e) => [e.key, e.summary, e.running])]);
+  const drawn = JSON.stringify([active, ui.project, ui.epic, ui.epics.map((e) => [e.key, e.summary, e.running, e.updated.slice(0, 10)])]);
   if (drawn === ui.menu) return;
   ui.menu = drawn;
   const label = (VIEWS.find(([k]) => k === active) || VIEWS[0])[1];
@@ -564,10 +564,12 @@ function renderMenu(active) {
   const views = ui.epic ? VIEWS.map(([k, name]) =>
     h("a", { href: hashFor(ui.project, ui.epic, k), class: active === k ? "on" : "", "aria-current": active === k ? "page" : null },
       icon(ICONS[k][active === k ? 1 : 0]), name)) : [];
-  const epic = h("select", { "aria-label": "Epic" }, ui.epics.map((e) => h("option", { value: e.key, selected: e.key === ui.epic },
-    `${e.key}${e.summary ? ` · ${e.summary}` : ""}${e.running ? " (running)" : ""}`)));
-  epic.onchange = () => { closeMenu(); go("", ui.project, epic.value); };
-  menuList.replaceChildren(...views, ui.epics.length ? h("label", {}, "Epic", epic) : "");
+  const days = [...new Set(ui.epics.map((e) => e.updated.slice(0, 10)))].sort().reverse();
+  const picker = h("select", { "aria-label": "Ticket" }, days.map((day) => h("optgroup", { label: day },
+    ui.epics.filter((e) => e.updated.startsWith(day)).map((e) => h("option", { value: e.key, selected: e.key === ui.epic },
+      `${e.key}${e.summary ? ` · ${e.summary}` : ""}${e.running ? " (running)" : ""}`)))));
+  picker.onchange = () => { closeMenu(); go("", ui.project, picker.value); };
+  menuList.replaceChildren(...views, ui.epics.length ? h("label", {}, "Ticket", picker) : "");
 }
 
 // --- Home: a card per project on the host, then one log of what the loop did across them ---
@@ -612,6 +614,7 @@ function card(p) {
   const top = h("div", { class: "top" },
     href ? h("a", { class: "name", href }, p.name) : h("span", { class: "name" }, p.name),
     h("span", { class: "state" }, h("span", { class: `dot ${tone}` }), label));
+  if (p.queue) return queueCard(p, top);
   const summary = (key) => h("div", { class: "epic" }, h("b", {}, key), p.epic.summary ? ` · ${p.epic.summary}` : "");
   if (!p.current) return h("section", { class: "card" }, top, h("div", { class: "sub" }, "No runs yet"));
   if (p.state === "idle") {
@@ -628,6 +631,26 @@ function card(p) {
     p.working.length ? h("ul", {}, p.working.map((w) => h("li", {},
       h("span", {}, h("a", { href: hashFor(p.name, p.current, w.key) }, w.key), " ", stepName(w.step)),
       h("span", { class: "t", title: `In this step since ${when(w.since)}` }, since(w.since))))) : "");
+}
+
+// A project on the queue: the dispatcher's state, then each ticket that runs, waits on the owner, or waits on a blocker.
+function queueCard(p, top) {
+  const q = p.queue;
+  const open = (key) => h("a", { href: hashFor(p.name, key, "") }, key);
+  const issue = (label, bad, row) => h("div", { class: `issue${bad ? " bad" : ""}` },
+    row.pr ? h("a", { href: row.pr, target: "_blank", rel: "noopener" }, `${label} · ${row.key}`) : h("a", { href: hashFor(p.name, row.key, "") }, `${label} · ${row.key}`),
+    row.why ? h("div", {}, row.why) : "");
+  const idle = !q.running.length && !q.handed_back.length && !q.waiting.length && !q.stuck.length;
+  return h("section", { class: "card" }, top,
+    h("div", { class: "sub" }, `Dispatcher: ${q.state}${q.why ? `. ${q.why}` : ""}`),
+    ...q.stuck.map((row) => issue("Stuck", true, row)),
+    ...q.handed_back.map((row) => issue("Handed back", false, row)),
+    q.running.length ? h("ul", {}, q.running.map((w) => h("li", {},
+      h("span", {}, open(w.key), " ", stepName(w.step)),
+      h("span", { class: "t", title: `In this step since ${when(w.since)}` }, since(w.since))))) : "",
+    q.waiting.length ? h("ul", {}, q.waiting.map((w) => h("li", {},
+      h("span", {}, w.key, ` waits on ${w.on}`)))) : "",
+    idle ? h("div", { class: "sub" }, "No ticket is in flight") : "");
 }
 
 // A row that needs KC links to its pull request, or to the ticket when it has none. A stopped run opens Diagnostics.
