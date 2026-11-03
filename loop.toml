@@ -22,7 +22,7 @@ effort = "high"
 
 [limits]
 parallel = 1
-agent_timeout_minutes = 90
+agent_timeout_minutes = 180
 fix_attempts = 2
 circuit_breaker = 2
 
