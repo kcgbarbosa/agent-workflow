@@ -77,7 +77,7 @@ def test_write_puts_a_repo_on_the_shared_gate(python_repo: Path, env: dict[str, 
     assert len(caller.splitlines()) <= 19
     assert not (python_repo / ".github" / "workflows" / "hold.yml").exists()
     assert (python_repo / "mise.toml").read_text() == '[tools]\nnode = "22.4.0"\nuv = "0.9.1"\n'
-    assert "[review]\nenabled = true\n" in (python_repo / "loop.toml").read_text()
+    assert "[fuzz]\nenabled = true\n" in (python_repo / "loop.toml").read_text()
 
 
 def test_write_keeps_a_mise_file_and_a_loop_toml(python_repo: Path, env: dict[str, str]) -> None:
@@ -89,15 +89,29 @@ def test_write_keeps_a_mise_file_and_a_loop_toml(python_repo: Path, env: dict[st
     assert not (python_repo / "mise.toml").exists()
     loop_toml = (python_repo / "loop.toml").read_text()
     assert loop_toml.startswith('name = "app"\n')
-    assert "[review]\nenabled = true\n" in loop_toml
+    assert "[fuzz]\nenabled = true\n" in loop_toml
 
 
-def test_write_keeps_the_review_answer_in_loop_toml(python_repo: Path, env: dict[str, str]) -> None:
-    (python_repo / "loop.toml").write_text('name = "app"\n\n[review]\nenabled = false\n')
+def test_write_keeps_the_fuzz_answer_in_loop_toml(python_repo: Path, env: dict[str, str]) -> None:
+    (python_repo / "loop.toml").write_text('name = "app"\n\n[fuzz]\nenabled = false\n')
 
     gate(python_repo, env, "write")
 
-    assert (python_repo / "loop.toml").read_text() == 'name = "app"\n\n[review]\nenabled = false\n'
+    assert (python_repo / "loop.toml").read_text() == 'name = "app"\n\n[fuzz]\nenabled = false\n'
+
+
+def test_write_on_a_repo_already_on_the_gate_moves_review_to_fuzz(python_repo: Path, env: dict[str, str]) -> None:
+    (python_repo / "loop.toml").write_text(
+        'name = "app"\n\n# The shared gate\'s settings. actions/review/action.yml in agent-workflow gives the [review] keys.\n'
+        '[review]\nenabled = false\nskip = ["*.md"]\n'
+    )
+
+    gate(python_repo, env, "write")
+
+    assert (python_repo / "loop.toml").read_text() == (
+        'name = "app"\n\n# The shared gate\'s settings. actions/fuzz/action.yml in agent-workflow gives the [fuzz] keys.\n'
+        '[fuzz]\nenabled = false\nskip = ["*.md"]\n'
+    )
 
 
 def test_a_second_write_changes_nothing(python_repo: Path, env: dict[str, str]) -> None:
@@ -145,7 +159,7 @@ def test_protect_requires_the_gate_and_allows_squash_only(python_repo: Path, env
     protection = json.loads(put)
     assert [check["context"] for check in protection["required_status_checks"]["checks"]] == [
         "gate / check",
-        "gate / review",
+        "gate / fuzz",
     ]
     assert protection["required_pull_request_reviews"]["required_approving_review_count"] == 0
     assert protection["allow_force_pushes"] is False

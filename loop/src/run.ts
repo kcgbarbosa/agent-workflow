@@ -825,6 +825,8 @@ export class Run {
       const bodyFile = join(runDir, "pr-body.md");
       writeFileSync(bodyFile, withHold(body, at));
       await github.editBody(repo, url, bodyFile);
+      // The owner stops the merge with the label, so the repo has it.
+      await github.createLabel(repo, HOLD_LABEL);
       this.log.write(key, "hold", "set", { pr: url, detail: `Hold until ${at}`, until: at });
       return `The blast level is yellow, so auto-merge waits until ${at}.`;
     }

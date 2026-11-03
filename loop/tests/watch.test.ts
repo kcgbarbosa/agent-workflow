@@ -41,7 +41,7 @@ function redThenFixed(pid: number): object[] {
     { ticket: "DEMO-2", step: "build", result: "pass", commit: "a1" },
     { ticket: "DEMO-2", step: "push", result: "ok", commit: "a1" },
     { ticket: "DEMO-2", step: "pr", result: "open", commit: "a1", pr: PR },
-    { ticket: "DEMO-2", step: "wait", result: "red", pr: PR, checks: [{ name: "gate / check", bucket: "fail" }, { name: "gate / review", bucket: "pass" }] },
+    { ticket: "DEMO-2", step: "wait", result: "red", pr: PR, checks: [{ name: "gate / check", bucket: "fail" }, { name: "gate / fuzz", bucket: "pass" }] },
     { ticket: "DEMO-2", step: "build", result: "started", attempt: 2 },
     { ticket: "DEMO-2", step: "build", result: "pass", commit: "a2" },
     { ticket: "DEMO-2", step: "push", result: "ok", commit: "a2" },
@@ -114,7 +114,7 @@ test("the page shows the checks of a red pull request, masks each secret, and an
   expect(view.tickets[0].pr).toEqual({
     url: PR,
     result: "red",
-    checks: [{ name: "gate / check", bucket: "fail" }, { name: "gate / review", bucket: "pass" }],
+    checks: [{ name: "gate / check", bucket: "fail" }, { name: "gate / fuzz", bucket: "pass" }],
   });
   expect(JSON.stringify(view)).not.toContain(secret);
   expect(view.tickets[0].stuck_reason).toContain("[JIRA_API_TOKEN]");
@@ -150,7 +150,7 @@ test("a log with checks that have no link shows them with none", async () => {
 
   expect(view.tickets[0].pr.checks).toEqual([
     { name: "gate / check", bucket: "fail" },
-    { name: "gate / review", bucket: "pass" },
+    { name: "gate / fuzz", bucket: "pass" },
   ]);
 });
 

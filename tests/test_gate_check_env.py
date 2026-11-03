@@ -1,6 +1,6 @@
 """The gate's check step masks each value of the optional CHECK_ENV secret, exports it to the check command, and runs as before without it.
 
-Each test runs the step's own script from gate.yml under the shell GitHub uses, with fake values.
+Each test runs the step's own script from gate.yml under the shell GitHub uses, with fake values. The fuzz action runs the same script.
 """
 
 from __future__ import annotations
@@ -11,7 +11,9 @@ from pathlib import Path
 
 import yaml
 
-GATE = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "gate.yml"
+ROOT = Path(__file__).resolve().parents[1]
+GATE = ROOT / ".github" / "workflows" / "gate.yml"
+FUZZ = ROOT / "actions" / "fuzz" / "action.yml"
 SHOW = 'echo "$PASSWORD|$AWS_KEY|$EMPTY|${CHECK_ENV-unset}"'
 
 
@@ -52,5 +54,12 @@ def test_a_malformed_line_fails_with_its_number_and_no_value() -> None:
     assert "ran" not in run.stdout.splitlines()
 
 
-def test_only_the_check_job_gets_the_secret() -> None:
-    assert [name for name, job in jobs().items() if "secrets.CHECK_ENV" in yaml.safe_dump(job)] == ["check"]
+def test_only_the_check_and_the_fuzz_jobs_get_the_secret() -> None:
+    assert [name for name, job in jobs().items() if "secrets.CHECK_ENV" in yaml.safe_dump(job)] == ["check", "fuzz"]
+
+
+def test_the_fuzz_action_masks_with_the_check_step_s_script() -> None:
+    [check] = [s for s in jobs()["check"]["steps"] if "COMMAND" in s.get("env", {})]
+    [fuzz] = [s for s in yaml.safe_load(FUZZ.read_text())["runs"]["steps"] if "COMMAND" in s.get("env", {})]
+    assert fuzz["run"] == check["run"]
+    assert fuzz["env"]["CHECK_ENV"] == "${{ inputs.check_env }}"

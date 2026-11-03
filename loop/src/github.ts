@@ -65,15 +65,20 @@ export async function editBody(cwd: string, url: string, bodyFile: string): Prom
   await gh(cwd, ["pr", "edit", url, "--body-file", bodyFile]);
 }
 
-/** Puts the label on the pull request and takes the others off. `gh label create --force` makes the label first, since `gh pr edit` refuses a label the repo does not have. */
+/** Makes the label in the repo, or updates it when it is there, since `gh pr edit` refuses a label the repo does not have. */
+export async function createLabel(cwd: string, name: string): Promise<void> {
+  await gh(cwd, ["label", "create", name, "--force", "--color", LABEL_COLORS[name] ?? "ededed"]);
+}
+
+/** Puts the label on the pull request and takes the others off. */
 export async function label(cwd: string, url: string, add: string, remove: string[]): Promise<void> {
-  await gh(cwd, ["label", "create", add, "--force", "--color", LABEL_COLORS[add] ?? "ededed"]);
+  await createLabel(cwd, add);
   const args = ["pr", "edit", url, "--add-label", add];
   for (const name of remove) args.push("--remove-label", name);
   await gh(cwd, args);
 }
 
-const LABEL_COLORS: Record<string, string> = { "blast:green": "0e8a16", "blast:yellow": "fbca04", "blast:red": "b60205" };
+const LABEL_COLORS: Record<string, string> = { "blast:green": "0e8a16", "blast:yellow": "fbca04", "blast:red": "b60205", hold: "5319e7" };
 
 /** Converts the pull request to a draft, which does not merge and turns auto-merge off. */
 export async function toDraft(cwd: string, url: string): Promise<void> {

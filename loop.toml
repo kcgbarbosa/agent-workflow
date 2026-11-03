@@ -36,6 +36,6 @@ plans = [
   { plan = "max-5x", since = 2026-10-14T16:48:00Z },
 ]
 
-# The shared gate's settings. actions/review/action.yml in agent-workflow gives the [review] keys.
-[review]
+# The shared gate's settings. actions/fuzz/action.yml in agent-workflow gives the [fuzz] keys.
+[fuzz]
 enabled = true

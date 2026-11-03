@@ -1,0 +1,67 @@
+name: fuzz
+description: >-
+  The gate's fuzz job. Claude Code runs the interrogate skill on the pull request, with adversaries that try to break it
+  against the checkout and the stack, and fuzz.py keeps each finding whose reproduction fails again on the head, marks one
+  that fails the same way on the base as pre-existing, posts them as one pull request review comment, and fails on a new
+  one. `loop.toml [fuzz]` of the base overrides each input: `enabled` (default true), `model`, `effort`, `adversaries`
+  (default 3), `blocking` (default true), `setup`, a command that brings up and seeds the stack, and `skip`, path globs.
+inputs:
+  claude_code_oauth_token:
+    description: The Claude Code token of the plan the fuzz job bills. One of the two tokens is needed.
+    required: false
+  anthropic_api_key:
+    description: The API key the fuzz job bills instead of a plan.
+    required: false
+  check_env:
+    description: Values the stack needs, one `NAME=value` per line, masked and exported as the check does.
+    required: false
+  model:
+    description: The model, unless loop.toml [fuzz] names one.
+    required: true
+  effort:
+    description: The effort, unless loop.toml [fuzz] names one.
+    required: true
+  skip:
+    description: Path globs, split on whitespace, unless loop.toml [fuzz] names `skip`.
+    required: true
+runs:
+  using: composite
+  steps:
+    # The repo's own interrogate skill wins. Without one, the job uses agent-workflow's.
+    - shell: bash
+      run: |
+        if [ ! -e .claude/skills/interrogate ]; then
+          mkdir -p ~/.claude/skills
+          cp -R "$GITHUB_ACTION_PATH/../../skills/interrogate" ~/.claude/skills/
+        fi
+    # The same script as the check's step in gate.yml, so the stack gets the same values, each masked before anything prints.
+    - shell: bash
+      run: |
+        n=0
+        while IFS= read -r line || [ -n "$line" ]; do
+          n=$((n + 1))
+          line=${line%$'\r'}
+          [[ -z $line || $line == \#* ]] && continue
+          if [[ ! $line =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            echo "::error::CHECK_ENV line $n is not NAME=value"
+            exit 1
+          fi
+          name=${BASH_REMATCH[1]} value=${BASH_REMATCH[2]}
+          [[ $value =~ ^\"(.*)\"$ || $value =~ ^\'(.*)\'$ ]] && value=${BASH_REMATCH[1]}
+          [ -n "$value" ] && echo "::add-mask::${value//%/%25}"
+          export "$name=$value"
+        done <<<"$CHECK_ENV"
+        unset CHECK_ENV
+        bash -c "$COMMAND"
+      env:
+        COMMAND: python3 "$GITHUB_ACTION_PATH/fuzz.py"
+        CHECK_ENV: ${{ inputs.check_env }}
+        GH_TOKEN: ${{ github.token }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        FUZZ_MODEL: ${{ inputs.model }}
+        FUZZ_EFFORT: ${{ inputs.effort }}
+        FUZZ_SKIP: ${{ inputs.skip }}

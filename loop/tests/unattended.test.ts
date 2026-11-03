@@ -70,7 +70,7 @@ test("a required check that has not reported keeps the loop waiting until it doe
   world.setChecks("DEMO-2", { "gate / check": "pass" });
   const polls = world.ghCalls().length;
   await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
-  expect(world.steps().some((step) => /^DEMO-2 wait/.test(step))).toBe(false);
+  expect(world.steps().some((step) => step.startsWith("DEMO-2 wait"))).toBe(false);
   expect(world.prs()[0]!.state).toBe("OPEN");
   world.setChecks("DEMO-2", { "gate / fuzz": "pass" });
   const ran = await running;

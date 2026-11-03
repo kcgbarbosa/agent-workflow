@@ -1,0 +1,223 @@
+"""The gate's fuzz job keeps a finding whose reproduction fails again on the head, tells a new one from a pre-existing one
+on the base, posts one review comment, and fails only on a new finding while `blocking` is on."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+from fake_github import FakeGitHub
+
+ROOT = Path(__file__).resolve().parents[1]
+FUZZ = ROOT / "actions" / "fuzz" / "fuzz.py"
+GATE = ROOT / ".github" / "workflows" / "gate.yml"
+INPUTS = {"FUZZ_MODEL": "claude-opus-5-5", "FUZZ_EFFORT": "high", "FUZZ_SKIP": "*.md docs/* *.lock"}
+
+# Each reproduction reads a.py, which is "one" on the base and "one two three" on the head.
+REPROS = {
+    # Fails on the head only, so it is new.
+    "test_new.py": 'assert "two" not in open("a.py").read(), "two is in a.py"\n',
+    # Fails the same way on both, so it is pre-existing.
+    "test_old.py": 'assert "four" in open("a.py").read(), "four is missing"\n',
+    # Fails on both, with another output on the base, so it is new.
+    "test_differs.py": 'import sys\nprint("lines:", open("a.py").read().count("\\n"))\nsys.exit(1)\n',
+    # Passes on the rerun, so it is dropped.
+    "test_pass.py": "pass\n",
+}
+
+
+def finding(name: str, title: str) -> dict:
+    return {
+        "title": title,
+        "command": f"{sys.executable} {name}",
+        "reproduction": name,
+        "output": "it failed",
+        "breaks": f"{title} breaks the ticket.",
+    }
+
+
+def result(*findings: dict) -> dict:
+    return {"type": "result", "structured_output": {"findings": list(findings)}, "total_cost_usd": 1.5}
+
+
+def fuzz_pr(tmp_path: Path, loop_toml: str | None = None) -> FakeGitHub:
+    fake = FakeGitHub(tmp_path, base={"loop.toml": loop_toml} if loop_toml is not None else None)
+    fake.commit({"a.py": "one\ntwo\nthree\n"})
+    # The adversaries leave the reproduction of each verified finding in the checkout.
+    for name, text in REPROS.items():
+        (fake.work / name).write_text(text)
+    return fake
+
+
+def body(pr: FakeGitHub) -> str:
+    [review] = pr.state["reviews"]
+    assert review["event"] == "COMMENT"
+    assert review["commit_id"] == pr.env["HEAD_SHA"]
+    return review["body"]
+
+
+def test_a_new_finding_fails_the_job_and_a_pre_existing_one_is_listed_apart(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    pr.reply(
+        result(
+            finding("test_new.py", "Two shows up"),
+            finding("test_old.py", "Four is missing"),
+            finding("test_pass.py", "A flake"),
+            finding("test_gone.py", "A lost file"),
+        )
+    )
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 1, run.stderr
+    assert "::error::gate / fuzz: 1 new findings survived a rerun" in run.stdout
+    text = body(pr)
+    assert text.startswith(f"<!-- gate fuzz head={pr.env['HEAD_SHA']} findings=2 -->\n**gate / fuzz** of ")
+    assert ": 1 new, 1 pre-existing, 2 dropped." in text
+    new, old = text.split("### New findings")[1].split("### Pre-existing findings")
+    assert "#### 1. Two shows up" in new
+    assert f"```sh\n{sys.executable} test_new.py\n```" in new
+    assert "AssertionError: two is in a.py" in new
+    assert "<details><summary>The reproduction, <code>test_new.py</code></summary>" in new
+    assert REPROS["test_new.py"].strip() in new
+    assert "#### 2. Four is missing" in old
+    assert "fails the same way on the base, so it fails nothing" in old
+    assert "Four is missing" not in new
+    assert "- A flake: `" in text and "passed on the rerun." in text
+    assert "- A lost file: its reproduction `test_gone.py` is not in the checkout." in text
+    assert text.splitlines()[-1] == "fuzz api cost: $1.50"
+    # The checkout is back at the head, with the reproductions in it.
+    assert pr.git("rev-parse", "HEAD") == pr.env["HEAD_SHA"]
+    assert (pr.work / "a.py").read_text() == "one\ntwo\nthree\n"
+    assert (pr.work / "test_new.py").read_text() == REPROS["test_new.py"]
+
+
+def test_a_finding_whose_base_run_differs_is_new(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    pr.reply(result(finding("test_differs.py", "The line count")))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 1, run.stderr
+    text = body(pr)
+    assert "1 new, 0 pre-existing" in text
+    assert "lines: 3" in text.split("### New findings")[1]
+
+
+def test_pre_existing_findings_alone_pass(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    pr.reply(result(finding("test_old.py", "Four is missing")))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    text = body(pr)
+    assert "findings=1 -->" in text
+    assert "### New findings" not in text
+    assert "### Pre-existing findings" in text
+
+
+def test_no_findings_post_a_comment_and_pass(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    pr.reply(result())
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert body(pr).startswith(f"<!-- gate fuzz head={pr.env['HEAD_SHA']} findings=0 -->")
+
+
+def test_with_blocking_off_the_job_posts_the_findings_and_passes(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path, "[fuzz]\nblocking = false\n")
+    pr.reply(result(finding("test_new.py", "Two shows up")))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    text = body(pr)
+    assert "#### 1. Two shows up" in text
+    assert "`[fuzz] blocking` is off, so the job passes." in text
+
+
+def test_setup_runs_first_and_the_adversaries_get_no_github_token(tmp_path: Path) -> None:
+    setup = '["bash", "-c", "echo setup >> order.log"]'
+    pr = fuzz_pr(tmp_path, f"[fuzz]\nadversaries = 5\nmodel = \"claude-sonnet-5-5\"\nsetup = {setup}\n")
+    (pr.work / "test_new.py").write_text('open("order.log", "a").write("repro\\n")\nraise SystemExit(1)\n')
+    pr.reply(result(finding("test_new.py", "Two shows up")))
+
+    run = pr.run(FUZZ, GH_TOKEN="gh-token", **INPUTS)
+
+    # The reproduction fails the same way on the base, so it is pre-existing and fails nothing.
+    assert run.returncode == 0, run.stderr
+    assert (pr.work / "order.log").read_text() == "setup\nrepro\nrepro\n"
+    [call] = pr.claude_calls
+    argv = call["argv"]
+    text = argv[argv.index("-p") + 1]
+    assert text.startswith("/interrogate the change of pull request #7")
+    assert "Spawn 5 adversaries." in text
+    assert "the stack is up and seeded" in text
+    assert str(tmp_path / "pull-request.md") in text
+    assert (tmp_path / "pull-request.md").read_text() == "# AW-9: add a\n\nTicket text\n"
+    assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+    assert "Bash(gh:*)" in argv[argv.index("--disallowedTools") :]
+    assert call["gh_token"] is None
+
+
+def test_the_pull_request_cannot_turn_off_its_own_fuzz(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    pr.commit({"loop.toml": "[fuzz]\nenabled = false\n"})
+    pr.reply(result())
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert len(pr.claude_calls) == 1
+
+
+def test_the_base_can_turn_it_off(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path, "[fuzz]\nenabled = false\n")
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert "gate / fuzz: off" in run.stdout
+    assert pr.claude_calls == []
+    assert pr.state["reviews"] == []
+
+
+def test_an_old_review_table_warns_and_is_ignored(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path, "[review]\nenabled = false\n")
+    pr.reply(result())
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert "::warning::loop.toml [review] is no longer read" in run.stdout
+    assert len(pr.claude_calls) == 1
+
+
+@pytest.mark.parametrize("env", [{"CLAUDE_CODE_OAUTH_TOKEN": ""}, {}], ids=["no token", "skip paths only"])
+def test_no_model_runs_with_no_token_or_only_skip_paths(tmp_path: Path, env: dict[str, str]) -> None:
+    pr = FakeGitHub(tmp_path)
+    pr.commit({"a.py": "one\ntwo\n"} if env else {"docs/notes.md": "notes\n"})
+
+    run = pr.run(FUZZ, **INPUTS, **env)
+
+    assert run.returncode == 0, run.stderr
+    assert pr.claude_calls == []
+    assert pr.state["reviews"] == []
+
+
+def test_the_gate_runs_fuzz_beside_the_check_and_skips_it_on_a_docs_only_pull_request() -> None:
+    jobs = yaml.safe_load(GATE.read_text())["jobs"]
+    assert "review" not in jobs
+    fuzz = jobs["fuzz"]
+    assert fuzz["needs"] == "paths"
+    assert "needs.paths.outputs.docs-only != 'true'" in fuzz["if"]
+    assert fuzz["permissions"] == {"contents": "read", "pull-requests": "write"}
+    [action] = [step for step in fuzz["steps"] if step.get("uses") == "./.gate/actions/fuzz"]
+    assert action["with"]["check_env"] == "${{ secrets.CHECK_ENV }}"
+    assert all(step["with"]["persist-credentials"] is False for step in fuzz["steps"] if step.get("uses", "").startswith("actions/checkout"))
+    assert any(step.get("uses", "").startswith("jdx/mise-action") for step in fuzz["steps"])
