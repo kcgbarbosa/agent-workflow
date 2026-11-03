@@ -3,8 +3,8 @@
 It runs in the pull request's checkout at its head, with the stack's keys in the env. action.yml gives the env it reads.
 Claude Code runs the interrogate skill with the pull request's diff as the scope and its body's ticket text as the intent.
 This script reruns each reproduction on the head, keeps the ones that fail, runs those on the base to tell a new finding
-from a pre-existing one, writes one review comment to FUZZ_REVIEW, and fails when a new finding survives and `blocking` is
-on. The job holds no GitHub token, so neither the adversaries nor a reproduction can reach one: gate.yml's `fuzz report`
+from a pre-existing one, writes one review comment to FUZZ_REVIEW, and fails when a new finding survives or an adversary did not finish, and
+`blocking` is on. The job holds no GitHub token, so neither the adversaries nor a reproduction can reach one: gate.yml's `fuzz report`
 job, which runs none of the pull request's code, posts the review.
 """
 
@@ -48,7 +48,8 @@ USED = ("title", "command", "reproduction")
 # The adversaries run the repo's tests and its stack, so they get Bash. They get no GitHub token and no `gh`,
 # so only this script writes to the pull request.
 TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Agent", "Skill", "Bash"]
-DENIED = ["Bash(gh:*)", "Bash(git push:*)"]
+# TaskStop: a run in which the head agent stopped its adversaries reported 0 findings with nothing attacked.
+DENIED = ["Bash(gh:*)", "Bash(git push:*)", "TaskStop"]
 # The longest one reproduction may run, on the head and on the base.
 RUN_SECONDS = int(os.environ.get("FUZZ_RUN_SECONDS", "600"))
 GITHUB_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN")
@@ -108,7 +109,7 @@ def prompt(number: str, base: str, pr_file: Path, config: Settings) -> str:
     return (
         f"/interrogate the change of pull request #{number}, `git diff {base}...HEAD`, with HEAD checked out. "
         f"{pr_file} holds its title and body, and the ticket text in the body is the intent: a finding counts only when it breaks the ticket's lines. "
-        f"Spawn {config.adversaries} adversaries. {stack}"
+        f"Spawn {config.adversaries} adversaries. Wait for every adversary to finish before you answer: the job fails a run in which one did not. {stack}"
         "Each writes each reproduction as a test file that the repo's test suite runs, following AGENTS.md and the repo's testing doc for the rows it creates, "
         "and reports the command that runs that file alone, from the repo root. "
         "Leave the reproduction file of each verified finding in place, and remove the others. "
@@ -118,17 +119,20 @@ def prompt(number: str, base: str, pr_file: Path, config: Settings) -> str:
 
 
 def progress(event: dict) -> None:
-    """One log line for each tool call, so a long run shows what it does while it runs."""
+    """One log line for each tool call and each thing the head agent says, so a long run shows what it does and why."""
     if event.get("type") != "assistant":
         return
     for block in event.get("message", {}).get("content", []):
-        if block.get("type") == "tool_use":
+        if block.get("type") == "text" and event.get("parent_tool_use_id") is None:
+            print(f"fuzz says: {block.get('text', '')[:500]}", flush=True)
+        elif block.get("type") == "tool_use":
             inputs = block.get("input") or {}
             detail = next((str(inputs[key]) for key in ("command", "file_path", "pattern", "description", "skill") if key in inputs), "")
             print(f"fuzz: {block.get('name')} {detail[:160]}".rstrip(), flush=True)
 
 
-def run_claude(text: str, config: Settings) -> dict:
+def run_claude(text: str, config: Settings) -> tuple[dict, int]:
+    """The run's result, and how many of the agents that the head agent started finished."""
     claude = shutil.which("claude")
     command = [claude] if claude else ["npx", "-y", "@anthropic-ai/claude-code"]
     env = {key: value for key, value in os.environ.items() if key not in (*GITHUB_TOKENS, REVIEW_PATH)}
@@ -154,6 +158,7 @@ def run_claude(text: str, config: Settings) -> dict:
     )
     assert process.stdout is not None
     output, tail = None, []
+    started, finished = set(), set()
     for line in process.stdout:
         tail = (tail + [line])[-20:]
         try:
@@ -163,6 +168,10 @@ def run_claude(text: str, config: Settings) -> dict:
         if not isinstance(event, dict):
             continue
         progress(event)
+        if event.get("type") == "assistant" and event.get("parent_tool_use_id") is None:
+            started |= {block.get("id") for block in event.get("message", {}).get("content", []) if block.get("type") == "tool_use" and block.get("name") == "Agent"}
+        if event.get("subtype") == "task_notification" and event.get("status") == "completed":
+            finished.add(event.get("tool_use_id"))
         if event.get("type") == "result":
             output = event
     process.wait()
@@ -170,7 +179,7 @@ def run_claude(text: str, config: Settings) -> dict:
     stderr = errors.read()
     if process.returncode != 0 or output is None:
         sys.exit(f"Claude Code failed:\n{stderr}{''.join(tail)[-2000:]}")
-    return output
+    return output, len(started & finished)
 
 
 def findings_of(output: dict) -> tuple[list[Finding], list[str]]:
@@ -372,7 +381,7 @@ def main() -> int:
     pr_file.write_text(f"# {os.environ.get('PR_TITLE', '')}\n\n{os.environ.get('PR_BODY', '')}\n")
 
     keep = untracked()
-    output = run_claude(prompt(number, base, pr_file, config), config)
+    output, finished = run_claude(prompt(number, base, pr_file, config), config)
     found, malformed = findings_of(output)
     kept, dropped = verify(found, head, keep, config.setup)
     dropped = malformed + dropped
@@ -383,6 +392,9 @@ def main() -> int:
     summary = f"**gate / fuzz** of {base[:7]}..{head[:7]}: {len(new)} new, {len(old)} pre-existing, {len(dropped)} dropped."
     if new and not config.blocking:
         summary += " `[fuzz] blocking` is off, so the job passes."
+    unfinished = f"only {finished} of {config.adversaries} adversaries finished" if finished < config.adversaries else ""
+    if unfinished:
+        summary += f" {unfinished.capitalize()}, so {len(kept)} findings says nothing about this change."
     parts = [f"<!-- gate fuzz head={head} findings={len(kept)} -->\n{summary}"]
     if new:
         parts.append("### New findings\n\nEach reproduction fails on the head and not the same way on the base.\n\n" + listed(new, 1))
@@ -399,6 +411,10 @@ def main() -> int:
     review_file().write_text(json.dumps(review))
     print(summary)
     print(cost_line(output))
+    if unfinished:
+        print(f"::{'error' if config.blocking else 'warning'}::gate / fuzz: {unfinished}, so the run attacked less than it should.")
+        if config.blocking:
+            return 1
     if new and config.blocking:
         print(f"::error::gate / fuzz: {len(new)} new findings survived a rerun. The review comment lists them.")
         return 1

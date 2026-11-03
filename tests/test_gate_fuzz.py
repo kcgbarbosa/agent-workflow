@@ -40,8 +40,18 @@ def finding(name: str, title: str) -> dict:
     }
 
 
-def result(*findings: dict) -> dict:
-    return {"type": "result", "structured_output": {"findings": list(findings)}, "total_cost_usd": 1.5}
+def result(*findings: dict, count: int = 3, finished: int | None = None, status: str = "completed") -> str:
+    """What `claude` streams: `count` adversaries started, `finished` of them done, all by default, and the answer."""
+    finished = count if finished is None else finished
+    events: list[dict] = []
+    for n in range(count):
+        call = {"type": "tool_use", "id": f"adversary-{n}", "name": "Agent", "input": {"description": f"Adversary {n}"}}
+        events.append({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [call]}})
+    for n in range(count):
+        done = "completed" if n < finished else status
+        events.append({"type": "system", "subtype": "task_notification", "tool_use_id": f"adversary-{n}", "status": done})
+    events.append({"type": "result", "structured_output": {"findings": list(findings)}, "total_cost_usd": 1.5})
+    return "\n".join(json.dumps(event) for event in events)
 
 
 def fuzz_pr(tmp_path: Path, loop_toml: str | None = None) -> FakeGitHub:
@@ -147,7 +157,7 @@ def test_setup_runs_first_and_the_adversaries_get_no_github_token(tmp_path: Path
     setup = '["bash", "-c", "echo setup >> order.log"]'
     pr = fuzz_pr(tmp_path, f"[fuzz]\nadversaries = 5\nmodel = \"claude-sonnet-5-5\"\nsetup = {setup}\n")
     (pr.work / "test_new.py").write_text('open("order.log", "a").write("repro\\n")\nraise SystemExit(1)\n')
-    pr.reply(result(finding("test_new.py", "Two shows up")))
+    pr.reply(result(finding("test_new.py", "Two shows up"), count=5))
 
     run = pr.run(FUZZ, **INPUTS)
 
@@ -357,6 +367,57 @@ def test_a_run_that_ends_before_its_review_leaves_no_file_to_post(tmp_path: Path
 
     assert run.returncode == 1
     assert not forged.exists()
+
+
+def test_a_run_whose_adversaries_did_not_finish_fails_and_says_so(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    pr.reply(result(finished=1, status="stopped"))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 1
+    assert "::error::gate / fuzz: only 1 of 3 adversaries finished" in run.stdout
+    assert "Only 1 of 3 adversaries finished, so 0 findings says nothing about this change." in body(pr)
+
+
+def test_with_blocking_off_a_run_whose_adversaries_did_not_finish_passes_and_says_so(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path, "[fuzz]\nblocking = false\n")
+    pr.reply(result(finished=2, status="stopped"))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    assert "::warning::gate / fuzz: only 2 of 3 adversaries finished" in run.stdout
+    assert "Only 2 of 3 adversaries finished" in body(pr)
+
+
+def test_an_agent_that_an_adversary_starts_counts_as_no_adversary(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    call = {"type": "tool_use", "id": "helper", "name": "Agent", "input": {"description": "A helper"}}
+    helper = [
+        {"type": "assistant", "parent_tool_use_id": "adversary-0", "message": {"content": [call]}},
+        {"type": "system", "subtype": "task_notification", "tool_use_id": "helper", "status": "completed"},
+    ]
+    pr.reply("\n".join(json.dumps(event) for event in helper) + "\n" + result(finished=2, status="stopped"))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 1
+    assert "only 2 of 3 adversaries finished" in run.stdout
+
+
+def test_the_head_agent_cannot_stop_an_adversary_and_its_words_reach_the_log(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    said = {"type": "assistant", "parent_tool_use_id": None, "message": {"content": [{"type": "text", "text": "I will wait for them."}]}}
+    pr.reply(json.dumps(said) + "\n" + result())
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    argv = pr.claude_calls[0]["argv"]
+    assert "TaskStop" in argv[argv.index("--disallowedTools") :]
+    assert "fuzz says: I will wait for them." in run.stdout
+    assert "Wait for every adversary to finish" in argv[argv.index("-p") + 1]
 
 
 def test_the_base_can_turn_it_off(tmp_path: Path) -> None:
