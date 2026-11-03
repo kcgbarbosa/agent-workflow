@@ -216,7 +216,6 @@ export class Dispatcher {
   /** The Epic check for the parent of each ticket that merged, and once an hour for every open Epic. */
   private async checkEpics(): Promise<void> {
     const epics = new Set(this.mergedParents);
-    this.mergedParents.clear();
     if (Date.now() - this.lastSweep >= this.options.epicSeconds * 1000) {
       this.lastSweep = Date.now();
       for (const epic of await this.jira.search(OPEN_EPICS)) {
@@ -239,6 +238,8 @@ export class Dispatcher {
         epic,
       );
     }
+    // Cleared only once each Epic check ran, so a throw before then keeps the parents for the next poll.
+    for (const epic of epics) this.mergedParents.delete(epic);
   }
 
   private workerLines(key: string): Line[] {

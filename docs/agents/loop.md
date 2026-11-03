@@ -63,6 +63,10 @@ The Jira email and API token, the ntfy topic, and the Claude token of the loop a
 
 In `loop.toml`.
 
+### Queue
+
+`[queue]` `filter` and `poll_minutes` in `loop.toml`. This repo's file sets neither, so the defaults of the design apply.
+
 ### Logs
 
 `~/.local/state/agent-workflow-loop/<Epic key>/`. The `loop watch` page serves every project on t14, as the design gives.

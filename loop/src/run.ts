@@ -2,15 +2,16 @@
 // push, pull request, wait, merge. The gate on GitHub checks the work, so the loop runs no gate, no review,
 // no landing, and no Epic branch of its own. A red gate resumes the agent as a fix attempt, a green gate with
 // blocking review findings resumes it once to answer them, and a ticket whose blocker has an open pull request
-// stacks on it. A restart starts each ticket at its first step. A worker, `loop run-ticket`, builds one ticket
-// in its own folder, `tickets/<KEY>/`, from the main branch, and ends merged, handed back, or stuck.
+// stacks on it. A restart starts each ticket at its first step. Only the dispatcher completes an Epic. A worker,
+// `loop run-ticket`, builds one ticket in its own folder, `tickets/<KEY>/`, from the main branch, and ends
+// merged, handed back, or stuck.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { ask, type Meter, runSetup, type Session } from "./agent.ts";
 import { mdLinks, specLineOf, specLinks } from "./archive.ts";
-import { completeEpic, DONE } from "./epic.ts";
+import { DONE } from "./epic.ts";
 import type { Config } from "./config.ts";
 import { git, gitOk, originUrl, slug } from "./git.ts";
 import * as github from "./github.ts";
@@ -250,7 +251,6 @@ export class Run {
     if (stopped.length) parts.push(`stopped: ${stopped.join(", ")}`);
     if (left.length) parts.push(`waiting on a blocker: ${left.map((ticket) => ticket.key).join(", ")}`);
     if (this.halt) parts.push(`the loop stopped at the ${this.halt}`);
-    if (await this.completeEpic()) parts.push(`${this.epic} is complete`);
     const detail = parts.join(". ");
     const failed = stopped.length > 0 || this.halt !== null;
     this.own("finish", failed ? "stopped" : "ok", { detail });
@@ -304,23 +304,6 @@ export class Run {
     } catch (error) {
       this.own("required-checks", "fail", { detail: (error as Error).message });
     }
-  }
-
-  /** Runs the Epic check (epic.ts) for the Epic of the run, on what this run merged. */
-  private async completeEpic(): Promise<boolean> {
-    if (!this.epic) return false;
-    return completeEpic(
-      {
-        config: this.config,
-        jira: this.jira,
-        home: this.home,
-        log: (step, result, extra) => this.own(step, result, extra),
-        notify: (message) => this.notify(message),
-        merged: async (child) => this.merged.has(child.key),
-        repoUrl: await this.repoUrl(),
-      },
-      this.epic,
-    );
   }
 
   /**

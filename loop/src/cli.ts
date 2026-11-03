@@ -4,7 +4,8 @@
 // and starts one worker by hand. `loop stop` stops the dispatcher and every worker, and `loop stop <KEY>` one
 // worker, whose ticket it flags. The units run under `bws run`, with the secrets in their env. `loop watch`
 // serves the page of the runs on this host, and `loop report [<KEY>]` breaks down what the latest run cost
-// against the run before it. `loop run <KEY>` builds an Epic in the foreground, as the scenario tests drive it.
+// against the run before it. `loop run <KEY>` builds an Epic in the foreground, as the scenario tests drive it,
+// and completes no Epic.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
