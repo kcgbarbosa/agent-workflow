@@ -16,7 +16,7 @@ import { Jira } from "./jira.ts";
 import { text } from "./report.ts";
 import { Run, runName, type Target } from "./run.ts";
 import { checkSecrets, readSecrets, secretNames, storedNames, storedSecrets } from "./secrets.ts";
-import { freeSlot, takeSlot } from "./slots.ts";
+import { freeSlot, slotHolders, takeSlot } from "./slots.ts";
 import { endAll } from "./spawn.ts";
 import { awake, runs, runUnit, startRun, startWatch, stopRun, UnitError } from "./units.ts";
 import { sourceCheckout, update, UpdateError } from "./update.ts";
@@ -78,6 +78,10 @@ async function ticket(key: string, repoArg: string | undefined, newCode: boolean
   await checkSecrets(config.secrets);
   const active = new Set(await runs(config.name));
   if (active.has(key)) return refuse(`${key} is building in ${runUnit(config.name, key)}. \`loop stop ${key}\` stops it.`);
+  // An Epic or filter run hands out its slots with no slot folder, so a worker never runs beside one.
+  const holders = slotHolders(config.stateDir);
+  const run = [...active].find((name) => !holders.has(name));
+  if (run) return refuse(`A run is active: ${runUnit(config.name, run)}. \`loop stop ${run}\` stops it.`);
   let why: string | null;
   try {
     why = await unbuildable(config, key);
