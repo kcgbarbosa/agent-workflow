@@ -57,7 +57,8 @@ test("the last merge of an Epic archives the spec and marks the Epic done", asyn
   expect(steps.indexOf("DEMO-3 worker merged")).toBeLessThan(steps.indexOf(`${EPIC} archive pr-open`));
   expect(steps.indexOf(`${EPIC} archive pr-open`)).toBeLessThan(steps.indexOf(`${EPIC} complete ok`));
   expect(world.decisions("").find((line) => line.step === "archive")).toMatchObject({ pr: archived!.url });
-  expect(world.jira.notifications).toContain(`${EPIC} complete`);
+  // The dispatcher notifies after the `complete` line.
+  await world.until(() => world.jira.notifications.includes(`${EPIC} complete`), "the Epic's notification");
 });
 
 test("an Epic with a ticket still open is not archived", async () => {

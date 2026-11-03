@@ -112,7 +112,9 @@ export class World {
       }
     }
     await this.jira.close();
-    rmSync(this.root, { recursive: true, force: true });
+    // A process that a stopped or killed unit started can still write to the fakes as it ends, so the removal
+    // tries again on ENOTEMPTY.
+    rmSync(this.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 
   git(cwd: string, ...args: string[]): string {

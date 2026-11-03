@@ -204,9 +204,10 @@ test("the Epic is set Done after its last merge", async () => {
 
   await start();
 
-  await world.until(() => world.jira.issues.get(EPIC)!.status === "Done", "the Epic to be Done");
+  // The check moves the Epic to Done, then logs, then notifies.
+  await world.until(() => world.jira.notifications.includes(`${EPIC} complete`), "the Epic's notification");
+  expect(world.jira.issues.get(EPIC)!.status).toBe("Done");
   expect(dispatched()).toContain(`${EPIC} complete ok`);
-  expect(world.jira.notifications).toContain(`${EPIC} complete`);
 });
 
 test("the Epic is set Done after a manual child is set Done by hand", async () => {
