@@ -15,12 +15,10 @@ export type PullRequest = {
   mergeCommit: { oid: string } | null;
   /** MERGEABLE, CONFLICTING, or UNKNOWN while GitHub works it out. */
   mergeable?: string;
+  labels?: { name: string }[];
 };
 
 export type Check = { name: string; state: string; bucket: string; link: string };
-
-/** A finding of the gate's review, from its newest review of the pull request. */
-export type Finding = { path: string; line: number | null; sentence: string };
 
 async function gh(cwd: string, args: string[], ok: (code: number) => boolean = (code) => code === 0) {
   const done = await run("gh", args, { cwd });
@@ -28,7 +26,7 @@ async function gh(cwd: string, args: string[], ok: (code: number) => boolean = (
   return done;
 }
 
-const FIELDS = "number,url,state,headRefName,baseRefName,headRefOid,isDraft,title,mergeCommit,mergeable";
+const FIELDS = "number,url,state,headRefName,baseRefName,headRefOid,isDraft,title,mergeCommit,mergeable,labels";
 
 /**
  * The ticket's pull requests in any state, on any branch whose name starts with one of the prefixes. A
@@ -50,8 +48,9 @@ export async function view(cwd: string, url: string): Promise<PullRequest> {
   return JSON.parse((await gh(cwd, ["pr", "view", url, "--json", FIELDS])).stdout) as PullRequest;
 }
 
-export async function create(cwd: string, head: string, base: string, title: string, bodyFile: string): Promise<string> {
-  const done = await gh(cwd, ["pr", "create", "--head", head, "--base", base, "--title", title, "--body-file", bodyFile]);
+export async function create(cwd: string, head: string, base: string, title: string, bodyFile: string, draft = false): Promise<string> {
+  const args = ["pr", "create", "--head", head, "--base", base, "--title", title, "--body-file", bodyFile];
+  const done = await gh(cwd, draft ? [...args, "--draft"] : args);
   const url = done.stdout.trim().split("\n").at(-1) ?? "";
   if (!url.startsWith("http")) throw new GhError(`gh pr create printed no pull request address: ${done.stdout}`);
   return url;
@@ -64,6 +63,21 @@ export async function body(cwd: string, url: string): Promise<string> {
 
 export async function editBody(cwd: string, url: string, bodyFile: string): Promise<void> {
   await gh(cwd, ["pr", "edit", url, "--body-file", bodyFile]);
+}
+
+/** Puts the label on the pull request and takes the others off. `gh label create --force` makes the label first, since `gh pr edit` refuses a label the repo does not have. */
+export async function label(cwd: string, url: string, add: string, remove: string[]): Promise<void> {
+  await gh(cwd, ["label", "create", add, "--force", "--color", LABEL_COLORS[add] ?? "ededed"]);
+  const args = ["pr", "edit", url, "--add-label", add];
+  for (const name of remove) args.push("--remove-label", name);
+  await gh(cwd, args);
+}
+
+const LABEL_COLORS: Record<string, string> = { "blast:green": "0e8a16", "blast:yellow": "fbca04", "blast:red": "b60205" };
+
+/** Converts the pull request to a draft, which does not merge and turns auto-merge off. */
+export async function toDraft(cwd: string, url: string): Promise<void> {
+  await gh(cwd, ["pr", "ready", url, "--undo"]);
 }
 
 /** Auto-merge as a squash, so the pull request title becomes the commit on main. */
@@ -135,29 +149,20 @@ export async function rerunFailed(cwd: string, run: string): Promise<void> {
   await gh(cwd, ["run", "rerun", run, "--failed"]);
 }
 
-// The gate's review starts each review body with this marker. The newest review holds the findings at the
-// pull request's head: each at its line as a review comment, and the ones outside the diff in the body.
-const MARKER = /<!-- gate review head=([0-9a-f]+) blocking=(\d+) -->/;
-const BLOCKING = /^\*\*blocking\*\*: (.*)$/s;
+// The gate's fuzz job starts its review comment with this marker, then lists the findings that survived a
+// rerun, each with its command, its output, and its reproduction.
+const MARKER = /<!-- gate fuzz head=([0-9a-f]+) findings=(\d+) -->/;
 
-/** The blocking findings of the gate's newest review of the pull request, none when `head` is given and the review is of another head. */
-export async function blockingFindings(cwd: string, number: number, head?: string): Promise<Finding[]> {
-  const list = async (endpoint: string) => {
-    const done = await gh(cwd, ["api", endpoint, "--paginate", "--jq", ".[]"]);
-    return done.stdout.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
-  };
-  const reviews = (await list(`repos/{owner}/{repo}/pulls/${number}/reviews`)).filter((review) => MARKER.test(review.body ?? ""));
-  const last = reviews.at(-1);
-  const marker = last ? MARKER.exec(last.body)! : null;
-  if (!marker || marker[2] === "0" || (head && !head.startsWith(marker[1]!))) return [];
-  const findings: Finding[] = [];
-  for (const comment of await list(`repos/{owner}/{repo}/pulls/${number}/reviews/${last.id}/comments`)) {
-    const sentence = BLOCKING.exec(comment.body ?? "")?.[1];
-    if (sentence) findings.push({ path: comment.path, line: comment.line ?? null, sentence });
-  }
-  for (const line of String(last.body).split("\n")) {
-    const found = /^- `(.+):(\d+)` \*\*blocking\*\*: (.*)$/.exec(line);
-    if (found) findings.push({ path: found[1]!, line: Number(found[2]), sentence: found[3]! });
-  }
-  return findings;
+/** The text of the fuzz job's newest comment at `head`, or null when it found nothing there. */
+export async function fuzzFindings(cwd: string, number: number, head: string): Promise<string | null> {
+  const done = await gh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[]"]);
+  const bodies = done.stdout
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => String(JSON.parse(line).body ?? ""))
+    .filter((body) => MARKER.test(body));
+  const last = bodies.at(-1);
+  const marker = last ? MARKER.exec(last)! : null;
+  if (!last || !marker || marker[2] === "0" || !head.startsWith(marker[1]!)) return null;
+  return last.replace(MARKER, "").trim();
 }

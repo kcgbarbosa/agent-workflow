@@ -70,14 +70,14 @@ const gitAt = (at, ...command) => execFileSync("git", ["-C", at, ...command], { 
 const keyOf = (branch) => /^(?:feat|fix|docs)\/([A-Z][A-Z0-9]*-\d+)-/.exec(branch)?.[1];
 const verdicts = existsSync(join(fakes, "verdicts.json")) ? JSON.parse(readFileSync(join(fakes, "verdicts.json"), "utf8")) : {};
 
-function review(pr, findings) {
-  const blocking = findings.filter((item) => item.severity === "blocking").length;
-  const text = (item) => `**${item.severity}**: ${item.sentence}`;
-  const outside = findings.filter((item) => item.outside).map((item) => `- \`${item.path}:${item.line}\` ${text(item)}`);
-  let body = `<!-- gate review head=${pr.headRefOid} blocking=${blocking} -->\n**gate / review**: ${blocking} blocking.`;
-  if (outside.length) body += `\n\nFindings outside the diff:\n${outside.join("\n")}`;
-  const comments = findings.filter((item) => !item.outside).map((item) => ({ path: item.path, line: item.line, body: text(item) }));
-  return { id: pr.number * 10, body, comments };
+const fuzzed = existsSync(join(fakes, "fuzz.json")) ? JSON.parse(readFileSync(join(fakes, "fuzz.json"), "utf8")) : {};
+
+/** The gate's fuzz comment at the pull request's head, as FAKE_DIR/fuzz.json gives the findings of its ticket. */
+function fuzz(pr) {
+  const findings = fuzzed[keyOf(pr.headRefName)];
+  if (!findings) return;
+  const body = `<!-- gate fuzz head=${pr.headRefOid} findings=${findings.length} -->\n**gate / fuzz**: ${findings.length} new.\n\n${findings.join("\n\n")}`;
+  pr.reviews = [...(pr.reviews ?? []), { id: pr.number * 10 + pr.reviews.length, body, comments: [] }];
 }
 
 /** The check of the pull request's nth run, as its verdict gives it. A rerun keeps the run id and gets a new job. */
@@ -117,6 +117,7 @@ for (const pr of state.prs) {
     pr.headRefOid = oid;
     pr.pushes = (pr.pushes ?? 0) + 1;
     pr.checks = [check(pr)];
+    fuzz(pr);
     settled = true;
   }
 }
@@ -171,6 +172,12 @@ if (noun === "repo" && verb === "clone") {
   gitAt(dirname(origin), "clone", "--quiet", join(dirname(origin), `${basename(url)}.git`), folder);
   process.exit(0);
 }
+if (noun === "label" && verb === "create") {
+  if (!args.includes("--force") && (state.labels ?? []).includes(args[2])) fail(`label with name "${args[2]}" already exists`);
+  state.labels = [...new Set([...(state.labels ?? []), args[2]])];
+  save();
+  process.exit(0);
+}
 if (noun !== "pr") fail(`fake gh: no ${noun}`);
 if (verb === "list") {
   const wanted = option("state") ?? "open";
@@ -203,17 +210,17 @@ if (verb === "list") {
     title: option("title"),
     body: readFileSync(option("body-file"), "utf8"),
     state: "OPEN",
-    isDraft: false,
+    isDraft: args.includes("--draft"),
     autoMerge: null,
     mergeCommit: null,
     headRefOid: gitAt(here, "rev-parse", `refs/heads/${head}`),
     pushes: 1,
     reviews: [],
+    labels: [],
   };
   if (here !== origin) pr.origin = here;
   pr.checks = [check(pr)];
-  const reviews = existsSync(join(fakes, "reviews.json")) ? JSON.parse(readFileSync(join(fakes, "reviews.json"), "utf8")) : {};
-  if (reviews[keyOf(head)]) pr.reviews.push(review(pr, reviews[keyOf(head)]));
+  fuzz(pr);
   state.prs.push(pr);
   save();
   console.log(pr.url);
@@ -230,6 +237,20 @@ if (verb === "list") {
   const pr = find(args[2]);
   if (option("base")) pr.baseRefName = option("base");
   if (option("body-file")) pr.body = readFileSync(option("body-file"), "utf8");
+  // GitHub refuses a label the repo does not have, so the loop makes it first with `gh label create`.
+  const named = (flag) => args.flatMap((arg, index) => (args[index - 1] === flag ? [arg] : []));
+  for (const name of named("--add-label")) {
+    if (!(state.labels ?? []).includes(name)) fail(`could not add label: '${name}' not found`);
+    if (!(pr.labels ?? []).some((label) => label.name === name)) pr.labels = [...(pr.labels ?? []), { name }];
+  }
+  const removed = named("--remove-label");
+  pr.labels = (pr.labels ?? []).filter((label) => !removed.includes(label.name));
+  save();
+} else if (verb === "ready") {
+  // `--undo` makes it a draft, which turns auto-merge off as GitHub does.
+  const pr = find(args[2]);
+  pr.isDraft = args.includes("--undo");
+  if (pr.isDraft) pr.autoMerge = null;
   save();
 } else if (verb === "comment") {
   const pr = find(args[2]);

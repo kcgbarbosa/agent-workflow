@@ -433,7 +433,7 @@ test("a real run logs the plan meter and the usage the report reads", async () =
     claude: "2.1.999",
     agent: "claude-opus-5-5 high",
     tiers: expect.objectContaining({ scout: "claude-haiku-5-5 medium" }),
-    review: "the gate's model the gate's effort",
+    fuzz: "the gate's model the gate's effort",
   });
 });
 

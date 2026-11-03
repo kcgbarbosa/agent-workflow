@@ -1,18 +1,19 @@
 // A run turns each ticket of the frontier into one pull request. A ticket is a fixed list of steps: build,
 // push, pull request, wait, merge. The gate on GitHub checks the work, so the loop runs no gate, no review,
-// no landing, and no Epic branch of its own. A red gate resumes the agent as a fix attempt, a green gate with
-// blocking review findings resumes it once to answer them, and a ticket whose blocker has an open pull request
-// stacks on it. A restart starts each ticket at its first step. Only the dispatcher completes an Epic. A worker,
+// no landing, and no Epic branch of its own. A red gate resumes the agent as a fix attempt, with the failed
+// jobs' logs and the fuzz findings, and a ticket whose blocker has an open pull request stacks on it. A worker
+// labels its pull request with the blast level, and hands back a red one as a draft and a yellow one for its
+// hold. A restart starts each ticket at its first step. Only the dispatcher completes an Epic. A worker,
 // `loop run-ticket`, builds one ticket in its own folder, `tickets/<KEY>/`, from the main branch, and ends
 // merged, handed back, or stuck.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 import { ask, type Meter, runSetup, type Session } from "./agent.ts";
 import { mdLinks, specLineOf, specLinks } from "./archive.ts";
 import { DONE } from "./epic.ts";
-import type { Config } from "./config.ts";
+import { type Config, type Level, LEVELS } from "./config.ts";
 import { git, gitOk, originUrl, slug } from "./git.ts";
 import * as github from "./github.ts";
 import { endAll, run } from "./spawn.ts";
@@ -102,6 +103,41 @@ function withTicket(body: string, text: string): string {
   const section = `## Ticket\n\n${text.trim()}\n`;
   const at = body.search(/^## Ticket$/m);
   return at < 0 ? `${body.trimEnd()}${body.trim() ? "\n\n" : ""}${section}` : body.slice(0, at) + section;
+}
+
+/** The label that keeps a yellow pull request from merging after its hold. */
+export const HOLD_LABEL = "hold";
+
+const HOLD_LINE = /^Hold until (\S+)$/m;
+
+/** The time of the `Hold until <time>` line of a pull request body, or null when it has none. */
+export function holdOf(body: string): Date | null {
+  const at = HOLD_LINE.exec(body)?.[1];
+  const time = at ? new Date(at) : null;
+  return time && !Number.isNaN(time.getTime()) ? time : null;
+}
+
+/** The body with its `Hold until` line in its `## Loop` section, which sits before the `## Ticket` section. */
+function withHold(body: string, until: string): string {
+  const line = `Hold until ${until}`;
+  if (HOLD_LINE.test(body)) return body.replace(HOLD_LINE, line);
+  if (/^## Loop$/m.test(body)) return body.replace(/^## Loop\n\n?/m, `## Loop\n\n${line}\n`);
+  const section = `## Loop\n\n${line}\n\n`;
+  const at = body.search(/^## Ticket$/m);
+  return at < 0 ? `${body.trimEnd()}\n\n${section}` : body.slice(0, at) + section + body.slice(at);
+}
+
+/** The higher of two blast levels. */
+function higher(a: Level, b: Level): Level {
+  return LEVELS.indexOf(a) >= LEVELS.indexOf(b) ? a : b;
+}
+
+/** The highest level of the `blast:<level>` labels of a pull request, green when it has none. */
+function labelled(pr: github.PullRequest): Level {
+  return (pr.labels ?? []).reduce<Level>((level, { name }) => {
+    const found = LEVELS.find((each) => name === `blast:${each}`);
+    return found ? higher(level, found) : level;
+  }, "green");
 }
 
 /** The checks that make the gate red. */
@@ -396,8 +432,8 @@ export class Run {
     let prompt = `/implement ${join(runDir, "ticket.md")}`;
     let url: string | null = null;
     let autoMerge = false;
-    // The review's blocking findings get one response pass in a run, so they never keep a ticket from merging.
-    let answered = false;
+    // The blast level only rises: a restart starts from the pull request's label.
+    let level: Level = open ? labelled(open) : "green";
     let red = "";
     let failed: github.Check[] = [];
     for (let attempt = 1; ; attempt++) {
@@ -427,7 +463,7 @@ export class Run {
         if (session.result !== "done") {
           const result = session.result === "blocked" ? "blocked" : "fail";
           this.log.write(key, "build", result, { commit, session: session.session, detail: session.detail });
-          if (session.result === "usage-limit" && this.worker) return this.handBack(key, session.detail);
+          if (session.result === "usage-limit" && this.worker) return this.handBack(key, "usage-limit", session.detail);
           return this.end(key, "build", result, session.detail, url);
         }
         if (attempt === 1 && !(await git(worktree, "rev-list", "--count", `origin/${base}..HEAD`)).match(/^[1-9]/)) {
@@ -453,31 +489,53 @@ export class Run {
           }
         }
 
-        // Pull request, with auto-merge off, so a green gate does not merge it before the review is answered. A
-        // stacked one targets its blocker's branch, and GitHub never merges it there.
-        if (url === null) {
+        // Blast level: the highest of the globs that the changed files match, the agent's, and the level before.
+        const was = level;
+        level = await this.blast(key, worktree, base, level, session.output?.blast);
+
+        // Pull request, with auto-merge off, so a yellow one does not merge before its hold. A red one opens as a
+        // draft. A stacked one targets its blocker's branch, and GitHub never merges it there.
+        if (url !== null) {
+          await this.label(key, url, level);
+          if (level === "red" && was !== "red" && this.worker) {
+            try {
+              await github.toDraft(repo, url);
+            } catch (error) {
+              this.log.write(key, "draft", "fail", { pr: url, detail: (error as Error).message });
+              return this.end(key, "draft", "fail", (error as Error).message, url);
+            }
+            this.log.write(key, "draft", "ok", { pr: url, detail: "The blast level rose to red." });
+            return this.handBack(key, "red", "The blast level rose to red, so the pull request is a draft until the owner marks it ready.");
+          }
+        } else {
+          const draft = level === "red" && this.worker;
           try {
-            url = await this.pullRequest(ticket, branch, runDir, base, session.output?.reason ?? "");
+            url = await this.pullRequest(ticket, branch, runDir, base, session.output?.reason ?? "", draft);
           } catch (error) {
             this.log.write(key, "pr", "fail", { commit, detail: (error as Error).message });
             return this.end(key, "pr", "fail", (error as Error).message, url);
           }
           const onMain = (await github.view(repo, url)).baseRefName === main;
-          const detail = onMain
-            ? "Auto-merge turns on once the checks are green and the review is answered."
-            : `It stacks on ${base}, so auto-merge waits until it targets ${main}.`;
+          const detail = draft
+            ? "The blast level is red, so it opens as a draft and merges once the owner marks it ready."
+            : !onMain
+              ? `It stacks on ${base}, so auto-merge waits until it targets ${main}.`
+              : level === "yellow"
+                ? `The blast level is yellow, so auto-merge turns on ${this.config.blast.holdMinutes} minutes after the first green.`
+                : "Auto-merge turns on once the checks are green.";
           // An open question of the agent goes in the log, not in the body, where it would read as a blocker.
           const decisions = session.output?.decisions ?? [];
           this.log.write(key, "pr", "open", { commit, pr: url, auto_merge: autoMerge, detail, ...(decisions.length ? { decisions } : {}) });
           this.open.set(key, { url, branch });
           this.wake();
           await this.status(key, this.config.inReview);
+          await this.label(key, url, level);
+          if (draft) return this.handBack(key, "red", "The blast level is red, so the pull request waits as a draft until the owner marks it ready.");
         }
       }
 
-      // Wait. On the first green, a stacked pull request waits for its base to merge, and the agent answers
-      // the review's blocking findings once, which can push a commit that the gate checks again. Then auto-merge
-      // turns on and the loop waits on the checks again, since a required check may not have reported yet, so
+      // Wait. On the first green, a stacked pull request waits for its base to merge, and a yellow one hands
+      // back until its hold is over. Then auto-merge turns on and the loop waits on the checks again, since a required check may not have reported yet, so
       // a check that turns red still gets a fix attempt. When auto-merge does not turn on, the loop merges on green.
       let checks: Awaited<ReturnType<Run["wait"]>>;
       for (;;) {
@@ -494,15 +552,15 @@ export class Run {
           this.log.write(key, "base", result, { pr: url, detail: result === "main" ? `${stack.key} merged.` : `${stack.key} did not merge.` });
           if (result !== "main") return this.end(key, "base", result, `${stack.key} did not merge.`, url);
         }
-        if (!answered) {
-          answered = true;
-          const pushed = await this.respond(key, url, branch, worktree, runDir, slot, commit);
-          if (pushed === "stopped") return this.end(key, "push", "fail", "The push of the response to the review failed.", url);
-          if (pushed) {
-            commit = pushed;
-            rerun = new Set();
-            continue;
+        if (level === "yellow" && this.worker) {
+          let held: string | null;
+          try {
+            held = await this.hold(key, url, runDir);
+          } catch (error) {
+            this.log.write(key, "hold", "fail", { pr: url, detail: (error as Error).message });
+            return this.end(key, "hold", "fail", (error as Error).message, url);
           }
+          if (held) return this.handBack(key, "hold", held);
         }
         autoMerge = await this.turnOnAutoMerge(key, url);
         // A pull request whose required checks have all passed merges as auto-merge turns on.
@@ -512,7 +570,7 @@ export class Run {
       if (checks.result !== "red" || checks.closed) return this.end(key, "wait", checks.closed ? "closed" : checks.result, checks.detail, url);
       red = checks.detail;
       failed = checks.checks;
-      prompt = checks.conflict ? conflictPrompt(url, checks.base) : await this.fixPrompt(url, checks.checks);
+      prompt = checks.conflict ? conflictPrompt(url, checks.base) : await this.fixPrompt(url, checks.checks, commit);
     }
 
     // Merge
@@ -688,8 +746,8 @@ export class Run {
     return rerun;
   }
 
-  /** One message with the end of each failed job's log and the review's blocking findings. */
-  private async fixPrompt(url: string, checks: github.Check[]): Promise<string> {
+  /** One message with the end of each failed job's log and the fuzz findings at the head. */
+  private async fixPrompt(url: string, checks: github.Check[], head: string): Promise<string> {
     const repo = this.config.repo;
     let text = `The merge gate is red on ${url}. Fix the cause and commit the fix. Do not push: the loop pushes, and the gate runs again.\n`;
     for (const check of redChecks(checks)) {
@@ -702,58 +760,12 @@ export class Run {
       }
     }
     try {
-      const findings = await github.blockingFindings(repo, Number(url.split("/").at(-1)));
-      if (findings.length) text += `\n## The review's blocking findings\n\n${listed(findings)}`;
+      const findings = await github.fuzzFindings(repo, Number(url.split("/").at(-1)), head);
+      if (findings) text += `\n## The fuzz findings\n\nEach new finding is a reproduction that fails on the head. Fix the cause; a pre-existing one fails nothing.\n\n${findings}\n`;
     } catch (error) {
-      text += `\nThe loop could not read the review: ${(error as Error).message}\n`;
+      text += `\nThe loop could not read the fuzz findings: ${(error as Error).message}\n`;
     }
     return text;
-  }
-
-  /**
-   * Resumes the session once with the blocking findings of the gate's review at the head, if any. Returns the
-   * commit it pushed, null when it pushed none, or "stopped" when the push failed. A response that fails or
-   * ends with no commit is no failure: the ticket goes on to merge.
-   */
-  private async respond(key: string, url: string, branch: string, worktree: string, runDir: string, slot: number, commit: string): Promise<string | null | "stopped"> {
-    let findings: github.Finding[];
-    try {
-      findings = await github.blockingFindings(this.config.repo, Number(url.split("/").at(-1)), commit);
-    } catch (error) {
-      this.log.write(key, "respond", "fail", { commit, pr: url, detail: `The loop could not read the review: ${(error as Error).message}` });
-      return null;
-    }
-    if (!findings.length) return null;
-    this.log.write(key, "respond", "started", { commit, pr: url, detail: `${findings.length} blocking findings.` });
-    const prompt =
-      `The merge gate is green on ${url}, and the gate's review has blocking findings. Answer each finding once: ` +
-      `fix it and commit, or reply on the pull request with \`gh pr comment ${url} --body ...\` giving the reason it is not a fault. ` +
-      "Do not push: the loop pushes, waits for the gate, and merges.\n\n## The review's blocking findings\n\n" +
-      listed(findings);
-    let session: Session;
-    try {
-      session = await this.agent(key, prompt, worktree, runDir, slot);
-    } catch (error) {
-      if (!(error instanceof PortsTaken)) throw error;
-      this.log.write(key, "respond", "fail", { commit, pr: url, detail: error.message });
-      return null;
-    }
-    const head = await git(worktree, "rev-parse", "HEAD");
-    if (session.result !== "done" || head === commit) {
-      const result = session.result === "done" ? "pass" : session.result === "blocked" ? "blocked" : "fail";
-      const detail = session.result === "done" ? "The response returned done with no new commit." : session.detail;
-      this.log.write(key, "respond", result, { commit, session: session.session, pr: url, detail });
-      return null;
-    }
-    this.log.write(key, "respond", "pass", { commit: head, session: session.session, pr: url, detail: session.detail });
-    try {
-      await git(worktree, "push", "--quiet", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`);
-      this.log.write(key, "push", "ok", { commit: head });
-    } catch (error) {
-      this.log.write(key, "push", "fail", { commit: head, detail: (error as Error).message });
-      return "stopped";
-    }
-    return head;
   }
 
   /** How a ticket ends without a merge: a worker's ticket is stuck, and a ticket of an Epic run stops. */
@@ -762,9 +774,66 @@ export class Run {
   }
 
   /** A worker gives its ticket back with no flag, and the ticket keeps its status, so it starts again later. */
-  private async handBack(key: string, reason: string): Promise<Finished> {
-    this.log.write(key, "hand-back", "usage-limit", { detail: reason });
+  private async handBack(key: string, why: "usage-limit" | "red" | "hold", reason: string): Promise<Finished> {
+    this.log.write(key, "hand-back", why, { detail: reason });
     return "handed-back";
+  }
+
+  /**
+   * The blast level after a build: the highest of the level before, the level of the `[blast]` globs that a
+   * changed file of the branch matches, and the agent's. A lower value never lowers it.
+   */
+  private async blast(key: string, worktree: string, base: string, before: Level, agent: Level | undefined): Promise<Level> {
+    const changed = (await git(worktree, "diff", "--name-only", `origin/${base}...HEAD`)).split("\n").filter(Boolean);
+    const matches = (globs: string[]) => changed.find((file) => globs.some((glob) => matchesGlob(file, glob)));
+    const redFile = matches(this.config.blast.red);
+    const yellowFile = redFile ? undefined : matches(this.config.blast.yellow);
+    const floor: Level = redFile ? "red" : yellowFile ? "yellow" : "green";
+    const level = higher(higher(before, floor), agent && LEVELS.includes(agent) ? agent : "green");
+    const why = [
+      redFile || yellowFile ? `${redFile ?? yellowFile} matches a ${floor} glob` : "no changed file matches a glob",
+      `the agent gave ${agent ?? "none"}`,
+      ...(before !== "green" ? [`it was ${before}`] : []),
+    ];
+    this.log.write(key, "blast", level, { detail: `${why.join(", ")}.` });
+    return level;
+  }
+
+  /** Labels the pull request `blast:<level>`. A failed label is logged and changes nothing else. */
+  private async label(key: string, url: string, level: Level): Promise<void> {
+    const name = `blast:${level}`;
+    try {
+      const labels = ((await github.view(this.config.repo, url)).labels ?? []).map((each) => each.name);
+      if (labels.includes(name) && !labels.some((each) => each.startsWith("blast:") && each !== name)) return;
+      await github.label(this.config.repo, url, name, labels.filter((each) => each.startsWith("blast:") && each !== name));
+      this.log.write(key, "label", "ok", { pr: url, detail: name });
+    } catch (error) {
+      this.log.write(key, "label", "fail", { pr: url, detail: (error as Error).message });
+    }
+  }
+
+  /**
+   * At a yellow pull request's first green: writes `Hold until <time>` in its body the first time, and gives the
+   * reason to hand the ticket back while the hold runs, the `hold` label is on, or it is a draft. Null once it may merge.
+   */
+  private async hold(key: string, url: string, runDir: string): Promise<string | null> {
+    const repo = this.config.repo;
+    const body = await github.body(repo, url);
+    const until = holdOf(body);
+    if (until === null) {
+      const at = new Date(Date.now() + this.config.blast.holdMinutes * 60_000).toISOString().replace(/\.\d+Z$/, "Z");
+      const bodyFile = join(runDir, "pr-body.md");
+      writeFileSync(bodyFile, withHold(body, at));
+      await github.editBody(repo, url, bodyFile);
+      this.log.write(key, "hold", "set", { pr: url, detail: `Hold until ${at}`, until: at });
+      return `The blast level is yellow, so auto-merge waits until ${at}.`;
+    }
+    if (until.getTime() > Date.now()) return `The hold runs until ${until.toISOString()}.`;
+    const pr = await github.view(repo, url);
+    if (pr.labels?.some((each) => each.name === HOLD_LABEL)) return `The \`${HOLD_LABEL}\` label is on the pull request.`;
+    if (pr.isDraft) return "The pull request is a draft.";
+    this.log.write(key, "hold", "over", { pr: url, detail: `The hold ended at ${until.toISOString()}.` });
+    return null;
   }
 
   /**
@@ -910,9 +979,9 @@ export class Run {
 
   /**
    * The open pull request of the branch, or a new one whose title becomes the squash commit on main. The body
-   * holds the ticket text and names the spec, which the gate's review reads the work against.
+   * holds the ticket text and names the spec, which the gate's fuzz job reads as the intent.
    */
-  private async pullRequest(ticket: Ticket, branch: string, runDir: string, base: string, reason: string): Promise<string> {
+  private async pullRequest(ticket: Ticket, branch: string, runDir: string, base: string, reason: string, draft = false): Promise<string> {
     const repo = this.config.repo;
     const open = (await github.pullRequestsOf(repo, ticket.key, branch, branchPrefixes(ticket.key))).find((pr) => pr.state === "OPEN");
     if (open) return open.url;
@@ -923,12 +992,12 @@ export class Run {
     let body = `[${ticket.key}](${browse}): ${ticket.summary}.${spec ? ` ${spec}` : ""}\n\n`;
     if (reason) body += `${reason}\n\n`;
     writeFileSync(bodyFile, withTicket(body, ticket.text));
-    return github.create(repo, branch, base, `${typeOf(ticket)}(${ticket.key}): ${ticket.summary}`, bodyFile);
+    return github.create(repo, branch, base, `${typeOf(ticket)}(${ticket.key}): ${ticket.summary}`, bodyFile, draft);
   }
 
   /**
    * On a restart, replaces the `## Ticket` section of the open pull request's body with the current ticket text,
-   * so the gate's review reads the work against the ticket as it is now. The rest of the body stays.
+   * so the gate's fuzz job reads the ticket as it is now. The rest of the body stays.
    */
   private async freshBody(ticket: Ticket, branch: string, runDir: string): Promise<void> {
     const repo = this.config.repo;
@@ -1145,11 +1214,6 @@ function conflictPrompt(url: string, base = "main"): string {
     `The pull request ${url} conflicts with ${base}. Rebase the branch on origin/${base}, resolve the conflicts, ` +
     "and run the tests that cover the change. Do not push: the loop pushes, and the gate runs again."
   );
-}
-
-/** The findings as a Markdown list, each with its path and line. */
-function listed(findings: github.Finding[]): string {
-  return findings.map((item) => `- \`${item.path}${item.line ? `:${item.line}` : ""}\` ${item.sentence}`).join("\n") + "\n";
 }
 
 function nextLog(runDir: string): string {

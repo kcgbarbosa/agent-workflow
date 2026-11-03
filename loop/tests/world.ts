@@ -39,6 +39,7 @@ export type PullRequest = {
   checks: { name: string; bucket: string; state: string }[];
   pushes?: number;
   comments?: string[];
+  labels?: { name: string }[];
 };
 
 function which(tool: string): string {
@@ -185,10 +186,11 @@ ${extra}`;
     writeFileSync(join(this.fakes, "verdicts.json"), JSON.stringify(verdicts));
   }
 
-  /** The findings of the gate's review of each new pull request, by ticket key. */
-  reviews(reviews: Record<string, { path: string; line: number; severity: "blocking" | "minor"; sentence: string; outside?: boolean }[]>): void {
-    writeFileSync(join(this.fakes, "reviews.json"), JSON.stringify(reviews));
+  /** The findings text of the gate's fuzz comment at each push of the ticket's pull request. */
+  fuzz(findings: Record<string, string[]>): void {
+    writeFileSync(join(this.fakes, "fuzz.json"), JSON.stringify(findings));
   }
+
 
   /** The log of each failed job. */
   jobLog(text: string): void {
@@ -377,6 +379,17 @@ ${extra}`;
           if (index >= 0) pr.checks[index] = check;
           else pr.checks.push(check);
         }
+      }
+    });
+  }
+
+  /** Puts the label on the ticket's pull request, or takes it off. */
+  label(key: string, name: string, on: boolean): void {
+    this.github((state) => {
+      for (const pr of state.prs) {
+        if (!pr.headRefName.includes(`/${key}-`)) continue;
+        pr.labels = (pr.labels ?? []).filter((label: { name: string }) => label.name !== name);
+        if (on) pr.labels.push({ name });
       }
     });
   }

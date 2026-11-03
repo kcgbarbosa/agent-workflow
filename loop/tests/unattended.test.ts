@@ -15,17 +15,17 @@ afterEach(async () => {
   await world.close();
 });
 
-test("a red gate resumes the agent with the failing job's log tail and the review's blocking findings", async () => {
+const FINDING = [
+  "#### 1. A wrong password logs in",
+  "`npx vitest run tests/fuzz-login.test.ts`",
+  "```text\nFAIL tests/fuzz-login.test.ts > a wrong password is refused\nexpected 401, got 200\n```",
+].join("\n\n");
+
+test("a red gate resumes the agent with the failing job's log tail and the fuzz findings at its head", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": ["fail", "pass"] });
-  world.jobLog("check\tRun make check\tFAIL tests/login.test.ts\ncheck\tRun make check\texpected 200, got 500\n");
-  world.reviews({
-    "DEMO-2": [
-      { path: "src/login.ts", line: 12, severity: "blocking", sentence: "The password is logged in plain text." },
-      { path: "src/session.ts", line: 3, severity: "blocking", sentence: "The session never expires.", outside: true },
-      { path: "src/login.ts", line: 20, severity: "minor", sentence: "The name could be clearer." },
-    ],
-  });
+  world.jobLog("fuzz\tRun fuzz\t1 new finding survived\ncheck\tRun make check\texpected 200, got 500\n");
+  world.fuzz({ "DEMO-2": [FINDING] });
   world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { write: { "login.txt": "fixed\n" }, commit: "fix(DEMO-2): fix the login" }] });
 
   const ran = await world.loop("run", EPIC);
@@ -37,9 +37,9 @@ test("a red gate resumes the agent with the failing job's log tail and the revie
   expect(fix!.prompt).toContain(world.prs()[0]!.url);
   expect(fix!.prompt).toContain("## gate / check");
   expect(fix!.prompt).toContain("expected 200, got 500");
-  expect(fix!.prompt).toContain("`src/login.ts:12` The password is logged in plain text.");
-  expect(fix!.prompt).toContain("`src/session.ts:3` The session never expires.");
-  expect(fix!.prompt).not.toContain("The name could be clearer.");
+  expect(fix!.prompt).toContain("## The fuzz findings");
+  expect(fix!.prompt).toContain(FINDING);
+  expect(fix!.prompt).not.toContain("<!-- gate fuzz");
   expect(build!.prompt).toMatch(/^\/implement /);
   expect(world.decisions().filter((line) => line.step === "build" && line.result === "started").map((line) => line.attempt)).toEqual([1, 2]);
   expect(world.steps().filter((step) => step.startsWith("DEMO-2 wait"))).toEqual(["DEMO-2 wait red", "DEMO-2 wait green"]);
@@ -48,69 +48,10 @@ test("a red gate resumes the agent with the failing job's log tail and the revie
   expect(world.git(world.origin, "show", "main:login.txt")).toBe("fixed");
 });
 
-const FINDINGS = [
-  { path: "src/login.ts", line: 12, severity: "blocking" as const, sentence: "The password is logged in plain text." },
-  { path: "src/session.ts", line: 3, severity: "blocking" as const, sentence: "The session never expires.", outside: true },
-  { path: "src/login.ts", line: 20, severity: "minor" as const, sentence: "The name could be clearer." },
-];
-
-test("a green gate with blocking findings resumes the agent once to answer them, then the fix merges", async () => {
+test("a green gate with fuzz findings merges with no further agent run", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });
-  world.reviews({ "DEMO-2": FINDINGS });
-  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { write: { "login.txt": "fixed\n" }, commit: "fix(DEMO-2): answer the review" }] });
-
-  const ran = await world.loop("run", EPIC);
-
-  expect(ran.code, ran.stderr).toBe(0);
-  const [build, response] = world.calls();
-  expect(world.calls()).toHaveLength(2);
-  expect(response!.resume).toBe(world.decisions().find((line) => line.step === "agent")!.session);
-  expect(response!.prompt).toContain(`gh pr comment ${world.prs()[0]!.url} --body`);
-  expect(response!.prompt).toContain("Do not push");
-  expect(response!.prompt).toContain("`src/login.ts:12` The password is logged in plain text.");
-  expect(response!.prompt).toContain("`src/session.ts:3` The session never expires.");
-  expect(response!.prompt).not.toContain("The name could be clearer.");
-  expect(build!.prompt).toMatch(/^\/implement /);
-  expect(world.steps().filter((step) => /^DEMO-2 (build|respond|push|wait|merge)/.test(step))).toEqual([
-    "DEMO-2 build started",
-    "DEMO-2 build pass",
-    "DEMO-2 push ok",
-    "DEMO-2 wait green",
-    "DEMO-2 respond started",
-    "DEMO-2 respond pass",
-    "DEMO-2 push ok",
-    "DEMO-2 wait green",
-    "DEMO-2 merge merged",
-  ]);
-  expect(world.prs()[0]).toMatchObject({ state: "MERGED", pushes: 2 });
-  expect(world.git(world.origin, "show", "main:login.txt")).toBe("fixed");
-});
-
-test("a response that only replies on the pull request merges, and the ticket is not stuck", async () => {
-  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
-  world.verdicts({ "DEMO-2": "pass" });
-  world.reviews({ "DEMO-2": FINDINGS });
-  const url = "https://github.com/kcgbarbosa/demo/pull/100";
-  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { gh: ["pr", "comment", url, "--body", "The log line holds no password."] }] });
-
-  const ran = await world.loop("run", EPIC);
-
-  expect(ran.code, ran.stderr).toBe(0);
-  expect(world.calls()).toHaveLength(2);
-  expect(world.prs()[0]).toMatchObject({ url, state: "MERGED", pushes: 1, comments: ["The log line holds no password."] });
-  expect(world.decisions().find((line) => line.step === "respond" && line.result !== "started")).toMatchObject({
-    result: "pass",
-    detail: "The response returned done with no new commit.",
-  });
-  expect(world.jira.issues.get("DEMO-2")!.flagged).toBe(false);
-  expect(world.steps()).not.toContain("DEMO-2 stuck started");
-});
-
-test("a green gate with no blocking findings merges with no response", async () => {
-  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
-  world.verdicts({ "DEMO-2": "pass" });
-  world.reviews({ "DEMO-2": [FINDINGS[2]!] });
+  world.fuzz({ "DEMO-2": [FINDING] });
 
   const ran = await world.loop("run", EPIC);
 
@@ -120,53 +61,23 @@ test("a green gate with no blocking findings merges with no response", async () 
   expect(world.prs()[0]!.state).toBe("MERGED");
 });
 
-test("a response pass is no fix attempt, and a red gate after it gets one", async () => {
-  world.writeConfig("[limits]\nfix_attempts = 1\n");
+test("a required check that has not reported keeps the loop waiting until it does", async () => {
+  world.required(["gate / check", "gate / fuzz"]);
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
-  world.verdicts({ "DEMO-2": ["pass", "fail", "pass"] });
-  world.reviews({ "DEMO-2": FINDINGS });
-  world.plan({
-    "DEMO-2": [
-      { write: { "login.txt": "login\n" } },
-      { write: { "login.txt": "answered\n" } },
-      { write: { "login.txt": "fixed\n" } },
-    ],
-  });
-
-  const ran = await world.loop("run", EPIC);
-
-  expect(ran.code, ran.stderr).toBe(0);
-  expect(world.calls()).toHaveLength(3);
-  expect(world.calls()[2]!.prompt).toContain("The merge gate is red");
-  expect(world.decisions().filter((line) => line.step === "build" && line.result === "started").map((line) => line.attempt)).toEqual([1, 2]);
-  expect(world.steps().filter((step) => step === "DEMO-2 respond started")).toHaveLength(1);
-  expect(world.prs()[0]!.state).toBe("MERGED");
-  expect(world.git(world.origin, "show", "main:login.txt")).toBe("fixed");
-});
-
-test("a required check that has not reported keeps the loop waiting, and the review it posts is answered before the merge", async () => {
-  world.required(["gate / check", "gate / review"]);
-  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
-  world.reviews({ "DEMO-2": FINDINGS });
-  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, {}] });
 
   const running = world.loop("run", EPIC);
   await world.until(() => world.steps().includes("DEMO-2 pr open"), "the pull request");
   world.setChecks("DEMO-2", { "gate / check": "pass" });
   const polls = world.ghCalls().length;
   await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
-  expect(world.steps().some((step) => /^DEMO-2 (wait|respond)/.test(step))).toBe(false);
+  expect(world.steps().some((step) => /^DEMO-2 wait/.test(step))).toBe(false);
   expect(world.prs()[0]!.state).toBe("OPEN");
-  world.setChecks("DEMO-2", { "gate / review": "pass" });
+  world.setChecks("DEMO-2", { "gate / fuzz": "pass" });
   const ran = await running;
 
   expect(ran.code, ran.stderr).toBe(0);
-  expect(world.decisions().find((line) => line.step === "required-checks")).toMatchObject({ result: "ok", detail: "gate / check, gate / review" });
-  expect(world.calls()).toHaveLength(2);
-  expect(world.calls()[1]!.prompt).toContain("`src/login.ts:12` The password is logged in plain text.");
-  const steps = world.steps();
-  expect(steps.indexOf("DEMO-2 wait green")).toBeLessThan(steps.indexOf("DEMO-2 respond started"));
-  expect(steps.indexOf("DEMO-2 respond pass")).toBeLessThan(steps.indexOf("DEMO-2 merge merged"));
+  expect(world.decisions().find((line) => line.step === "required-checks")).toMatchObject({ result: "ok", detail: "gate / check, gate / fuzz" });
+  expect(world.calls()).toHaveLength(1);
   expect(world.prs()[0]!.state).toBe("MERGED");
 });
 
@@ -257,7 +168,7 @@ test.each([
 
 test("a stacked ticket waits after the retarget for every required check, and a red one gets a fix attempt", async () => {
   world.writeConfig("[limits]\nparallel = 2\n");
-  world.required(["gate / check", "gate / review"]);
+  world.required(["gate / check", "gate / fuzz"]);
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.jira.add("DEMO-3", "Add the logout button", { parent: EPIC, blockers: ["DEMO-2"] });
   world.plan({ "DEMO-3": [{ write: { "logout.txt": "logout\n" } }, { write: { "logout.txt": "fixed\n" }, commit: "fix(DEMO-3): fix the logout" }] });
@@ -267,16 +178,16 @@ test("a stacked ticket waits after the retarget for every required check, and a 
   await world.until(() => world.steps().includes("DEMO-3 pr open"), "the stacked pull request");
   expect(demo3()!.autoMerge).toBeNull();
   // The base merges and the retarget happens before the stacked pull request's first green.
-  world.setChecks("DEMO-2", { "gate / check": "pass", "gate / review": "pass" });
+  world.setChecks("DEMO-2", { "gate / check": "pass", "gate / fuzz": "pass" });
   await world.until(() => demo3()!.baseRefName === "main", "the retarget to main");
   world.setCheck("DEMO-3", "pass");
-  // The review has not reported, so the gate is not green yet, and it then reports red.
+  // The fuzz job has not reported, so the gate is not green yet, and it then reports red.
   const polls = world.ghCalls().length;
   await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
   expect(world.steps().some((step) => step.startsWith("DEMO-3 wait"))).toBe(false);
-  world.setChecks("DEMO-3", { "gate / review": "fail" });
+  world.setChecks("DEMO-3", { "gate / fuzz": "fail" });
   await world.until(() => (demo3() as { pushes?: number }).pushes === 2, "the fix attempt's push");
-  world.setChecks("DEMO-3", { "gate / check": "pass", "gate / review": "pass" });
+  world.setChecks("DEMO-3", { "gate / check": "pass", "gate / fuzz": "pass" });
   const ran = await running;
 
   expect(ran.code, ran.stderr).toBe(0);
