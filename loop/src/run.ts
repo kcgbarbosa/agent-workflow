@@ -127,6 +127,14 @@ function withHold(body: string, until: string): string {
   return at < 0 ? `${body.trimEnd()}\n\n${section}` : body.slice(0, at) + section + body.slice(at);
 }
 
+/**
+ * Whether the path matches the glob, a dotfile included. `matchesGlob`'s `*` never matches a leading dot, so the
+ * path is also tried with each name's leading dots taken off. That may match more, which only raises a level.
+ */
+function globMatch(path: string, glob: string): boolean {
+  return matchesGlob(path, glob) || matchesGlob(path.replace(/(^|\/)\.+/g, "$1"), glob);
+}
+
 /** The higher of two blast levels. */
 function higher(a: Level, b: Level): Level {
   return LEVELS.indexOf(a) >= LEVELS.indexOf(b) ? a : b;
@@ -432,8 +440,8 @@ export class Run {
     let prompt = `/implement ${join(runDir, "ticket.md")}`;
     let url: string | null = null;
     let autoMerge = false;
-    // The blast level only rises: a restart starts from the pull request's label.
-    let level: Level = open ? labelled(open) : "green";
+    // The blast level only rises.
+    let level: Level = "green";
     let red = "";
     let failed: github.Check[] = [];
     for (let attempt = 1; ; attempt++) {
@@ -447,6 +455,14 @@ export class Run {
         url = open.url;
         commit = open.headRefOid;
         this.log.write(key, "build", "skipped", { commit, pr: url, detail: "Its pull request is open, so the ticket starts again at the wait." });
+        // A restart takes the level of the label, the log, and the globs, since a worker that died between the
+        // pull request and its label or its draft left only some of them.
+        level = await this.blast(key, worktree, base, higher(labelled(open), this.logged(key)), undefined);
+        // A red pull request that is not a draft merges only when the owner marked it ready after the loop drafted it.
+        if (level === "red" && this.worker && !open.isDraft && !this.drafted(key)) {
+          return this.draft(key, url, "The blast level is red, so the pull request is a draft until the owner marks it ready.");
+        }
+        await this.label(key, url, level);
       } else {
         // Build, or a fix attempt that resumes the session with what the gate found
         const before = await git(worktree, "rev-parse", "HEAD");
@@ -473,12 +489,28 @@ export class Run {
         }
         // A fix attempt with no new commit may find the red was a flake. Its failed checks run again on the same
         // head, and the gate's result counts: green merges, and red again ends the attempt.
-        if (attempt > 1 && commit === before) {
-          this.log.write(key, "build", "pass", { commit, session: session.session, detail: "The fix attempt returned done with no new commit." });
+        const same = attempt > 1 && commit === before;
+        const detail = same ? "The fix attempt returned done with no new commit." : session.detail;
+        this.log.write(key, "build", "pass", { commit, session: session.session, detail });
+
+        // Blast level: the highest of the globs that the changed files match, the agent's, and the level before.
+        // A level that rises turns auto-merge off before the push, so the new commit waits for its hold or its owner.
+        const was: Level = level;
+        level = await this.blast(key, worktree, base, level, session.output?.blast);
+        if (url !== null && autoMerge && level !== was) {
+          try {
+            await github.disableAutoMerge(repo, url);
+          } catch (error) {
+            this.log.write(key, "auto-merge", "fail", { pr: url, detail: (error as Error).message });
+            return this.end(key, "auto-merge", "fail", (error as Error).message, url);
+          }
+          autoMerge = false;
+          this.log.write(key, "auto-merge", "off", { pr: url, detail: `The blast level rose to ${level}.` });
+        }
+
+        if (same) {
           rerun = await this.rerun(key, url!, failed, commit);
         } else {
-          this.log.write(key, "build", "pass", { commit, session: session.session, detail: session.detail });
-
           // Push
           try {
             await git(worktree, "push", "--quiet", "--force-with-lease", "-u", "origin", `HEAD:refs/heads/${branch}`);
@@ -489,24 +521,13 @@ export class Run {
           }
         }
 
-        // Blast level: the highest of the globs that the changed files match, the agent's, and the level before.
-        const was = level;
-        level = await this.blast(key, worktree, base, level, session.output?.blast);
-
         // Pull request, with auto-merge off, so a yellow one does not merge before its hold. A red one opens as a
         // draft. A stacked one targets its blocker's branch, and GitHub never merges it there.
         if (url !== null) {
-          await this.label(key, url, level);
           if (level === "red" && was !== "red" && this.worker) {
-            try {
-              await github.toDraft(repo, url);
-            } catch (error) {
-              this.log.write(key, "draft", "fail", { pr: url, detail: (error as Error).message });
-              return this.end(key, "draft", "fail", (error as Error).message, url);
-            }
-            this.log.write(key, "draft", "ok", { pr: url, detail: "The blast level rose to red." });
-            return this.handBack(key, "red", "The blast level rose to red, so the pull request is a draft until the owner marks it ready.");
+            return this.draft(key, url, "The blast level rose to red, so the pull request is a draft until the owner marks it ready.");
           }
+          await this.label(key, url, level);
         } else {
           const draft = level === "red" && this.worker;
           try {
@@ -515,6 +536,7 @@ export class Run {
             this.log.write(key, "pr", "fail", { commit, detail: (error as Error).message });
             return this.end(key, "pr", "fail", (error as Error).message, url);
           }
+          if (draft) this.log.write(key, "draft", "ok", { pr: url, detail: "It opens as a draft." });
           const onMain = (await github.view(repo, url)).baseRefName === main;
           const detail = draft
             ? "The blast level is red, so it opens as a draft and merges once the owner marks it ready."
@@ -780,12 +802,42 @@ export class Run {
   }
 
   /**
+   * Makes the pull request a draft, labels it red, and hands the ticket back. The draft goes first, and its log
+   * line marks it done, since a red pull request that is not a draft and has that line was marked ready by the owner.
+   */
+  private async draft(key: string, url: string, reason: string): Promise<Finished> {
+    try {
+      await github.toDraft(this.config.repo, url);
+    } catch (error) {
+      this.log.write(key, "draft", "fail", { pr: url, detail: (error as Error).message });
+      return this.end(key, "draft", "fail", (error as Error).message, url);
+    }
+    this.log.write(key, "draft", "ok", { pr: url, detail: "The blast level is red." });
+    await this.label(key, url, "red");
+    return this.handBack(key, "red", reason);
+  }
+
+  /** Whether the loop made the ticket's pull request a draft. */
+  private drafted(key: string): boolean {
+    return this.log.lines().some((line) => line.ticket === key && line.step === "draft" && line.result === "ok");
+  }
+
+  /** The highest blast level that the log holds for the ticket, green when it holds none. */
+  private logged(key: string): Level {
+    return this.log
+      .lines()
+      .filter((line) => line.ticket === key && line.step === "blast")
+      .reduce<Level>((level, line) => (LEVELS.includes(line.result as Level) ? higher(level, line.result as Level) : level), "green");
+  }
+
+  /**
    * The blast level after a build: the highest of the level before, the level of the `[blast]` globs that a
    * changed file of the branch matches, and the agent's. A lower value never lowers it.
    */
   private async blast(key: string, worktree: string, base: string, before: Level, agent: Level | undefined): Promise<Level> {
-    const changed = (await git(worktree, "diff", "--name-only", `origin/${base}...HEAD`)).split("\n").filter(Boolean);
-    const matches = (globs: string[]) => changed.find((file) => globs.some((glob) => matchesGlob(file, glob)));
+    // With no rename detection, a file moved out from under a glob lists its old path too.
+    const changed = (await git(worktree, "diff", "--name-only", "--no-renames", `origin/${base}...HEAD`)).split("\n").filter(Boolean);
+    const matches = (globs: string[]) => changed.find((file) => globs.some((glob) => globMatch(file, glob)));
     const redFile = matches(this.config.blast.red);
     const yellowFile = redFile ? undefined : matches(this.config.blast.yellow);
     const floor: Level = redFile ? "red" : yellowFile ? "yellow" : "green";

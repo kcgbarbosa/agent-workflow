@@ -165,6 +165,47 @@ def test_setup_runs_first_and_the_adversaries_get_no_github_token(tmp_path: Path
     assert call["gh_token"] is None
 
 
+def test_a_reproduction_runs_with_no_token_and_cannot_post_to_the_pull_request(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    post = 'import json, subprocess\nsubprocess.run(["gh", "api", "-X", "POST", "repos/kc/app/pulls/7/reviews", "--input", "-"], input=json.dumps({"commit_id": "x", "event": "COMMENT", "body": "by the reproduction"}), text=True)\n'
+    log = 'import os\nopen(os.environ["TOKEN_LOG"], "a").write(repr([os.environ.get(k) for k in ("GH_TOKEN", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN")]) + "\\n")\n'
+    (pr.work / "test_token.py").write_text(log + post + "raise SystemExit(1)\n")
+    pr.reply(result(finding("test_token.py", "A break")))
+
+    run = pr.run(FUZZ, GITHUB_TOKEN="gh-token", TOKEN_LOG=str(tmp_path / "token.log"), **INPUTS)
+
+    assert run.returncode == 0, run.stderr
+    # Once on the head and once on the base.
+    assert (tmp_path / "token.log").read_text() == "[None, None, None]\n" * 2
+    assert "pre-existing" in body(pr)
+
+
+def test_the_head_rerun_drops_an_adversary_edit_left_in_the_checkout(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    # One adversary edits a.py and leaves the edit, and another's reproduction trips on it.
+    (pr.work / "a.py").write_text("one\ntwo\nthree\nBROKEN\n")
+    (pr.work / "test_broken.py").write_text('assert "BROKEN" not in open("a.py").read(), "BROKEN is in a.py"\n')
+    pr.reply(result(finding("test_broken.py", "Broken")))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stdout
+    assert ": 0 new, 0 pre-existing, 1 dropped." in body(pr)
+    assert (pr.work / "a.py").read_text() == "one\ntwo\nthree\n"
+
+
+def test_a_pytest_finding_with_a_numbered_temp_path_matches_on_the_base(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    (pr.work / "test_four.py").write_text('def test_four(tmp_path):\n    assert (tmp_path / "four").exists(), "four is missing"\n')
+    command = f"{sys.executable} -m pytest -q -p no:cacheprovider test_four.py"
+    pr.reply(result({**finding("test_four.py", "Four is missing"), "command": command}))
+
+    run = pr.run(FUZZ, PYTEST_DEBUG_TEMPROOT=str(tmp_path), **INPUTS)
+
+    assert run.returncode == 0, run.stdout
+    assert ": 0 new, 1 pre-existing, 0 dropped." in body(pr)
+
+
 def test_the_pull_request_cannot_turn_off_its_own_fuzz(tmp_path: Path) -> None:
     pr = fuzz_pr(tmp_path)
     pr.commit({"loop.toml": "[fuzz]\nenabled = false\n"})

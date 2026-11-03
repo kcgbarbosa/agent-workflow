@@ -47,6 +47,8 @@ TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Agent", "Skill", "Bash"]
 DENIED = ["Bash(gh:*)", "Bash(git push:*)"]
 # The longest one reproduction may run, on the head and on the base.
 RUN_SECONDS = 600
+GITHUB_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN")
+MODEL_TOKENS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 OUTPUT_LINES = 60
 REPRO_CHARS = 20000
 BODY_CHARS = 60000
@@ -128,7 +130,7 @@ def progress(event: dict) -> None:
 def run_claude(text: str, config: Settings) -> dict:
     claude = shutil.which("claude")
     command = [claude] if claude else ["npx", "-y", "@anthropic-ai/claude-code"]
-    env = {key: value for key, value in os.environ.items() if key not in ("GH_TOKEN", "GITHUB_TOKEN")}
+    env = {key: value for key, value in os.environ.items() if key not in GITHUB_TOKENS}
     # stderr goes to a file, so a full stderr pipe cannot stall the run while stdout streams.
     errors = tempfile.TemporaryFile("w+")
     process = subprocess.Popen(
@@ -190,17 +192,22 @@ def findings_of(output: dict) -> list[Finding]:
 
 
 def run(command: str) -> tuple[int, str]:
-    """Runs a reproduction's command from the repo root, and gives its exit code and its output."""
+    """Runs a reproduction's command from the repo root, and gives its exit code and its output. The command is the
+    adversaries' code, so it gets no token, as they get none."""
+    env = {key: value for key, value in os.environ.items() if key not in GITHUB_TOKENS + MODEL_TOKENS}
     try:
-        done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=RUN_SECONDS)
+        done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=RUN_SECONDS, env=env)
     except subprocess.TimeoutExpired as error:
         return 124, f"{error.stdout or ''}{error.stderr or ''}\nTimed out after {RUN_SECONDS} seconds."
     return done.returncode, done.stdout + done.stderr
 
 
 def normal(output: str) -> str:
-    """The output with what changes from run to run taken out: the checkout's path, durations, and spacing."""
+    """The output with what changes from run to run taken out: the checkout's path, numbered and random temp names,
+    durations, and spacing."""
     text = output.replace(os.getcwd(), "<repo>")
+    text = re.sub(r"\bpytest-\d+\b", "pytest-<n>", text)
+    text = re.sub(r"\btmp[a-z0-9_]{8}\b", "tmp<name>", text)
     text = re.sub(r"\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds)\b", "<time>", text)
     return " ".join(text.split())
 
@@ -212,15 +219,38 @@ def reproduction(path: str) -> Path | None:
     return file if file.is_relative_to(root) and file.is_file() else None
 
 
-def verify(findings: list[Finding]) -> tuple[list[Finding], list[str]]:
+def untracked() -> set[str]:
+    """The checkout's files that git neither tracks nor ignores."""
+    return set(git("ls-files", "--others", "--exclude-standard", "-z").split("\0")) - {""}
+
+
+def checkout(sha: str, findings: list[Finding], keep: set[str]) -> None:
+    """Puts the checkout at the commit, with no edit or new file of the adversaries left but the reproductions. The
+    untracked files of `keep`, which were there before the adversaries ran, stay."""
+    git("checkout", "-q", "-f", "--detach", sha)
+    for path in untracked() - keep:
+        Path(path).unlink(missing_ok=True)
+    for finding in findings:
+        file = Path(finding.reproduction)
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(finding.text)
+
+
+def verify(findings: list[Finding], head: str, keep: set[str]) -> tuple[list[Finding], list[str]]:
     """Reruns each reproduction on the head, and keeps the ones whose run fails again."""
-    kept, dropped = [], []
+    found, dropped = [], []
     for finding in findings:
         file = reproduction(finding.reproduction)
         if not file:
             dropped.append(f"{finding.title}: its reproduction `{finding.reproduction}` is not in the checkout.")
             continue
         finding.text = file.read_text(errors="replace")
+        found.append(finding)
+    if not found:
+        return [], dropped
+    checkout(head, found, keep)
+    kept = []
+    for finding in found:
         code, output = run(finding.command)
         if code == 0:
             dropped.append(f"{finding.title}: `{finding.command}` passed on the rerun.")
@@ -230,20 +260,17 @@ def verify(findings: list[Finding]) -> tuple[list[Finding], list[str]]:
     return kept, dropped
 
 
-def against_base(findings: list[Finding], base: str, head: str) -> None:
+def against_base(findings: list[Finding], base: str, head: str, keep: set[str]) -> None:
     """Runs each kept reproduction on the base. One that fails there with the head's output is pre-existing."""
     if not findings:
         return
-    git("checkout", "-q", "-f", "--detach", base)
+    checkout(base, findings, keep)
     try:
         for finding in findings:
-            file = Path(finding.reproduction)
-            file.parent.mkdir(parents=True, exist_ok=True)
-            file.write_text(finding.text)
             code, output = run(finding.command)
             finding.new = code == 0 or normal(output) != normal(finding.head_output)
     finally:
-        git("checkout", "-q", "-f", "--detach", head)
+        checkout(head, findings, keep)
 
 
 def fenced(text: str, language: str = "") -> str:
@@ -309,9 +336,10 @@ def main() -> int:
     pr_file = temp / "pull-request.md"
     pr_file.write_text(f"# {pr.get('title', '')}\n\n{pr.get('body') or ''}\n")
 
+    keep = untracked()
     output = run_claude(prompt(number, base, pr_file, config), config)
-    kept, dropped = verify(findings_of(output))
-    against_base(kept, base_sha, head)
+    kept, dropped = verify(findings_of(output), head, keep)
+    against_base(kept, base_sha, head, keep)
     new = [finding for finding in kept if finding.new]
     old = [finding for finding in kept if not finding.new]
 

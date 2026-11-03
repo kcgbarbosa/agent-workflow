@@ -90,6 +90,11 @@ export async function autoMerge(cwd: string, url: string): Promise<void> {
   await gh(cwd, ["pr", "merge", url, "--auto", "--squash"]);
 }
 
+/** Turns auto-merge off. */
+export async function disableAutoMerge(cwd: string, url: string): Promise<void> {
+  await gh(cwd, ["pr", "merge", url, "--disable-auto"]);
+}
+
 /** Clones the repo at its address on GitHub into the folder, with the git protocol and sign-in that gh has. */
 export async function clone(cwd: string, url: string, folder: string): Promise<void> {
   await gh(cwd, ["repo", "clone", url, folder, "--", "--quiet"]);

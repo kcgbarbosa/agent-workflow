@@ -1,5 +1,7 @@
 // The blast level of a worker's pull request: a red one opens as a draft and waits for the owner, a yellow one
 // holds after its first green, and a green one merges at its first green.
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { World } from "./world.ts";
 
@@ -27,6 +29,35 @@ function labels(): string[] {
 
 function worker(): string[] {
   return world.steps(RUN);
+}
+
+/**
+ * Makes the gh call that starts with `call`, such as `pr ready`, hang until `crash` kills the worker in it. The
+ * call never reaches GitHub, as when the host dies. The call after the crash goes through.
+ */
+function hangOn(call: string): { inFlight: () => boolean; crash: () => void } {
+  const flag = join(world.fakes, "hang");
+  writeFileSync(flag, "");
+  const fake = resolve(import.meta.dirname, "fakes", "gh.mjs");
+  world.command(
+    "gh",
+    `#!/bin/sh\nif [ "$1 $2" = "${call}" ] && [ -e "${flag}" ]; then\n  touch "${flag}.waiting"\n  while [ -e "${flag}" ]; do sleep 0.05; done\n  exit 137\nfi\nexec node "${fake}" "$@"\n`,
+  );
+  return {
+    inFlight: () => existsSync(`${flag}.waiting`),
+    crash: () => {
+      const { pid } = JSON.parse(readFileSync(join(world.fakes, "units", `loop-demo-${KEY}.service.json`), "utf8")) as { pid: number };
+      process.kill(-pid, "SIGKILL");
+      rmSync(flag);
+    },
+  };
+}
+
+/** Waits a while for the pull request to merge, which it must not. */
+async function settle(): Promise<void> {
+  await world.until(() => worker().filter((line) => line === `${KEY} start restart`).length > 0, "the restart");
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline && world.prs()[0]!.state !== "MERGED") await new Promise((done) => setTimeout(done, 100));
 }
 
 test("a changed file under a red glob opens a draft labelled blast:red, the dispatcher frees its slot, and marking it ready merges it", async () => {
@@ -128,4 +159,98 @@ test("a green pull request turns auto-merge on at the first green", async () => 
   expect(world.prs()[0]).toMatchObject({ isDraft: false, state: "MERGED", autoMerge: { mergeMethod: "SQUASH" } });
   const steps = worker();
   expect(steps.some((step) => / hold | hand-back /.test(` ${step} `))).toBe(false);
+});
+
+test("a red pull request whose worker dies before the draft goes on is a draft again on the restart", async () => {
+  const gh = hangOn("pr ready");
+  world.writeConfig("[limits]\nparallel = 2\n");
+  world.jira.add(KEY, "Add the login page");
+  world.verdicts({ [KEY]: ["fail", "pass"] });
+  world.plan({ [KEY]: [{ write: { "a.txt": "a\n" }, commit: "feat(DEMO-2): a" }, { write: { "b.txt": "b\n" }, commit: "fix(DEMO-2): b", blast: "red" }] });
+
+  const started = await world.loop("start");
+  expect(started.code, started.stderr).toBe(0);
+  await world.until(gh.inFlight, "the draft call");
+  gh.crash();
+  await world.until(() => world.prs()[0]!.isDraft === true && labels().includes("blast:red"), "the draft on the restart");
+  await settle();
+
+  expect(world.prs()[0]).toMatchObject({ state: "OPEN", isDraft: true });
+  expect(labels()).toEqual(["blast:red"]);
+});
+
+test("a yellow pull request whose worker dies before its label goes on holds on the restart", async () => {
+  const gh = hangOn("label create");
+  world.writeConfig('[blast]\nyellow = ["*.txt"]\n\n[limits]\nparallel = 2\n');
+  world.jira.add(KEY, "Add the login page");
+  world.verdicts({ [KEY]: "pass" });
+  world.plan({ [KEY]: [{ write: { "a.txt": "a\n" }, commit: "feat(DEMO-2): a" }] });
+
+  const started = await world.loop("start");
+  expect(started.code, started.stderr).toBe(0);
+  await world.until(() => world.prs().length === 1 && gh.inFlight(), "the label call");
+  gh.crash();
+  await world.until(() => /^Hold until \S+$/m.test(world.prs()[0]!.body), "the hold on the restart");
+  await settle();
+
+  expect(world.prs()[0]!.state).toBe("OPEN");
+  expect(labels()).toEqual(["blast:yellow"]);
+});
+
+test("a level that rises to yellow after auto-merge turned on turns it off and holds", async () => {
+  // The token cannot read the branch protection, so the loop knows no required check and turns auto-merge on
+  // before `gate / fuzz` reports.
+  world.required(["gate / check", "gate / fuzz"]);
+  const fake = resolve(import.meta.dirname, "fakes", "gh.mjs");
+  world.command("gh", `#!/bin/sh\ncase "$2" in */protection/required_status_checks) echo "gh: Not Found (HTTP 404)" >&2; exit 1;; esac\nexec node "${fake}" "$@"\n`);
+  world.jira.add(KEY, "Add the login page");
+  world.verdicts({ [KEY]: "pass" });
+  world.plan({ [KEY]: [{ write: { "a.txt": "a\n" }, commit: "feat(DEMO-2): a" }, { write: { "b.txt": "b\n" }, commit: "fix(DEMO-2): b", blast: "yellow" }] });
+
+  const ran = work();
+  await world.until(() => world.prs()[0]?.autoMerge != null, "auto-merge on");
+  world.setChecks(KEY, { "gate / fuzz": "fail" });
+  await world.until(() => labels().includes("blast:yellow"), "the yellow label");
+  world.setChecks(KEY, { "gate / fuzz": "pass" });
+  const done = await ran;
+
+  expect(done.code).toBe(1);
+  expect(worker()).toContain(`${KEY} auto-merge off`);
+  expect(world.prs()[0]).toMatchObject({ state: "OPEN", autoMerge: null });
+  expect(world.prs()[0]!.body).toMatch(/^Hold until \S+$/m);
+});
+
+test("a changed dotfile under a red glob is red", async () => {
+  world.writeConfig('[blast]\nred = ["auth/**"]\n');
+  world.jira.add(KEY, "Add the login secrets");
+  world.verdicts({ [KEY]: "pass" });
+  world.plan({ [KEY]: [{ write: { "auth/.secrets.json": "{}\n" }, commit: "feat(DEMO-2): secrets" }] });
+
+  const ran = await work();
+
+  expect(ran.code).toBe(1);
+  expect(worker()).toContain(`${KEY} blast red`);
+  expect(world.prs()[0]).toMatchObject({ isDraft: true, state: "OPEN" });
+  expect(labels()).toEqual(["blast:red"]);
+});
+
+test("a file moved out from under a red glob is red", async () => {
+  world.writeConfig('[blast]\nred = ["auth/**"]\n');
+  const token = "export const token = 'the signing key of the sessions';\n".repeat(5);
+  world.commitTo(world.repo, { "auth/token.ts": token }, "chore: the auth token");
+  // The agent's commit moves auth/token.ts to lib/token.ts: the hook takes the old path out of the commit.
+  const hooks = join(world.root, "hooks");
+  mkdirSync(hooks);
+  writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\nif [ -f lib/token.ts ] && [ -f auth/token.ts ]; then git rm -q auth/token.ts; fi\n");
+  chmodSync(join(hooks, "pre-commit"), 0o755);
+  world.git(world.repo, "config", "core.hooksPath", hooks);
+  world.jira.add(KEY, "Move the token code");
+  world.verdicts({ [KEY]: "pass" });
+  world.plan({ [KEY]: [{ write: { "lib/token.ts": token }, commit: "refactor(DEMO-2): move the token" }] });
+
+  const ran = await work();
+
+  expect(ran.code).toBe(1);
+  expect(worker()).toContain(`${KEY} blast red`);
+  expect(world.prs()[0]).toMatchObject({ isDraft: true, state: "OPEN" });
 });

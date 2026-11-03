@@ -12,7 +12,9 @@ import sys
 from pathlib import Path
 
 GH = """
-import json, re, sys
+import json, os, re, sys
+if not os.environ.get("GH_TOKEN") and not os.environ.get("GITHUB_TOKEN"):
+    sys.exit("fake gh: no GH_TOKEN, so gh is not logged in")
 state_path = {state!r}
 state = json.load(open(state_path))
 args = sys.argv[2:]
@@ -97,6 +99,7 @@ class FakeGitHub:
             "GITHUB_REPOSITORY": "kc/app",
             "PR_NUMBER": "7",
             "CLAUDE_CODE_OAUTH_TOKEN": "token",
+            "GH_TOKEN": "gh-token",
         }
         self.git("init", "-q")
         self.commit({"a.py": "one\n", "README.md": "# app\n", **(base or {})})

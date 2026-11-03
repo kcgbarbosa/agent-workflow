@@ -228,7 +228,8 @@ if (verb === "list") {
   const pr = find(args[2]);
   if (pr.state !== "OPEN") fail(`Pull request #${pr.number} is not open`);
   if (args.includes("--auto") && existsSync(join(fakes, "no-auto-merge"))) fail("Auto-merge is not allowed for this repository");
-  if (args.includes("--auto")) pr.autoMerge = { mergeMethod: args.includes("--squash") ? "SQUASH" : "MERGE" };
+  if (args.includes("--disable-auto")) pr.autoMerge = null;
+  else if (args.includes("--auto")) pr.autoMerge = { mergeMethod: args.includes("--squash") ? "SQUASH" : "MERGE" };
   else if (green(pr)) squash(pr);
   else fail(`Pull request #${pr.number} is not mergeable: the base branch policy prohibits the merge.`);
   if (pr.autoMerge && !pr.isDraft && green(pr)) squash(pr);
