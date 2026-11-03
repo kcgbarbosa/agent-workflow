@@ -2,18 +2,21 @@
 // as a systemd user unit, and the watch page as another. KEY is an Epic or a ticket. `loop stop` stops the run's
 // unit. `loop run` is the run itself, which the unit runs under `bws run`, with the secrets in its env. `loop
 // watch` serves the page of the runs on this host, and `loop report [<KEY>]` breaks down what the latest run cost
-// against the run before it.
+// against the run before it. `loop ticket <KEY>` takes a slot and starts `loop run-ticket <KEY> --slot <n>` in
+// the ticket's own unit, which builds the one ticket to merge.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { claudePath } from "./agent.ts";
-import { ConfigError, load, peek } from "./config.ts";
+import { type Config, ConfigError, load, peek } from "./config.ts";
 import { git } from "./git.ts";
 import { Forecaster } from "./forecast.ts";
+import { Jira } from "./jira.ts";
 import { text } from "./report.ts";
 import { Run, runName, type Target } from "./run.ts";
-import { checkSecrets, readSecrets, secretNames, storedNames } from "./secrets.ts";
+import { checkSecrets, readSecrets, secretNames, storedNames, storedSecrets } from "./secrets.ts";
+import { freeSlot, takeSlot } from "./slots.ts";
 import { endAll } from "./spawn.ts";
 import { awake, runs, runUnit, startRun, startWatch, stopRun, UnitError } from "./units.ts";
 import { sourceCheckout, update, UpdateError } from "./update.ts";
@@ -25,6 +28,8 @@ const FILTER_RUN = /^filter-[0-9a-f]{8}$/;
 const USAGE = [
   "Usage: loop start|run <KEY> [--repo <path>]",
   "       loop start|run --filter <JQL> [--repo <path>]",
+  "       loop ticket <KEY> [--repo <path>]",
+  "       loop run-ticket <KEY> --slot <n> [--repo <path>]",
   "       loop stop <KEY>|--filter <JQL> [--repo <path>]",
   "       loop watch [--repo <path>]",
   "       loop report [<KEY>] [--against <KEY>] [--json] [--repo <path>]",
@@ -48,7 +53,7 @@ function missingTools(needed: string[]): string[] {
 }
 
 /** Starts the run in its unit, and the watch page in its own, then returns. The run checks the rest itself. */
-async function start(target: Target, repoArg: string | undefined, newCode: boolean): Promise<number> {
+async function start(target: { key: string } | { filter: string }, repoArg: string | undefined, newCode: boolean): Promise<number> {
   const repo = await mainCheckout(resolve(repoArg ?? process.cwd()));
   const { name: project, secrets } = peek(repo);
   await checkSecrets(secrets);
@@ -60,6 +65,57 @@ async function start(target: Target, repoArg: string | undefined, newCode: boole
   openOnScreen(`http://127.0.0.1:${WATCH_PORT}/#/${project}/${name}`);
   console.log(`The loop is building ${name}. Watch it at ${await pageUrl(project, name)}, or with \`journalctl --user -fu ${unit}\`.`);
   return 0;
+}
+
+/**
+ * Takes a slot and starts the ticket's worker in the unit `loop-<name>-<KEY>`, then returns. It refuses, with
+ * one line, a ticket whose unit is active, one that is Flagged, of another component, or with no component,
+ * and a start with no free slot.
+ */
+async function ticket(key: string, repoArg: string | undefined, newCode: boolean): Promise<number> {
+  const repo = await mainCheckout(resolve(repoArg ?? process.cwd()));
+  const config = load(repo);
+  await checkSecrets(config.secrets);
+  const active = new Set(await runs(config.name));
+  if (active.has(key)) return refuse(`${key} is building in ${runUnit(config.name, key)}. \`loop stop ${key}\` stops it.`);
+  let why: string | null;
+  try {
+    why = await unbuildable(config, key);
+  } catch (error) {
+    return refuse(`The loop cannot read ${key} in Jira: ${(error as Error).message}`);
+  }
+  if (why) return refuse(why);
+  const slot = takeSlot(config.stateDir, key, config.parallel, active);
+  if (slot === null) return refuse(`No slot is free: ${config.parallel} of ${config.parallel} tickets are building. \`loop stop <KEY>\` frees one.`);
+  let unit: string;
+  try {
+    unit = await startRun(repo, config.name, key, [key, "--slot", String(slot)], "run-ticket");
+  } catch (error) {
+    freeSlot(config.stateDir, slot, key);
+    throw error;
+  }
+  await startWatch(repo, newCode);
+  openOnScreen(`http://127.0.0.1:${WATCH_PORT}/#/${config.name}/${key}`);
+  console.log(`The loop is building ${key} in slot ${slot}. Watch it at ${await pageUrl(config.name, key)}, or with \`journalctl --user -fu ${unit}\`.`);
+  return 0;
+}
+
+/** Why this repo's loop does not build the ticket, or null when it does. */
+async function unbuildable(config: Config, key: string): Promise<string | null> {
+  const secrets = await storedSecrets();
+  const jira = new Jira(config.trackerUrl, secrets.get("JIRA_EMAIL") ?? "", secrets.get("JIRA_API_TOKEN") ?? "");
+  const found = await jira.ticket(key);
+  if (found.flagged) return `${key} is Flagged. Unflag it in Jira, and \`loop ticket ${key}\` builds it.`;
+  if (!found.components.length) return `${key} has no component. Set its Jira component to the repo it changes, or manual for work no loop builds.`;
+  if (!found.components.includes(config.component)) {
+    return `${key} is of the component ${found.components.join(", ")}, not ${config.component}, so this repo's loop does not build it.`;
+  }
+  return null;
+}
+
+function refuse(message: string): number {
+  console.error(message);
+  return 2;
 }
 
 /** Opens the page on this host's screen, when it has one. The loop does not wait for the browser. */
@@ -161,18 +217,25 @@ export async function main(argv: string[]): Promise<number> {
     parsed = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: { filter: { type: "string" }, repo: { type: "string" }, against: { type: "string" }, json: { type: "boolean" } },
+      options: {
+        filter: { type: "string" },
+        repo: { type: "string" },
+        against: { type: "string" },
+        json: { type: "boolean" },
+        slot: { type: "string" },
+      },
     });
   } catch (error) {
     console.error(`${(error as Error).message}\n${USAGE}`);
     return 2;
   }
   const [command, key, ...rest] = parsed.positionals;
-  const { filter, against, json, repo } = parsed.values;
+  const { filter, against, json, repo, slot } = parsed.values;
   const bare = !key && !filter && !against && !json;
   const reportArgs = !filter && !rest.length && (!key || KEY.test(key)) && (!against || KEY.test(against));
-  const targetArgs = !rest.length && !against && !json && (filter ? !key : key && KEY.test(key));
-  const target: Target = filter ? { filter } : { key: key ?? "" };
+  const targetArgs = !rest.length && !against && !json && !slot && (filter ? !key : key && KEY.test(key));
+  const ticketArgs = !rest.length && !against && !json && !filter && key !== undefined && KEY.test(key);
+  const target = filter ? { filter } : { key: key ?? "" };
   try {
     if (command === "watch" && bare) return await watch(repo);
     if (command === "report" && reportArgs) return await report(key, against, json ?? false, repo);
@@ -180,7 +243,8 @@ export async function main(argv: string[]): Promise<number> {
     const runArg = !filter && !rest.length && !against && !json && key && FILTER_RUN.test(key);
     if (command === "stop" && (targetArgs || runArg)) return await stop(runArg ? key! : runName(target), repo);
     if (command === "run" && targetArgs) return await run(target, repo);
-    if (command === "start" && targetArgs) {
+    if (command === "run-ticket" && ticketArgs && slot && /^\d+$/.test(slot)) return await run({ ticket: key!, slot: Number(slot) }, repo);
+    if ((command === "start" && targetArgs) || (command === "ticket" && ticketArgs && !slot)) {
       const checkout = sourceCheckout();
       let newCode = false;
       if (checkout) {
@@ -188,7 +252,7 @@ export async function main(argv: string[]): Promise<number> {
         console.log(message);
         newCode = updated;
       }
-      return await start(target, repo, newCode);
+      return command === "ticket" ? await ticket(key!, repo, newCode) : await start(target, repo, newCode);
     }
   } catch (error) {
     if (error instanceof ConfigError || error instanceof UpdateError || error instanceof UnitError) {

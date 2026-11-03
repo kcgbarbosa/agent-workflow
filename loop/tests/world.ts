@@ -151,12 +151,12 @@ ${extra}`;
     writeFileSync(join(this.fakes, "bws.json"), JSON.stringify(secrets));
   }
 
-  /** The command line and env of a loop command, as its unit runs it: `loop run` and `loop watch` under `bws
-   * run`, with the host's token.
+  /** The command line and env of a loop command, as its unit runs it: `loop run`, `loop run-ticket`, and `loop
+   * watch` under `bws run`, with the host's token.
    */
   private invocation(args: string[]): [string, string[], NodeJS.ProcessEnv] {
     const command = [LOOP, ...args, "--repo", this.repo];
-    if (args[0] !== "run" && args[0] !== "watch") return [LOOP, command.slice(1), this.env];
+    if (!["run", "run-ticket", "watch"].includes(args[0] ?? "")) return [LOOP, command.slice(1), this.env];
     const [bws, ...rest] = underBws(command);
     return [bws!, rest, { ...this.env, BWS_ACCESS_TOKEN: TOKEN }];
   }

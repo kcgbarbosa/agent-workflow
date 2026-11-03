@@ -13,6 +13,8 @@ export type PullRequest = {
   isDraft: boolean;
   title: string;
   mergeCommit: { oid: string } | null;
+  /** MERGEABLE, CONFLICTING, or UNKNOWN while GitHub works it out. */
+  mergeable?: string;
 };
 
 export type Check = { name: string; state: string; bucket: string; link: string };
@@ -26,7 +28,7 @@ async function gh(cwd: string, args: string[], ok: (code: number) => boolean = (
   return done;
 }
 
-const FIELDS = "number,url,state,headRefName,baseRefName,headRefOid,isDraft,title,mergeCommit";
+const FIELDS = "number,url,state,headRefName,baseRefName,headRefOid,isDraft,title,mergeCommit,mergeable";
 
 /**
  * The ticket's pull requests in any state, on any branch whose name starts with one of the prefixes. A
