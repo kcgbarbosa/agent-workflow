@@ -24,10 +24,10 @@ A decision grill stops after step 1. Its only output is an ADR. A feature grill 
 
 ## Two ways to build
 
-| Way              | Scope                  | Pull requests                                                 | Context                                                                                                |
-| ---------------- | ---------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Way              | Scope                  | Pull requests                                      | Context                                                                                                |
+| ---------------- | ---------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | The loop         | All tickets of an Epic | One for each ticket, once its blockers have merged | A script starts a session for each ticket, and resumes it with the failing checks when the gate is red |
-| A T3 Code thread | One ticket             | One for the ticket                                            | The thread runs `implement` in its own worktree, then pushes and opens the pull request                |
+| A T3 Code thread | One ticket             | One for the ticket                                 | The thread runs `implement` in its own worktree, then pushes and opens the pull request                |
 
 The owner picks one for each Epic. `/setup-loop` writes `docs/agents/loop.md` for a repo that uses the loop.
 

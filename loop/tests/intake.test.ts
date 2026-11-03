@@ -40,6 +40,19 @@ test("with [notify] kind = slack, a stuck ticket posts its text to the webhook i
   expect(world.jira.notifications).toEqual([]);
 });
 
+test("a webhook secret that is no URL fails the post, and its value stays out of the log", async () => {
+  world.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: "token", NTFY_TOPIC: "topic", SLACK_WEBHOOK_URL: "not-a-url-hunter2" });
+  world.writeConfig('kind = "slack"\n');
+  world.jira.add(KEY, "Add the login page");
+  world.plan({ [KEY]: [{ status: "blocked", reason: "No." }] });
+
+  await world.loop("run-ticket", KEY, "--slot", "2");
+
+  expect(world.steps(`tickets/${KEY}`)).toContain(`${KEY} notify fail`);
+  expect(JSON.stringify(world.decisions(`tickets/${KEY}`))).not.toContain("hunter2");
+  expect(JSON.stringify(world.decisions(`tickets/${KEY}`))).toContain("the value of SLACK_WEBHOOK_URL is not a URL");
+});
+
 test("[notify] secret names each repo's own webhook, a start refuses a store without it, and slack needs no ntfy topic", async () => {
   world.writeConfig('kind = "slack"\nsecret = "DEMO_HOOK"\n');
   const config = join(world.repo, "loop.toml");

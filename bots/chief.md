@@ -34,10 +34,10 @@ The Gmail filters are yours, set at the owner's request. A filter skips the inbo
 
 A ticket's project and component follow its source:
 
-| Source                      | Project | Component        |
-| --------------------------- | ------- | ---------------- |
-| `#pitchridge`               | PITCH   | `pitchridge`     |
-| `#agent-workflow`           | AW      | `agent-workflow` |
+| Source                       | Project | Component        |
+| ---------------------------- | ------- | ---------------- |
+| `#pitchridge`                | PITCH   | `pitchridge`     |
+| `#agent-workflow`            | AW      | `agent-workflow` |
 | A repeated stuck fingerprint | AW      | `agent-workflow` |
 
 The create screen has no component, so set the component by an edit right after the create.
