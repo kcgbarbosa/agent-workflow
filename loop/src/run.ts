@@ -25,6 +25,12 @@ import { composeProject, FIRST_SLOT, freeSlot, heldPorts, SPARE_SLOTS } from "./
 /** The longest the loop waits for the checks of one pull request. */
 const WAIT_MINUTES = 120;
 
+/**
+ * The polls a fix attempt waits for the fuzz comment once the fuzz check is red, since the `fuzz-report` job posts it
+ * after the check ends: 3 minutes at the 30-second poll. A fuzz job that failed before its findings posts none.
+ */
+const FUZZ_COMMENT_POLLS = 6;
+
 /** The lines of a failed job's log that a fix attempt gets. */
 const LOG_TAIL_LINES = 80;
 
@@ -128,12 +134,51 @@ function withHold(body: string, until: string): string {
 }
 
 /**
- * Whether the path matches the glob, a dotfile included. `matchesGlob`'s `*` never matches a leading dot, so the
- * path and the glob are also tried with each name's leading dots taken off. That may match more, which only raises a level.
+ * Whether the path matches the glob, a dotfile included: `matchesGlob`'s `*` never matches a leading dot, so the
+ * glob is also tried as a pattern whose `*`, `**`, `?`, `[...]`, and `{a,b}` match a dot as any other character.
  */
 function globMatch(path: string, glob: string): boolean {
-  const undotted = (text: string) => text.replace(/(^|\/)\.+/g, "$1");
-  return matchesGlob(path, glob) || matchesGlob(undotted(path), undotted(glob));
+  if (matchesGlob(path, glob)) return true;
+  try {
+    return globPattern(glob).test(path);
+  } catch {
+    // A glob with an unclosed `{` makes no pattern, and `matchesGlob` has answered it.
+    return false;
+  }
+}
+
+/** The glob as a pattern that matches a whole path, with no special case for a leading dot. */
+function globPattern(glob: string): RegExp {
+  let pattern = "";
+  let braces = 0;
+  for (let at = 0; at < glob.length; at++) {
+    const char = glob[at]!;
+    if (char === "*" && glob[at + 1] === "*") {
+      // `**/` also matches no folder at all; any other `**` matches across folders.
+      const folders = (at === 0 || glob[at - 1] === "/") && glob[at + 2] === "/";
+      pattern += folders ? "(?:.*/)?" : ".*";
+      at += folders ? 2 : 1;
+    } else if (char === "*") pattern += "[^/]*";
+    else if (char === "?") pattern += "[^/]";
+    else if (char === "[") {
+      const end = glob.indexOf("]", at + 2);
+      if (end < 0) pattern += "\\[";
+      else {
+        const inside = glob.slice(at + 1, end).replace(/^!/, "^").replace(/\\/g, "\\\\");
+        pattern += `[${inside}]`;
+        at = end;
+      }
+    } else if (char === "{") {
+      braces++;
+      pattern += "(?:";
+    } else if (char === "}" && braces > 0) {
+      braces--;
+      pattern += ")";
+    } else if (char === "," && braces > 0) pattern += "|";
+    else if (char === "\\" && at + 1 < glob.length) pattern += `\\${glob[++at]}`;
+    else pattern += char.replace(/[.+^$()|\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${pattern}$`);
 }
 
 /** The higher of two blast levels. */
@@ -466,6 +511,13 @@ export class Run {
           return this.draft(key, url, "The blast level is red, so the pull request is a draft until the owner marks it ready.");
         }
         await this.label(key, url, level);
+        // A worker that died after the level rose may have left auto-merge on. Off it goes, and the wait turns it on
+        // again once the level lets it, after a yellow one's hold.
+        if (autoMerge && level !== "green") {
+          const off = await this.autoMergeOff(key, url, `The blast level is ${level}.`);
+          if (off) return off;
+          autoMerge = false;
+        }
       } else {
         // Build, or a fix attempt that resumes the session with what the gate found
         const before = await git(worktree, "rev-parse", "HEAD");
@@ -501,14 +553,9 @@ export class Run {
         const was: Level = level;
         level = await this.blast(key, worktree, base, level, session.output?.blast);
         if (url !== null && autoMerge && level !== was) {
-          try {
-            await github.disableAutoMerge(repo, url);
-          } catch (error) {
-            this.log.write(key, "auto-merge", "fail", { pr: url, detail: (error as Error).message });
-            return this.end(key, "auto-merge", "fail", (error as Error).message, url);
-          }
+          const off = await this.autoMergeOff(key, url, `The blast level rose to ${level}.`);
+          if (off) return off;
           autoMerge = false;
-          this.log.write(key, "auto-merge", "off", { pr: url, detail: `The blast level rose to ${level}.` });
         }
 
         if (same) {
@@ -784,8 +831,18 @@ export class Run {
       }
     }
     try {
-      const findings = await github.fuzzFindings(repo, Number(url.split("/").at(-1)), head);
-      if (findings) text += `\n## The fuzz findings\n\nEach new finding is a reproduction that fails on the head. Fix the cause; a pre-existing one fails nothing.\n\n${findings}\n`;
+      // A red fuzz check's comment comes from the `fuzz-report` job after the check ends, so the loop waits for it.
+      const fuzzRed = redChecks(checks).some((check) => /(^|\/ )fuzz$/.test(check.name));
+      let comment = await github.fuzzComment(repo, Number(url.split("/").at(-1)), head);
+      for (let poll = 0; fuzzRed && !comment && poll < FUZZ_COMMENT_POLLS; poll++) {
+        await sleep(this.options.pollSeconds);
+        comment = await github.fuzzComment(repo, Number(url.split("/").at(-1)), head);
+      }
+      if (comment && comment.findings > 0) {
+        text += `\n## The fuzz findings\n\nEach new finding is a reproduction that fails on the head. Fix the cause; a pre-existing one fails nothing.\n\n${comment.text}\n`;
+      } else if (!comment && fuzzRed) {
+        text += "\nThe fuzz job posted no comment at the head. Its log above says how it ended.\n";
+      }
     } catch (error) {
       text += `\nThe loop could not read the fuzz findings: ${(error as Error).message}\n`;
     }
@@ -801,6 +858,18 @@ export class Run {
   private async handBack(key: string, why: "usage-limit" | "red" | "hold", reason: string): Promise<Finished> {
     this.log.write(key, "hand-back", why, { detail: reason });
     return "handed-back";
+  }
+
+  /** Turns auto-merge off and logs why. The ending when it fails, or null. */
+  private async autoMergeOff(key: string, url: string, why: string): Promise<Finished | null> {
+    try {
+      await github.disableAutoMerge(this.config.repo, url);
+    } catch (error) {
+      this.log.write(key, "auto-merge", "fail", { pr: url, detail: (error as Error).message });
+      return this.end(key, "auto-merge", "fail", (error as Error).message, url);
+    }
+    this.log.write(key, "auto-merge", "off", { pr: url, detail: why });
+    return null;
   }
 
   /** Makes the pull request a draft, then labels it red, and hands the ticket back. */
@@ -829,8 +898,8 @@ export class Run {
    * changed file of the branch matches, and the agent's. A lower value never lowers it.
    */
   private async blast(key: string, worktree: string, base: string, before: Level, agent: Level | undefined): Promise<Level> {
-    // With no rename detection, a file moved out from under a glob lists its old path too.
-    const changed = (await git(worktree, "diff", "--name-only", "--no-renames", `origin/${base}...HEAD`)).split("\n").filter(Boolean);
+    // With no rename detection, a file moved out from under a glob lists its old path too. With -z, git quotes no name.
+    const changed = (await git(worktree, "diff", "--name-only", "--no-renames", "-z", `origin/${base}...HEAD`)).split("\0").filter(Boolean);
     const matches = (globs: string[]) => changed.find((file) => globs.some((glob) => globMatch(file, glob)));
     const redFile = matches(this.config.blast.red);
     const yellowFile = redFile ? undefined : matches(this.config.blast.yellow);

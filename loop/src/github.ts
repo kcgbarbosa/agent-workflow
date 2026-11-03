@@ -174,8 +174,11 @@ export async function rerunFailed(cwd: string, run: string): Promise<void> {
 // rerun, each with its command, its output, and its reproduction.
 const MARKER = /<!-- gate fuzz head=([0-9a-f]+) findings=(\d+) -->/;
 
-/** The text of the fuzz job's newest comment at `head`, or null when it found nothing there. */
-export async function fuzzFindings(cwd: string, number: number, head: string): Promise<string | null> {
+/**
+ * The fuzz job's newest comment at `head`: its count of findings and its text with no marker. Null when it has no
+ * comment there yet, since the `fuzz-report` job posts it after the fuzz check ends.
+ */
+export async function fuzzComment(cwd: string, number: number, head: string): Promise<{ findings: number; text: string } | null> {
   const done = await gh(cwd, ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`, "--paginate", "--jq", ".[]"]);
   const bodies = done.stdout
     .split("\n")
@@ -184,6 +187,6 @@ export async function fuzzFindings(cwd: string, number: number, head: string): P
     .filter((body) => MARKER.test(body));
   const last = bodies.at(-1);
   const marker = last ? MARKER.exec(last)! : null;
-  if (!last || !marker || marker[2] === "0" || !head.startsWith(marker[1]!)) return null;
-  return last.replace(MARKER, "").trim();
+  if (!last || !marker || !head.startsWith(marker[1]!)) return null;
+  return { findings: Number(marker[2]), text: last.replace(MARKER, "").trim() };
 }

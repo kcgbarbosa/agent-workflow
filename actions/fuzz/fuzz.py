@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -42,13 +43,14 @@ SCHEMA = {
     },
     "required": ["findings"],
 }
-FIELDS = SCHEMA["properties"]["findings"]["items"]["required"]
+# The fields of a finding that this script uses. The schema asks for the others too.
+USED = ("title", "command", "reproduction")
 # The adversaries run the repo's tests and its stack, so they get Bash. They get no GitHub token and no `gh`,
 # so only this script writes to the pull request.
 TOOLS = ["Read", "Grep", "Glob", "Edit", "Write", "Agent", "Skill", "Bash"]
 DENIED = ["Bash(gh:*)", "Bash(git push:*)"]
 # The longest one reproduction may run, on the head and on the base.
-RUN_SECONDS = 600
+RUN_SECONDS = int(os.environ.get("FUZZ_RUN_SECONDS", "600"))
 GITHUB_TOKENS = ("GH_TOKEN", "GITHUB_TOKEN")
 MODEL_TOKENS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 OUTPUT_LINES = 60
@@ -170,8 +172,9 @@ def run_claude(text: str, config: Settings) -> dict:
     return output
 
 
-def findings_of(output: dict) -> list[Finding]:
-    """The findings, or a clear exit that shows how the answer went out of shape and how the run ended."""
+def findings_of(output: dict) -> tuple[list[Finding], list[str]]:
+    """The findings, and why each one out of shape is dropped, or a clear exit that shows how the answer went out of
+    shape and how the run ended. A finding needs only the fields this script uses."""
     ended = f"The run ended with subtype {output.get('subtype')!r} after {output.get('num_turns')} turns."
     answer = output.get("structured_output")
     if answer is None:
@@ -183,33 +186,48 @@ def findings_of(output: dict) -> list[Finding]:
     findings = answer.get("findings") if isinstance(answer, dict) else answer
     if not isinstance(findings, list):
         sys.exit(f"interrogate returned no list of findings: {answer!r} {ended}")
+    kept, dropped = [], []
     for finding in findings:
-        if not isinstance(finding, dict) or any(not isinstance(finding.get(field), str) for field in FIELDS):
-            sys.exit(f"interrogate returned a finding out of shape: {finding}")
-    return [Finding(f["title"], f["command"], f["reproduction"], f["breaks"]) for f in findings]
+        if not isinstance(finding, dict) or any(not isinstance(finding.get(field), str) or not finding[field].strip() for field in USED):
+            dropped.append(f"A finding out of shape, with no {', '.join(USED)}: `{json.dumps(finding)[:300]}`")
+            continue
+        breaks = finding.get("breaks")
+        kept.append(Finding(finding["title"], finding["command"], finding["reproduction"], breaks if isinstance(breaks, str) else ""))
+    return kept, dropped
 
 
 def run(command: str) -> tuple[int, str]:
     """Runs a reproduction's command from the repo root, and gives its exit code and its output. The command is the
-    adversaries' code, so it gets no token, as they get none."""
+    adversaries' code, so it gets no token, as they get none. It runs in a process group of its own, so a timeout kills
+    a process it left behind too."""
     env = {key: value for key, value in os.environ.items() if key not in GITHUB_TOKENS + MODEL_TOKENS}
+    process = subprocess.Popen(
+        ["bash", "-c", command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True
+    )
     try:
-        done = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=RUN_SECONDS, env=env)
-    except subprocess.TimeoutExpired as error:
-        return 124, f"{error.stdout or ''}{error.stderr or ''}\nTimed out after {RUN_SECONDS} seconds."
-    return done.returncode, done.stdout + done.stderr
+        output, _ = process.communicate(timeout=RUN_SECONDS)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        output, _ = process.communicate()
+        return 124, f"{output}\nTimed out after {RUN_SECONDS} seconds."
+    return process.returncode, output
 
 
 def normal(output: str) -> str:
-    """The output with what changes from run to run taken out: the checkout's path, numbered and random temp names,
-    durations, and spacing."""
-    text = output.replace(os.getcwd(), "<repo>")
+    """The output with what changes from run to run taken out: colour codes, the checkout's path, numbered and random
+    temp names, memory addresses, the timing lines and durations that a test runner prints, and spacing. A number in
+    the output's own text, such as `30 seconds` or `13:05:00`, stays."""
+    text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", output)
+    text = text.replace(os.getcwd(), "<repo>")
     text = re.sub(r"\bpytest-\d+\b", "pytest-<n>", text)
     text = re.sub(r"\btmp[a-z0-9_]{8}\b", "tmp<name>", text)
-    # A clock time, such as Vitest's `Start at 19:49:34`, and a breakdown of a duration, such as `(tests 99%, import 1%)`.
-    text = re.sub(r"\b\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\b", "<clock>", text)
-    text = re.sub(r"\((?:\s*[a-z]+ \d+(?:\.\d+)?%,?)+\s*\)", "(<share>)", text)
-    text = re.sub(r"\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds)\b", "<time>", text)
+    text = re.sub(r"\b0x[0-9a-fA-F]{4,}\b", "0x<address>", text)
+    # Vitest's `Start at` and `Duration` lines, pytest's `1 failed in 0.02s`, and a duration in parentheses or after a
+    # test's name at the end of a line, such as `(12 ms)` or `× a test 5833ms`.
+    text = re.sub(r"^(\s*)(Start at|Duration)\b.*$", r"\1\2 <timing>", text, flags=re.M)
+    text = re.sub(r"\bin \d+(?:\.\d+)?s(?=\s*=*\s*$)", "in <time>", text, flags=re.M)
+    text = re.sub(r"\(\d+(?:\.\d+)?\s?m?s\)", "(<time>)", text)
+    text = re.sub(r"\s\d+(?:\.\d+)?ms$", " <time>", text, flags=re.M)
     return " ".join(text.split())
 
 
@@ -237,8 +255,9 @@ def checkout(sha: str, findings: list[Finding], keep: set[str]) -> None:
         file.write_text(finding.text)
 
 
-def verify(findings: list[Finding], head: str, keep: set[str]) -> tuple[list[Finding], list[str]]:
-    """Reruns each reproduction on the head, and keeps the ones whose run fails again."""
+def verify(findings: list[Finding], head: str, keep: set[str], setup: tuple[str, ...]) -> tuple[list[Finding], list[str]]:
+    """Reruns each reproduction on the head, and keeps the ones whose run fails again. The setup runs again first, so
+    the rerun meets a fresh stack and not one an adversary changed."""
     found, dropped = [], []
     for finding in findings:
         file = reproduction(finding.reproduction)
@@ -250,6 +269,10 @@ def verify(findings: list[Finding], head: str, keep: set[str]) -> tuple[list[Fin
     if not found:
         return [], dropped
     checkout(head, found, keep)
+    if setup:
+        print(f"gate / fuzz: setup before the head rerun: {' '.join(setup)}", flush=True)
+        if subprocess.run(list(setup)).returncode != 0:
+            sys.exit("gate / fuzz: the [fuzz] setup failed before the head rerun, so no finding is verified.")
     kept = []
     for finding in found:
         code, output = run(finding.command)
@@ -345,7 +368,9 @@ def main() -> int:
 
     keep = untracked()
     output = run_claude(prompt(number, base, pr_file, config), config)
-    kept, dropped = verify(findings_of(output), head, keep)
+    found, malformed = findings_of(output)
+    kept, dropped = verify(found, head, keep, config.setup)
+    dropped = malformed + dropped
     against_base(kept, base_sha, head, keep, config.setup)
     new = [finding for finding in kept if finding.new]
     old = [finding for finding in kept if not finding.new]

@@ -424,3 +424,20 @@ test("a run that fails in the loop itself logs loop-error and notifies", async (
   expect(world.steps("DEMO-99")).toContain("DEMO-99 stop loop-error");
   expect(world.jira.notifications).toContain("DEMO-99 stopped");
 });
+
+test("a red fuzz check waits for the fuzz comment that another job posts after it", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
+  world.verdicts({ "DEMO-2": ["pending", "pass"] });
+  world.fuzz({ "DEMO-2": [FINDING] }, true);
+  world.plan({ "DEMO-2": [{ write: { "login.txt": "login\n" } }, { write: { "login.txt": "fixed\n" }, commit: "fix(DEMO-2): fix the login" }] });
+
+  const ran = world.loop("run", EPIC);
+  await world.until(() => world.prs().length === 1, "the pull request");
+  world.setChecks("DEMO-2", { "gate / check": "pass", "gate / fuzz": "fail" });
+  const done = await ran;
+
+  expect(done.code, done.stderr).toBe(0);
+  const [, fix] = world.calls();
+  expect(fix!.prompt).toContain("## The fuzz findings");
+  expect(fix!.prompt).toContain(FINDING);
+});

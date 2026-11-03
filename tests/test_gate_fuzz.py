@@ -153,8 +153,8 @@ def test_setup_runs_first_and_the_adversaries_get_no_github_token(tmp_path: Path
 
     # The reproduction fails the same way on the base, so it is pre-existing and fails nothing.
     assert run.returncode == 0, run.stderr
-    # The setup runs again on the base, before the base run.
-    assert (pr.work / "order.log").read_text() == "setup\nrepro\nsetup\nrepro\n"
+    # The setup runs again before the head rerun and before the base run.
+    assert (pr.work / "order.log").read_text() == "setup\nsetup\nrepro\nsetup\nrepro\n"
     [call] = pr.claude_calls
     argv = call["argv"]
     text = argv[argv.index("-p") + 1]
@@ -249,6 +249,76 @@ def test_a_finding_whose_clock_time_and_shares_differ_on_the_base_is_pre_existin
 
     assert run.returncode == 0, run.stdout
     assert ": 0 new, 1 pre-existing, 0 dropped." in body(pr)
+
+
+def test_the_head_rerun_meets_a_fresh_stack_and_not_one_an_adversary_changed(tmp_path: Path) -> None:
+    pr = FakeGitHub(tmp_path, base={"loop.toml": '[fuzz]\nsetup = ["bash", "-c", "printf \'1\\\\n2\\\\n3\\\\n\' > app.db"]\n', ".gitignore": "app.db\n"})
+    pr.commit({"other.py": "x = 1\n"})
+    # One adversary deletes a row while it probes: the `claude` run does it.
+    wrap = tmp_path / "wrap"
+    wrap.mkdir()
+    (wrap / "claude").write_text(f'#!/bin/bash\nprintf "1\\n2\\n" > app.db\nexec {tmp_path / "bin" / "claude"} "$@"\n')
+    (wrap / "claude").chmod(0o755)
+    (pr.work / "test_rows.py").write_text('assert len(open("app.db").read().splitlines()) == 3, "a row is gone"\n')
+    pr.reply(result(finding("test_rows.py", "A row is gone")))
+
+    run = pr.run(FUZZ, PATH=f"{wrap}:{pr.env['PATH']}", **INPUTS)
+
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert ": 0 new, 0 pre-existing, 1 dropped." in body(pr)
+
+
+def test_a_number_in_the_output_that_differs_on_the_base_makes_the_finding_new(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    # a.py has three lines on the head and one on the base.
+    (pr.work / "test_numbers.py").write_text(
+        'n = open("a.py").read().count("\\n")\nprint(f"the hold is {n * 10} seconds, {n}00ms")\nprint(f"Hold until {n:02d}:05:00")\nraise SystemExit(1)\n'
+    )
+    pr.reply(result(finding("test_numbers.py", "The hold")))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 1, run.stdout
+    assert ": 1 new, 0 pre-existing, 0 dropped." in body(pr)
+
+
+def test_a_memory_address_that_differs_on_the_base_matches(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    (pr.work / "test_address.py").write_text("class Thing:\n    pass\nprint(Thing(), [object() for _ in range(9)][-1])\nraise SystemExit(1)\n")
+    pr.reply(result(finding("test_address.py", "Thing")))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stdout
+    assert ": 0 new, 1 pre-existing, 0 dropped." in body(pr)
+
+
+def test_a_finding_out_of_shape_is_dropped_and_the_rest_are_listed(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path, "[fuzz]\nblocking = false\n")
+    bare = {"title": "No output", "command": f"{sys.executable} test_new.py", "reproduction": "test_new.py"}
+    pr.reply(result(bare, {"title": "No command", "reproduction": "test_old.py"}))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stdout + run.stderr
+    text = body(pr)
+    assert ": 1 new, 0 pre-existing, 1 dropped." in text
+    assert "#### 1. No output" in text
+    assert "A finding out of shape" in text
+
+
+def test_a_reproduction_that_hangs_is_cut_off_with_its_output_as_text(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    # It leaves a process behind that holds its output open.
+    (pr.work / "test_hang.py").write_text('import subprocess, sys, time\nprint("partial", flush=True)\nsubprocess.Popen(["sleep", "30"])\ntime.sleep(30)\n')
+    pr.reply(result(finding("test_hang.py", "It hangs")))
+
+    run = pr.run(FUZZ, FUZZ_RUN_SECONDS="1", **INPUTS)
+
+    text = body(pr)
+    assert "partial\n\nTimed out after 1 seconds." in text, text
+    assert "b'" not in text
+    assert run.returncode == 0, run.stdout
 
 
 def test_the_pull_request_cannot_turn_off_its_own_fuzz(tmp_path: Path) -> None:

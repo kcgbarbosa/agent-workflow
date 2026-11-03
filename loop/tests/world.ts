@@ -187,8 +187,11 @@ ${extra}`;
   }
 
   /** The findings text of the gate's fuzz comment at each push of the ticket's pull request. */
-  fuzz(findings: Record<string, string[]>): void {
+  fuzz(findings: Record<string, string[]>, late = false): void {
     writeFileSync(join(this.fakes, "fuzz.json"), JSON.stringify(findings));
+    // Late, the comment shows only from the second read of the reviews, as when the `fuzz-report` job posts it after
+    // the fuzz check ends.
+    if (late) writeFileSync(join(this.fakes, "fuzz-late"), "");
   }
 
 

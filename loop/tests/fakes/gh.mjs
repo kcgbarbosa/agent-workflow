@@ -77,7 +77,9 @@ function fuzz(pr) {
   const findings = fuzzed[keyOf(pr.headRefName)];
   if (!findings) return;
   const body = `<!-- gate fuzz head=${pr.headRefOid} findings=${findings.length} -->\n**gate / fuzz**: ${findings.length} new.\n\n${findings.join("\n\n")}`;
-  pr.reviews = [...(pr.reviews ?? []), { id: pr.number * 10 + pr.reviews.length, body, comments: [] }];
+  const review = { id: pr.number * 10 + pr.reviews.length, body, comments: [] };
+  if (existsSync(join(fakes, "fuzz-late"))) pr.lateReviews = [...(pr.lateReviews ?? []), review];
+  else pr.reviews = [...(pr.reviews ?? []), review];
 }
 
 /** The check of the pull request's nth run, as its verdict gives it. A rerun keeps the run id and gets a new job. */
@@ -131,7 +133,7 @@ if (settled) save();
 
 const [noun, verb] = args;
 const show = (pr) => {
-  const { checks, body, autoMerge, pushes, reruns, reviews, comments, events, ...rest } = pr;
+  const { checks, body, autoMerge, pushes, reruns, reviews, comments, events, lateReviews, reviewReads, ...rest } = pr;
   return { ...rest, autoMergeRequest: autoMerge, ...((option("json") ?? "").split(",").includes("body") ? { body } : {}) };
 };
 if (noun === "run" && verb === "view") {
@@ -168,7 +170,17 @@ if (noun === "api") {
   // Only the reads the loop makes: a pull request's reviews, and one review's comments.
   const [, number, id] = /^repos\/\{owner\}\/\{repo\}\/pulls\/(\d+)\/reviews(?:\/(\d+)\/comments)?$/.exec(args[1]) ?? [];
   if (!number) fail(`fake gh: no api ${args[1]}`);
-  const reviews = find(number).reviews ?? [];
+  // A late fuzz comment lands once the reviews have been read.
+  const pr = find(number);
+  if (pr.lateReviews?.length) {
+    if (pr.reviewReads) {
+      pr.reviews = [...(pr.reviews ?? []), ...pr.lateReviews];
+      pr.lateReviews = [];
+    }
+    pr.reviewReads = (pr.reviewReads ?? 0) + 1;
+    save();
+  }
+  const reviews = pr.reviews ?? [];
   const items = id ? (reviews.find((review) => String(review.id) === id)?.comments ?? []) : reviews.map(({ comments, ...review }) => review);
   for (const item of items) console.log(JSON.stringify(item));
   process.exit(0);
@@ -236,6 +248,7 @@ if (verb === "list") {
   if (args.includes("--auto") && existsSync(join(fakes, "no-auto-merge"))) fail("Auto-merge is not allowed for this repository");
   if (args.includes("--disable-auto")) pr.autoMerge = null;
   else if (args.includes("--auto")) pr.autoMerge = { mergeMethod: args.includes("--squash") ? "SQUASH" : "MERGE" };
+  else if (pr.isDraft) fail(`Pull request #${pr.number} is still a draft`);
   else if (green(pr)) squash(pr);
   else fail(`Pull request #${pr.number} is not mergeable: the base branch policy prohibits the merge.`);
   if (pr.autoMerge && !pr.isDraft && green(pr)) squash(pr);

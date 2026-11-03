@@ -224,6 +224,8 @@ test("a level that rises to yellow after auto-merge turned on turns it off and h
 test.each([
   ["auth/**", "auth/.secrets.json"],
   [".github/**", ".github/.env"],
+  ["*.env", ".env"],
+  ["auth/**", 'auth/café "x".ts'],
 ])("a changed dotfile under the red glob %s is red", async (glob, file) => {
   world.writeConfig(`[blast]\nred = ["${glob}"]\n`);
   world.jira.add(KEY, "Add the login secrets");
@@ -257,6 +259,9 @@ test("a file moved out from under a red glob is red", async () => {
   expect(ran.code).toBe(1);
   expect(worker()).toContain(`${KEY} blast red`);
   expect(world.prs()[0]).toMatchObject({ isDraft: true, state: "OPEN" });
+  // GitHub merges no draft, auto-merge or not.
+  const merge = ["pr", "merge", world.prs()[0]!.url, "--squash"];
+  expect(() => execFileSync("node", [resolve(import.meta.dirname, "fakes", "gh.mjs"), ...merge], { cwd: world.repo, env: world.env, stdio: "pipe" })).toThrow(/still a draft/);
 });
 
 test("a level that rises to yellow after a restart turns off the auto-merge an earlier run turned on", async () => {
@@ -305,4 +310,41 @@ test("a red draft whose worker died right after it opened merges once the owner 
 
   expect(second.code, second.stderr).toBe(0);
   expect(world.prs()[0]).toMatchObject({ isDraft: false, state: "MERGED" });
+});
+
+test("a yellow pull request whose worker died while it turned auto-merge off holds on the restart", async () => {
+  const fake = resolve(import.meta.dirname, "fakes", "gh.mjs");
+  const flag = join(world.fakes, "hang");
+  world.required(["gate / check", "gate / fuzz"]);
+  // The token cannot read the branch protection, and `gh pr merge --disable-auto` hangs while the flag file is there.
+  world.command(
+    "gh",
+    `#!/bin/sh\ncase "$2" in */protection/required_status_checks) echo "gh: Not Found (HTTP 404)" >&2; exit 1;; esac\nif [ "$1 $2 $4" = "pr merge --disable-auto" ] && [ -e "${flag}" ]; then\n  touch "${flag}.waiting"\n  while [ -e "${flag}" ]; do sleep 0.05; done\n  exit 137\nfi\nexec node "${fake}" "$@"\n`,
+  );
+  world.writeConfig("[limits]\nparallel = 2\n");
+  world.jira.add(KEY, "Add the login page");
+  world.verdicts({ [KEY]: "pass" });
+  world.plan({
+    [KEY]: [
+      { write: { "a.txt": "a\n" }, commit: "feat(DEMO-2): a" },
+      { write: { "b.txt": "b\n" }, commit: "fix(DEMO-2): b", blast: "yellow" },
+      { write: { "c.txt": "c\n" }, commit: "fix(DEMO-2): c" },
+    ],
+  });
+
+  writeFileSync(flag, "");
+  const started = await world.loop("start");
+  expect(started.code, started.stderr).toBe(0);
+  await world.until(() => world.prs()[0]?.autoMerge != null, "auto-merge on");
+  world.setChecks(KEY, { "gate / fuzz": "fail" });
+  await world.until(() => existsSync(`${flag}.waiting`), "the auto-merge off call");
+  const { pid } = JSON.parse(readFileSync(join(world.fakes, "units", `loop-demo-${KEY}.service.json`), "utf8")) as { pid: number };
+  process.kill(-pid, "SIGKILL");
+  rmSync(flag);
+  await world.until(() => /^Hold until \S+$/m.test(world.prs()[0]!.body), "the hold on the restart");
+  world.setChecks(KEY, { "gate / fuzz": "pass" });
+  execFileSync("node", [fake, "pr", "list"], { cwd: world.repo, env: world.env });
+
+  expect(worker()).toContain(`${KEY} auto-merge off`);
+  expect(world.prs()[0]).toMatchObject({ state: "OPEN", autoMerge: null });
 });
