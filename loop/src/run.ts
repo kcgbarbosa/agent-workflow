@@ -129,10 +129,11 @@ function withHold(body: string, until: string): string {
 
 /**
  * Whether the path matches the glob, a dotfile included. `matchesGlob`'s `*` never matches a leading dot, so the
- * path is also tried with each name's leading dots taken off. That may match more, which only raises a level.
+ * path and the glob are also tried with each name's leading dots taken off. That may match more, which only raises a level.
  */
 function globMatch(path: string, glob: string): boolean {
-  return matchesGlob(path, glob) || matchesGlob(path.replace(/(^|\/)\.+/g, "$1"), glob);
+  const undotted = (text: string) => text.replace(/(^|\/)\.+/g, "$1");
+  return matchesGlob(path, glob) || matchesGlob(undotted(path), undotted(glob));
 }
 
 /** The higher of two blast levels. */
@@ -454,12 +455,14 @@ export class Run {
       if (attempt === 1 && open) {
         url = open.url;
         commit = open.headRefOid;
+        // Auto-merge that an earlier run turned on is still on at GitHub.
+        autoMerge = open.autoMergeRequest != null;
         this.log.write(key, "build", "skipped", { commit, pr: url, detail: "Its pull request is open, so the ticket starts again at the wait." });
         // A restart takes the level of the label, the log, and the globs, since a worker that died between the
         // pull request and its label or its draft left only some of them.
         level = await this.blast(key, worktree, base, higher(labelled(open), this.logged(key)), undefined);
-        // A red pull request that is not a draft merges only when the owner marked it ready after the loop drafted it.
-        if (level === "red" && this.worker && !open.isDraft && !this.drafted(key)) {
+        // A red pull request that is not a draft merges only when the owner marked it ready, which its timeline shows.
+        if (level === "red" && this.worker && !open.isDraft && !(await github.readied(repo, url).catch(() => false))) {
           return this.draft(key, url, "The blast level is red, so the pull request is a draft until the owner marks it ready.");
         }
         await this.label(key, url, level);
@@ -536,7 +539,6 @@ export class Run {
             this.log.write(key, "pr", "fail", { commit, detail: (error as Error).message });
             return this.end(key, "pr", "fail", (error as Error).message, url);
           }
-          if (draft) this.log.write(key, "draft", "ok", { pr: url, detail: "It opens as a draft." });
           const onMain = (await github.view(repo, url)).baseRefName === main;
           const detail = draft
             ? "The blast level is red, so it opens as a draft and merges once the owner marks it ready."
@@ -801,10 +803,7 @@ export class Run {
     return "handed-back";
   }
 
-  /**
-   * Makes the pull request a draft, labels it red, and hands the ticket back. The draft goes first, and its log
-   * line marks it done, since a red pull request that is not a draft and has that line was marked ready by the owner.
-   */
+  /** Makes the pull request a draft, then labels it red, and hands the ticket back. */
   private async draft(key: string, url: string, reason: string): Promise<Finished> {
     try {
       await github.toDraft(this.config.repo, url);
@@ -815,11 +814,6 @@ export class Run {
     this.log.write(key, "draft", "ok", { pr: url, detail: "The blast level is red." });
     await this.label(key, url, "red");
     return this.handBack(key, "red", reason);
-  }
-
-  /** Whether the loop made the ticket's pull request a draft. */
-  private drafted(key: string): boolean {
-    return this.log.lines().some((line) => line.ticket === key && line.step === "draft" && line.result === "ok");
   }
 
   /** The highest blast level that the log holds for the ticket, green when it holds none. */

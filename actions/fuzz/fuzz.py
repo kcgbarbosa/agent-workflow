@@ -3,7 +3,9 @@
 It runs in the pull request's checkout at its head, with the stack's keys in the env. action.yml gives the env it reads.
 Claude Code runs the interrogate skill with the pull request's diff as the scope and its body's ticket text as the intent.
 This script reruns each reproduction on the head, keeps the ones that fail, runs those on the base to tell a new finding
-from a pre-existing one, posts one review comment, and fails when a new finding survives and `blocking` is on.
+from a pre-existing one, writes one review comment to FUZZ_REVIEW, and fails when a new finding survives and `blocking` is
+on. The job holds no GitHub token, so neither the adversaries nor a reproduction can reach one: gate.yml's `fuzz report`
+job, which runs none of the pull request's code, posts the review.
 """
 
 from __future__ import annotations
@@ -96,10 +98,6 @@ def settings() -> Settings:
 
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
-
-
-def gh_send(method: str, endpoint: str, payload: dict) -> None:
-    subprocess.run(["gh", "api", "-X", method, endpoint, "--input", "-"], input=json.dumps(payload), text=True, check=True)
 
 
 def prompt(number: str, base: str, pr_file: Path, config: Settings) -> str:
@@ -208,6 +206,9 @@ def normal(output: str) -> str:
     text = output.replace(os.getcwd(), "<repo>")
     text = re.sub(r"\bpytest-\d+\b", "pytest-<n>", text)
     text = re.sub(r"\btmp[a-z0-9_]{8}\b", "tmp<name>", text)
+    # A clock time, such as Vitest's `Start at 19:49:34`, and a breakdown of a duration, such as `(tests 99%, import 1%)`.
+    text = re.sub(r"\b\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\b", "<clock>", text)
+    text = re.sub(r"\((?:\s*[a-z]+ \d+(?:\.\d+)?%,?)+\s*\)", "(<share>)", text)
     text = re.sub(r"\b\d+(?:\.\d+)?\s?(?:ms|s|sec|seconds)\b", "<time>", text)
     return " ".join(text.split())
 
@@ -260,12 +261,19 @@ def verify(findings: list[Finding], head: str, keep: set[str]) -> tuple[list[Fin
     return kept, dropped
 
 
-def against_base(findings: list[Finding], base: str, head: str, keep: set[str]) -> None:
-    """Runs each kept reproduction on the base. One that fails there with the head's output is pre-existing."""
+def against_base(findings: list[Finding], base: str, head: str, keep: set[str], setup: tuple[str, ...]) -> None:
+    """Runs each kept reproduction on the base. One that fails there with the head's output is pre-existing. The setup
+    runs again on the base first, so a reproduction against the stack meets the base's code, and when it fails, the base
+    run errors and each finding is new."""
     if not findings:
         return
     checkout(base, findings, keep)
     try:
+        if setup:
+            print(f"gate / fuzz: setup on the base: {' '.join(setup)}", flush=True)
+            if subprocess.run(list(setup)).returncode != 0:
+                print("gate / fuzz: the [fuzz] setup failed on the base, so each finding is new.", flush=True)
+                return
         for finding in findings:
             code, output = run(finding.command)
             finding.new = code == 0 or normal(output) != normal(finding.head_output)
@@ -313,7 +321,7 @@ def main() -> int:
         print("gate / fuzz: off in the base's loop.toml [fuzz], so no model runs.")
         return 0
 
-    repo, number = os.environ["GITHUB_REPOSITORY"], os.environ["PR_NUMBER"]
+    number = os.environ["PR_NUMBER"]
     head = os.environ["HEAD_SHA"]
     base_sha = os.environ["BASE_SHA"]
     base = git("merge-base", base_sha, head).strip()
@@ -332,14 +340,13 @@ def main() -> int:
             sys.exit("gate / fuzz: the [fuzz] setup command failed, so no adversary ran.")
 
     temp = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
-    pr = json.loads(subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}"], capture_output=True, text=True, check=True).stdout)
     pr_file = temp / "pull-request.md"
-    pr_file.write_text(f"# {pr.get('title', '')}\n\n{pr.get('body') or ''}\n")
+    pr_file.write_text(f"# {os.environ.get('PR_TITLE', '')}\n\n{os.environ.get('PR_BODY', '')}\n")
 
     keep = untracked()
     output = run_claude(prompt(number, base, pr_file, config), config)
     kept, dropped = verify(findings_of(output), head, keep)
-    against_base(kept, base_sha, head, keep)
+    against_base(kept, base_sha, head, keep, config.setup)
     new = [finding for finding in kept if finding.new]
     old = [finding for finding in kept if not finding.new]
 
@@ -358,7 +365,8 @@ def main() -> int:
     if len(body) > BODY_CHARS:
         body = body[:BODY_CHARS] + "\n\n... The comment is cut at GitHub's size limit. The job's log holds the rest."
         print("\n\n".join(parts))
-    gh_send("POST", f"repos/{repo}/pulls/{number}/reviews", {"commit_id": head, "event": "COMMENT", "body": body})
+    review = {"commit_id": head, "event": "COMMENT", "body": body}
+    Path(os.environ.get("FUZZ_REVIEW", temp / "fuzz-review.json")).write_text(json.dumps(review))
     print(summary)
     print(cost_line(output))
     if new and config.blocking:

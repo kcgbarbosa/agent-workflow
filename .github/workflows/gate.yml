@@ -114,9 +114,10 @@ jobs:
     runs-on: ${{ inputs.runner }}
     # Adversaries on a real stack take longer than a review. Without a limit, a stalled run holds the merge for 6 hours.
     timeout-minutes: 60
+    # A read-only token, and no step of the job reads it, so the adversaries and their reproductions find no token
+    # that can write to the pull request. The `fuzz-report` job posts the review.
     permissions:
       contents: read
-      pull-requests: write
     steps:
       # No token stays in the checkout's git config, so the adversaries reach GitHub with none.
       - uses: actions/checkout@v7
@@ -143,3 +144,31 @@ jobs:
           model: ${{ inputs.fuzz-model }}
           effort: ${{ inputs.fuzz-effort }}
           skip: ${{ inputs.fuzz-skip }}
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-review
+          path: ${{ runner.temp }}/fuzz-review.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Posts the fuzz job's review comment. It checks out nothing and runs none of the pull request's code, so the write
+  # token stays out of reach of the adversaries.
+  fuzz-report:
+    needs: fuzz
+    if: ${{ !cancelled() && needs.fuzz.result != 'skipped' }}
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      pull-requests: write
+    steps:
+      - id: review
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: fuzz-review
+      - if: steps.review.outcome == 'success' && hashFiles('fuzz-review.json') != ''
+        run: gh api -X POST "repos/$REPO/pulls/$PR_NUMBER/reviews" --input fuzz-review.json > /dev/null
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}

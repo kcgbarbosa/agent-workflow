@@ -2,8 +2,9 @@ name: fuzz
 description: >-
   The gate's fuzz job. Claude Code runs the interrogate skill on the pull request, with adversaries that try to break it
   against the checkout and the stack, and fuzz.py keeps each finding whose reproduction fails again on the head, marks one
-  that fails the same way on the base as pre-existing, posts them as one pull request review comment, and fails on a new
-  one. `loop.toml [fuzz]` of the base overrides each input: `enabled` (default true), `model`, `effort`, `adversaries`
+  that fails the same way on the base as pre-existing, writes them as one pull request review comment to
+  `$RUNNER_TEMP/fuzz-review.json`, and fails on a new one. It reads no GitHub token: gate.yml's `fuzz report` job posts
+  the review. `loop.toml [fuzz]` of the base overrides each input: `enabled` (default true), `model`, `effort`, `adversaries`
   (default 3), `blocking` (default true), `setup`, a command that brings up and seeds the stack, and `skip`, path globs.
 inputs:
   claude_code_oauth_token:
@@ -56,10 +57,12 @@ runs:
       env:
         COMMAND: python3 "$GITHUB_ACTION_PATH/fuzz.py"
         CHECK_ENV: ${{ inputs.check_env }}
-        GH_TOKEN: ${{ github.token }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude_code_oauth_token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+        FUZZ_REVIEW: ${{ runner.temp }}/fuzz-review.json
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         FUZZ_MODEL: ${{ inputs.model }}

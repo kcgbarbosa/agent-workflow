@@ -9,7 +9,7 @@ concurrency:
 jobs:
   gate:
     uses: kcgbarbosa/agent-workflow/.github/workflows/gate.yml@main
-    # The review comments on the pull request, and bill the plan of the token or the API of the key.
+    # The fuzz report comments on the pull request, and the fuzz job bills the plan of the token or the API of the key.
     permissions:
       contents: read
       pull-requests: write

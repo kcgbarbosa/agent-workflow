@@ -16,6 +16,8 @@ export type PullRequest = {
   /** MERGEABLE, CONFLICTING, or UNKNOWN while GitHub works it out. */
   mergeable?: string;
   labels?: { name: string }[];
+  /** Set while auto-merge is on. */
+  autoMergeRequest?: unknown;
 };
 
 export type Check = { name: string; state: string; bucket: string; link: string };
@@ -26,7 +28,7 @@ async function gh(cwd: string, args: string[], ok: (code: number) => boolean = (
   return done;
 }
 
-const FIELDS = "number,url,state,headRefName,baseRefName,headRefOid,isDraft,title,mergeCommit,mergeable,labels";
+const FIELDS = "number,url,state,headRefName,baseRefName,headRefOid,isDraft,title,mergeCommit,mergeable,labels,autoMergeRequest";
 
 /**
  * The ticket's pull requests in any state, on any branch whose name starts with one of the prefixes. A
@@ -88,6 +90,15 @@ export async function toDraft(cwd: string, url: string): Promise<void> {
 /** Auto-merge as a squash, so the pull request title becomes the commit on main. */
 export async function autoMerge(cwd: string, url: string): Promise<void> {
   await gh(cwd, ["pr", "merge", url, "--auto", "--squash"]);
+}
+
+/** Whether someone marked the draft pull request ready after it last became a draft, from its timeline. */
+export async function readied(cwd: string, url: string): Promise<boolean> {
+  const number = /\/pull\/(\d+)/.exec(url)?.[1];
+  const endpoint = `repos/{owner}/{repo}/issues/${number}/timeline`;
+  const done = await gh(cwd, ["api", "--paginate", endpoint, "--jq", ".[].event"]);
+  const events = done.stdout.split("\n").filter((event) => event === "convert_to_draft" || event === "ready_for_review");
+  return events.at(-1) === "ready_for_review";
 }
 
 /** Turns auto-merge off. */

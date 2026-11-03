@@ -3,6 +3,7 @@ on the base, posts one review comment, and fails only on a new finding while `bl
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from fake_github import FakeGitHub
 ROOT = Path(__file__).resolve().parents[1]
 FUZZ = ROOT / "actions" / "fuzz" / "fuzz.py"
 GATE = ROOT / ".github" / "workflows" / "gate.yml"
+ACTION_STEPS = yaml.safe_load((ROOT / "actions" / "fuzz" / "action.yml").read_text())["runs"]["steps"]
 INPUTS = {"FUZZ_MODEL": "claude-opus-5-5", "FUZZ_EFFORT": "high", "FUZZ_SKIP": "*.md docs/* *.lock"}
 
 # Each reproduction reads a.py, which is "one" on the base and "one two three" on the head.
@@ -52,7 +54,7 @@ def fuzz_pr(tmp_path: Path, loop_toml: str | None = None) -> FakeGitHub:
 
 
 def body(pr: FakeGitHub) -> str:
-    [review] = pr.state["reviews"]
+    review = json.loads((pr.root / "fuzz-review.json").read_text())
     assert review["event"] == "COMMENT"
     assert review["commit_id"] == pr.env["HEAD_SHA"]
     return review["body"]
@@ -147,11 +149,12 @@ def test_setup_runs_first_and_the_adversaries_get_no_github_token(tmp_path: Path
     (pr.work / "test_new.py").write_text('open("order.log", "a").write("repro\\n")\nraise SystemExit(1)\n')
     pr.reply(result(finding("test_new.py", "Two shows up")))
 
-    run = pr.run(FUZZ, GH_TOKEN="gh-token", **INPUTS)
+    run = pr.run(FUZZ, **INPUTS)
 
     # The reproduction fails the same way on the base, so it is pre-existing and fails nothing.
     assert run.returncode == 0, run.stderr
-    assert (pr.work / "order.log").read_text() == "setup\nrepro\nrepro\n"
+    # The setup runs again on the base, before the base run.
+    assert (pr.work / "order.log").read_text() == "setup\nrepro\nsetup\nrepro\n"
     [call] = pr.claude_calls
     argv = call["argv"]
     text = argv[argv.index("-p") + 1]
@@ -172,12 +175,14 @@ def test_a_reproduction_runs_with_no_token_and_cannot_post_to_the_pull_request(t
     (pr.work / "test_token.py").write_text(log + post + "raise SystemExit(1)\n")
     pr.reply(result(finding("test_token.py", "A break")))
 
-    run = pr.run(FUZZ, GITHUB_TOKEN="gh-token", TOKEN_LOG=str(tmp_path / "token.log"), **INPUTS)
+    run = pr.run(FUZZ, TOKEN_LOG=str(tmp_path / "token.log"), **INPUTS)
 
     assert run.returncode == 0, run.stderr
     # Once on the head and once on the base.
     assert (tmp_path / "token.log").read_text() == "[None, None, None]\n" * 2
     assert "pre-existing" in body(pr)
+    # The job holds no token, so the reproduction's post fails, and fuzz.py posts nothing itself.
+    assert pr.state["reviews"] == []
 
 
 def test_the_head_rerun_drops_an_adversary_edit_left_in_the_checkout(tmp_path: Path) -> None:
@@ -206,6 +211,46 @@ def test_a_pytest_finding_with_a_numbered_temp_path_matches_on_the_base(tmp_path
     assert ": 0 new, 1 pre-existing, 0 dropped." in body(pr)
 
 
+def test_the_base_run_meets_a_stack_that_the_setup_brought_up_from_the_base(tmp_path: Path) -> None:
+    # The stack serves a.py as it was when the setup brought it up.
+    pr = fuzz_pr(tmp_path, '[fuzz]\nsetup = ["bash", "-c", "cp a.py served.txt"]\n')
+    (pr.work / "test_served.py").write_text('assert "two" not in open("served.txt").read(), "two is served"\n')
+    pr.reply(result(finding("test_served.py", "Two is served")))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 1, run.stdout
+    assert ": 1 new, 0 pre-existing, 0 dropped." in body(pr)
+
+
+def test_a_setup_that_fails_on_the_base_makes_each_finding_new(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path, '[fuzz]\nsetup = ["bash", "-c", "grep -q two a.py"]\n')
+    pr.reply(result(finding("test_old.py", "Four is missing")))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 1, run.stdout
+    assert ": 1 new, 0 pre-existing, 0 dropped." in body(pr)
+
+
+def test_a_finding_whose_clock_time_and_shares_differ_on_the_base_is_pre_existing(tmp_path: Path) -> None:
+    pr = fuzz_pr(tmp_path)
+    # Each run prints its own clock time and, from its pid, its own shares.
+    clock = (
+        "import datetime, os\n"
+        'print(" Start at", datetime.datetime.now().strftime("%H:%M:%S"))\n'
+        'print(" Duration 3.61s (tests %d%%, import 1%%)" % (os.getpid() % 90 + 1))\n'
+        'raise SystemExit("four is missing")\n'
+    )
+    (pr.work / "test_clock.py").write_text(clock)
+    pr.reply(result(finding("test_clock.py", "Four is missing")))
+
+    run = pr.run(FUZZ, **INPUTS)
+
+    assert run.returncode == 0, run.stdout
+    assert ": 0 new, 1 pre-existing, 0 dropped." in body(pr)
+
+
 def test_the_pull_request_cannot_turn_off_its_own_fuzz(tmp_path: Path) -> None:
     pr = fuzz_pr(tmp_path)
     pr.commit({"loop.toml": "[fuzz]\nenabled = false\n"})
@@ -225,7 +270,7 @@ def test_the_base_can_turn_it_off(tmp_path: Path) -> None:
     assert run.returncode == 0, run.stderr
     assert "gate / fuzz: off" in run.stdout
     assert pr.claude_calls == []
-    assert pr.state["reviews"] == []
+    assert not (pr.root / "fuzz-review.json").exists()
 
 
 def test_an_old_review_table_warns_and_is_ignored(tmp_path: Path) -> None:
@@ -248,7 +293,7 @@ def test_no_model_runs_with_no_token_or_only_skip_paths(tmp_path: Path, env: dic
 
     assert run.returncode == 0, run.stderr
     assert pr.claude_calls == []
-    assert pr.state["reviews"] == []
+    assert not (pr.root / "fuzz-review.json").exists()
 
 
 def test_the_gate_runs_fuzz_beside_the_check_and_skips_it_on_a_docs_only_pull_request() -> None:
@@ -257,8 +302,20 @@ def test_the_gate_runs_fuzz_beside_the_check_and_skips_it_on_a_docs_only_pull_re
     fuzz = jobs["fuzz"]
     assert fuzz["needs"] == "paths"
     assert "needs.paths.outputs.docs-only != 'true'" in fuzz["if"]
-    assert fuzz["permissions"] == {"contents": "read", "pull-requests": "write"}
+    # The job that runs the adversaries holds no token that can write, and no step of it reads one.
+    assert fuzz["permissions"] == {"contents": "read"}
+    assert "github.token" not in yaml.safe_dump(fuzz)
+    assert all("TOKEN" not in name or name == "CLAUDE_CODE_OAUTH_TOKEN" for step in ACTION_STEPS for name in step.get("env", {}))
     [action] = [step for step in fuzz["steps"] if step.get("uses") == "./.gate/actions/fuzz"]
     assert action["with"]["check_env"] == "${{ secrets.CHECK_ENV }}"
     assert all(step["with"]["persist-credentials"] is False for step in fuzz["steps"] if step.get("uses", "").startswith("actions/checkout"))
     assert any(step.get("uses", "").startswith("jdx/mise-action") for step in fuzz["steps"])
+    [upload] = [step for step in fuzz["steps"] if step.get("uses", "").startswith("actions/upload-artifact")]
+    assert upload["if"] == "${{ !cancelled() }}"
+    # The report job posts the review with the write token, and checks out and runs nothing of the pull request.
+    report = jobs["fuzz-report"]
+    assert report["needs"] == "fuzz"
+    assert report["permissions"] == {"pull-requests": "write"}
+    assert not [step for step in report["steps"] if step.get("uses", "").startswith("actions/checkout")]
+    [post] = [step for step in report["steps"] if "run" in step]
+    assert "pulls/$PR_NUMBER/reviews" in post["run"]

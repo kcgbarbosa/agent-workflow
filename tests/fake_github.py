@@ -99,7 +99,8 @@ class FakeGitHub:
             "GITHUB_REPOSITORY": "kc/app",
             "PR_NUMBER": "7",
             "CLAUDE_CODE_OAUTH_TOKEN": "token",
-            "GH_TOKEN": "gh-token",
+            "PR_TITLE": "AW-9: add a",
+            "PR_BODY": "Ticket text",
         }
         self.git("init", "-q")
         self.commit({"a.py": "one\n", "README.md": "# app\n", **(base or {})})

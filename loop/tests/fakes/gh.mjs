@@ -131,7 +131,7 @@ if (settled) save();
 
 const [noun, verb] = args;
 const show = (pr) => {
-  const { checks, body, autoMerge, pushes, reruns, reviews, comments, ...rest } = pr;
+  const { checks, body, autoMerge, pushes, reruns, reviews, comments, events, ...rest } = pr;
   return { ...rest, autoMergeRequest: autoMerge, ...((option("json") ?? "").split(",").includes("body") ? { body } : {}) };
 };
 if (noun === "run" && verb === "view") {
@@ -156,6 +156,12 @@ if (noun === "api" && /^repos\/\{owner\}\/\{repo\}\/branches\/[^/]+\/protection\
   // Branch protection's required checks, from FAKE_DIR/required.json. With none, the branch is not protected.
   if (!existsSync(join(fakes, "required.json"))) fail("gh: Branch not protected (HTTP 404)");
   console.log(JSON.stringify(required));
+  process.exit(0);
+}
+if (noun === "api" && /^repos\/\{owner\}\/\{repo\}\/issues\/\d+\/timeline$/.test(args[args.length - 3] ?? "")) {
+  // A pull request's timeline, as `--jq '.[].event'` prints it: the draft events only.
+  const number = /issues\/(\d+)\//.exec(args[args.length - 3])[1];
+  for (const event of find(number).events ?? []) console.log(event);
   process.exit(0);
 }
 if (noun === "api") {
@@ -251,6 +257,7 @@ if (verb === "list") {
   // `--undo` makes it a draft, which turns auto-merge off as GitHub does.
   const pr = find(args[2]);
   pr.isDraft = args.includes("--undo");
+  pr.events = [...(pr.events ?? []), pr.isDraft ? "convert_to_draft" : "ready_for_review"];
   if (pr.isDraft) pr.autoMerge = null;
   save();
 } else if (verb === "comment") {

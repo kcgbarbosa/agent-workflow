@@ -400,6 +400,7 @@ ${extra}`;
       for (const pr of state.prs) {
         if (!pr.headRefName.includes(`/${key}-`)) continue;
         pr.isDraft = on;
+        pr.events = [...(pr.events ?? []), on ? "convert_to_draft" : "ready_for_review"];
         if (on) pr.autoMerge = null;
       }
     });

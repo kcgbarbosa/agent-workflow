@@ -1,5 +1,6 @@
 // The blast level of a worker's pull request: a red one opens as a draft and waits for the owner, a yellow one
 // holds after its first green, and a green one merges at its first green.
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
@@ -220,11 +221,14 @@ test("a level that rises to yellow after auto-merge turned on turns it off and h
   expect(world.prs()[0]!.body).toMatch(/^Hold until \S+$/m);
 });
 
-test("a changed dotfile under a red glob is red", async () => {
-  world.writeConfig('[blast]\nred = ["auth/**"]\n');
+test.each([
+  ["auth/**", "auth/.secrets.json"],
+  [".github/**", ".github/.env"],
+])("a changed dotfile under the red glob %s is red", async (glob, file) => {
+  world.writeConfig(`[blast]\nred = ["${glob}"]\n`);
   world.jira.add(KEY, "Add the login secrets");
   world.verdicts({ [KEY]: "pass" });
-  world.plan({ [KEY]: [{ write: { "auth/.secrets.json": "{}\n" }, commit: "feat(DEMO-2): secrets" }] });
+  world.plan({ [KEY]: [{ write: { [file]: "{}\n" }, commit: "feat(DEMO-2): secrets" }] });
 
   const ran = await work();
 
@@ -253,4 +257,52 @@ test("a file moved out from under a red glob is red", async () => {
   expect(ran.code).toBe(1);
   expect(worker()).toContain(`${KEY} blast red`);
   expect(world.prs()[0]).toMatchObject({ isDraft: true, state: "OPEN" });
+});
+
+test("a level that rises to yellow after a restart turns off the auto-merge an earlier run turned on", async () => {
+  const fake = resolve(import.meta.dirname, "fakes", "gh.mjs");
+  world.required(["gate / check", "gate / fuzz"]);
+  world.command("gh", `#!/bin/sh\ncase "$2" in */protection/required_status_checks) echo "gh: Not Found (HTTP 404)" >&2; exit 1;; esac\nexec node "${fake}" "$@"\n`);
+  world.jira.add(KEY, "Add the login page");
+  world.verdicts({ [KEY]: "pass" });
+  world.plan({
+    [KEY]: [{ write: { "a.txt": "a\n" }, commit: "feat(DEMO-2): a" }, { limit: {} }, { write: { "b.txt": "b\n" }, commit: "fix(DEMO-2): b", blast: "yellow" }],
+  });
+
+  // The first worker turns auto-merge on, and its fix attempt hits the usage limit.
+  const first = work();
+  await world.until(() => world.prs()[0]?.autoMerge != null, "auto-merge on");
+  world.setChecks(KEY, { "gate / fuzz": "fail" });
+  expect((await first).code).toBe(1);
+  // The second worker's fix attempt gives yellow.
+  expect((await work()).code).toBe(1);
+  world.setChecks(KEY, { "gate / fuzz": "pass" });
+  execFileSync("node", [fake, "pr", "list"], { cwd: world.repo, env: world.env });
+
+  expect(worker()).toContain(`${KEY} auto-merge off`);
+  expect(world.prs()[0]).toMatchObject({ state: "OPEN", autoMerge: null });
+  expect(world.prs()[0]!.body).toMatch(/^Hold until \S+$/m);
+});
+
+test("a red draft whose worker died right after it opened merges once the owner marks it ready", async () => {
+  const fake = resolve(import.meta.dirname, "fakes", "gh.mjs");
+  const once = join(world.fakes, "kill-once");
+  writeFileSync(once, "");
+  // `gh pr create --draft` reaches GitHub, and the worker dies before it logs anything after it.
+  world.command(
+    "gh",
+    `#!/bin/sh\nif [ "$1 $2" = "pr create" ] && [ -e "${once}" ]; then\n  node "${fake}" "$@"\n  rm -f "${once}"\n  kill -9 $PPID\n  exit 0\nfi\nexec node "${fake}" "$@"\n`,
+  );
+  world.writeConfig('[blast]\nred = ["auth/**"]\n');
+  world.jira.add(KEY, "Add the login page");
+  world.verdicts({ [KEY]: "pass" });
+  world.plan({ [KEY]: [{ write: { "auth/login.ts": "login\n" }, commit: "feat(DEMO-2): login" }] });
+
+  expect((await work()).code).not.toBe(0);
+  expect(world.prs()[0]).toMatchObject({ isDraft: true, state: "OPEN" });
+  world.draft(KEY, false);
+  const second = await work();
+
+  expect(second.code, second.stderr).toBe(0);
+  expect(world.prs()[0]).toMatchObject({ isDraft: false, state: "MERGED" });
 });

@@ -13,3 +13,15 @@ test("the design doc names every loop.toml key", () => {
   const missing = [...keys].filter((key) => !new RegExp(`\`[^\`\\n]*\\b${key}\\b[^\`\\n]*\``).test(doc)).sort();
   expect(missing, `${DESIGN.pathname} does not name these loop.toml keys`).toEqual([]);
 });
+
+test("the design doc's Log rule names every step the code logs", () => {
+  const sources = ["run.ts", "dispatch.ts", "epic.ts"].map((file) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8")).join("\n");
+  const steps = new Set([...sources.matchAll(/log\.write\([^,]+, "([a-z-]+)"/g)].map((match) => match[1]!));
+  const rule = readFileSync(DESIGN, "utf8")
+    .split("\n")
+    .find((line) => line.startsWith("11. **Log.**"))!;
+
+  expect(steps.size, "the step pattern no longer matches the code").toBeGreaterThan(10);
+  expect([...steps].filter((step) => !rule.includes(`\`${step}\``)).sort(), "the Log rule does not name these steps").toEqual([]);
+  expect(rule).not.toMatch(/`respond`/);
+});
