@@ -72,7 +72,7 @@ function lines(home: string): object[] {
       pr: pr(1),
       checks: [
         { name: "gate / check", bucket: "pass", link: link(11) },
-        { name: "gate / review", bucket: "pass", link: link(12) },
+        { name: "gate / fuzz", bucket: "pass", link: link(12) },
       ],
     },
     { ticket: "DEMO-2", step: "agent", result: "done", session: "DEMO-2", plan: { five_hour: { start: 0.2, end: 0.41, resets_at: 1 } } },
@@ -92,7 +92,7 @@ function lines(home: string): object[] {
       pr: pr(2),
       checks: [
         { name: "gate / check", bucket: "pass", link: link(21) },
-        { name: "gate / review", bucket: "pass", link: link(22) },
+        { name: "gate / fuzz", bucket: "pass", link: link(22) },
       ],
     },
     { ticket: "DEMO-3", step: "merge", result: "merged", commit: "m2", pr: pr(2) },
@@ -110,7 +110,7 @@ function lines(home: string): object[] {
       pr: pr(3),
       checks: [
         { name: "gate / check", bucket: "fail" },
-        { name: "gate / review", bucket: "pass" },
+        { name: "gate / fuzz", bucket: "pass" },
       ],
       detail: "Failed: gate / check",
     },

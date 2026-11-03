@@ -29,7 +29,11 @@ A step only KC can do is a ticket with the component `manual`, which no loop bui
 
 ### Gate
 
-The shared merge gate, through `.github/workflows/pull-request.yml`. It runs `make check`, and `make check-docs` on a docs-only pull request. `loop.toml` turns the review on, gives the agent hint, and runs `make loop-deps` in each new worktree. `make check` starts with every check of `lefthook.yml`, the list a commit runs.
+The shared merge gate, through `.github/workflows/pull-request.yml`. It runs `make check`, and `make check-docs` on a docs-only pull request. `loop.toml` turns the fuzz job on, gives the agent hint, and runs `make loop-deps` in each new worktree. `make check` starts with every check of `lefthook.yml`, the list a commit runs.
+
+### Blast radius
+
+No `[blast]` globs, so the agent's `blast` value alone sets a pull request's level.
 
 ### Stack per worktree
 

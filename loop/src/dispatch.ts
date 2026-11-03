@@ -11,7 +11,7 @@ import * as github from "./github.ts";
 import { Jira, type Ticket } from "./jira.ts";
 import { ticketHome } from "./layout.ts";
 import { DECISIONS, type Line, Log } from "./log.ts";
-import { branchPrefixes, MAX_USAGE_WAIT_SECONDS, typeOf } from "./run.ts";
+import { branchPrefixes, HOLD_LABEL, holdOf, MAX_USAGE_WAIT_SECONDS, typeOf } from "./run.ts";
 import { composeProject, freeLeftSlots, portsFree, takeSlot } from "./slots.ts";
 import { DISPATCH, runs, runUnit, startRun } from "./units.ts";
 
@@ -178,10 +178,20 @@ export class Dispatcher {
     if (ticket.issueType === "Epic") return "an Epic";
     if (ticket.flagged) return "flagged";
     if (!ticket.components.includes(this.config.component)) return "not this component";
-    if (ticket.done || (await this.merged(ticket))) return "merged";
+    if (ticket.done) return "merged";
+    const prs = await this.pullRequests(ticket);
+    if (prs.some((pr) => pr.state === "MERGED")) return "merged";
     for (const blocker of ticket.blockers) {
       if (blocker.done) continue;
-      if (!(await this.merged(await this.jira.ticket(blocker.key)))) return `waiting on ${blocker.key}`;
+      if (!(await this.pullRequests(await this.jira.ticket(blocker.key))).some((pr) => pr.state === "MERGED")) return `waiting on ${blocker.key}`;
+    }
+    // A handed-back ticket waits while its pull request is a draft, carries the hold label, or its hold runs.
+    const open = prs.find((pr) => pr.state === "OPEN");
+    if (open?.isDraft) return "a draft";
+    if (open?.labels?.some((label) => label.name === HOLD_LABEL)) return "on hold";
+    if (open) {
+      const until = holdOf(await github.body(this.config.repo, open.url));
+      if (until && until.getTime() > Date.now()) return `held until ${until.toISOString()}`;
     }
     return "ready";
   }
@@ -204,13 +214,13 @@ export class Dispatcher {
     return true;
   }
 
-  /** Whether a pull request of the ticket's branch merged on GitHub. */
-  private async merged(ticket: Ticket): Promise<boolean> {
+  /** The pull requests of the ticket's branch on GitHub. */
+  private async pullRequests(ticket: Ticket): Promise<github.PullRequest[]> {
     const branch = `${typeOf(ticket)}/${ticket.key}-${slug(ticket.summary)}`;
     const prs = await github.pullRequestsOf(this.config.repo, ticket.key, branch, branchPrefixes(ticket.key));
     const merged = prs.find((pr) => pr.state === "MERGED");
     if (merged) this.repoUrl ??= merged.url.split("/pull/")[0]!;
-    return merged !== undefined;
+    return prs;
   }
 
   /** The Epic check for the parent of each ticket that merged, and once an hour for every open Epic. */
@@ -232,7 +242,7 @@ export class Dispatcher {
           home: this.config.stateDir,
           log: (step, result, extra = {}) => this.log.write(epic, step, result, extra),
           notify: (message) => this.notify(message),
-          merged: (child) => this.merged(child),
+          merged: async (child) => (await this.pullRequests(child)).some((pr) => pr.state === "MERGED"),
           repoUrl,
         },
         epic,

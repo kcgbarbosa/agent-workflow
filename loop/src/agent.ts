@@ -3,7 +3,7 @@
 import { accessSync, appendFileSync, constants, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { query, type SpawnedProcess, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
-import type { Config } from "./config.ts";
+import { type Config, type Level, LEVELS } from "./config.ts";
 import { endGroup, run, signalGroup, spawnGroup } from "./spawn.ts";
 
 const DISPATCH = new URL("./dispatch.md", import.meta.url);
@@ -30,12 +30,17 @@ export const SCHEMA = {
         "Anything else worth keeping on the ticket: a judgement call that follows the docs, a polish idea, " +
         "a limit of the check. KC reads these only when KC opens the ticket.",
     },
+    blast: {
+      type: "string",
+      enum: [...LEVELS],
+      description: "The blast level the blast-radius skill gives the change: green, yellow, or red. Green when left out.",
+    },
   },
   required: ["status", "reason", "decisions"],
   additionalProperties: false,
 };
 
-export type Output = { status: "done" | "blocked"; reason: string; decisions: string[]; notes?: string[] };
+export type Output = { status: "done" | "blocked"; reason: string; decisions: string[]; notes?: string[]; blast?: Level };
 
 export type Session = {
   result: "done" | "blocked" | "error" | "timeout" | "usage-limit";
@@ -111,7 +116,7 @@ const TIERS = new URL("../../agents/", import.meta.url);
 
 /**
  * What the agents of a run run on: the `claude` version, and the model and effort of the head agent, of each
- * subagent tier, and of the gate's review. The start line keeps it, so `loop report` can tell two runs apart.
+ * subagent tier, and of the gate's fuzz job. The start line keeps it, so `loop report` can tell two runs apart.
  */
 export async function runSetup(config: Config): Promise<Record<string, unknown>> {
   const executable = claudePath();
@@ -126,7 +131,7 @@ export async function runSetup(config: Config): Promise<Record<string, unknown>>
     claude: /\d+\.\d+\.\d+/.exec(printed)?.[0] ?? "",
     agent: `${config.agentModel} ${config.agentEffort}`,
     tiers,
-    review: `${config.review.model ?? "the gate's model"} ${config.review.effort ?? "the gate's effort"}`,
+    fuzz: `${config.fuzz.model ?? "the gate's model"} ${config.fuzz.effort ?? "the gate's effort"}`,
   };
 }
 

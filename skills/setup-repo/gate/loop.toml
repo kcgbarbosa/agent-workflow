@@ -1,3 +1,3 @@
-# The shared gate's settings. actions/review/action.yml in agent-workflow gives the [review] keys.
-[review]
+# The shared gate's settings. actions/fuzz/action.yml in agent-workflow gives the [fuzz] keys.
+[fuzz]
 enabled = true

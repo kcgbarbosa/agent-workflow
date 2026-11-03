@@ -70,14 +70,16 @@ const gitAt = (at, ...command) => execFileSync("git", ["-C", at, ...command], { 
 const keyOf = (branch) => /^(?:feat|fix|docs)\/([A-Z][A-Z0-9]*-\d+)-/.exec(branch)?.[1];
 const verdicts = existsSync(join(fakes, "verdicts.json")) ? JSON.parse(readFileSync(join(fakes, "verdicts.json"), "utf8")) : {};
 
-function review(pr, findings) {
-  const blocking = findings.filter((item) => item.severity === "blocking").length;
-  const text = (item) => `**${item.severity}**: ${item.sentence}`;
-  const outside = findings.filter((item) => item.outside).map((item) => `- \`${item.path}:${item.line}\` ${text(item)}`);
-  let body = `<!-- gate review head=${pr.headRefOid} blocking=${blocking} -->\n**gate / review**: ${blocking} blocking.`;
-  if (outside.length) body += `\n\nFindings outside the diff:\n${outside.join("\n")}`;
-  const comments = findings.filter((item) => !item.outside).map((item) => ({ path: item.path, line: item.line, body: text(item) }));
-  return { id: pr.number * 10, body, comments };
+const fuzzed = existsSync(join(fakes, "fuzz.json")) ? JSON.parse(readFileSync(join(fakes, "fuzz.json"), "utf8")) : {};
+
+/** The gate's fuzz comment at the pull request's head, as FAKE_DIR/fuzz.json gives the findings of its ticket. */
+function fuzz(pr) {
+  const findings = fuzzed[keyOf(pr.headRefName)];
+  if (!findings) return;
+  const body = `<!-- gate fuzz head=${pr.headRefOid} findings=${findings.length} -->\n**gate / fuzz**: ${findings.length} new.\n\n${findings.join("\n\n")}`;
+  const review = { id: pr.number * 10 + pr.reviews.length, body, comments: [] };
+  if (existsSync(join(fakes, "fuzz-late"))) pr.lateReviews = [...(pr.lateReviews ?? []), review];
+  else pr.reviews = [...(pr.reviews ?? []), review];
 }
 
 /** The check of the pull request's nth run, as its verdict gives it. A rerun keeps the run id and gets a new job. */
@@ -117,6 +119,7 @@ for (const pr of state.prs) {
     pr.headRefOid = oid;
     pr.pushes = (pr.pushes ?? 0) + 1;
     pr.checks = [check(pr)];
+    fuzz(pr);
     settled = true;
   }
 }
@@ -130,7 +133,7 @@ if (settled) save();
 
 const [noun, verb] = args;
 const show = (pr) => {
-  const { checks, body, autoMerge, pushes, reruns, reviews, comments, ...rest } = pr;
+  const { checks, body, autoMerge, pushes, reruns, reviews, comments, events, lateReviews, reviewReads, ...rest } = pr;
   return { ...rest, autoMergeRequest: autoMerge, ...((option("json") ?? "").split(",").includes("body") ? { body } : {}) };
 };
 if (noun === "run" && verb === "view") {
@@ -157,11 +160,27 @@ if (noun === "api" && /^repos\/\{owner\}\/\{repo\}\/branches\/[^/]+\/protection\
   console.log(JSON.stringify(required));
   process.exit(0);
 }
+if (noun === "api" && /^repos\/\{owner\}\/\{repo\}\/issues\/\d+\/timeline$/.test(args[args.length - 3] ?? "")) {
+  // A pull request's timeline, as `--jq '.[].event'` prints it: the draft events only.
+  const number = /issues\/(\d+)\//.exec(args[args.length - 3])[1];
+  for (const event of find(number).events ?? []) console.log(event);
+  process.exit(0);
+}
 if (noun === "api") {
   // Only the reads the loop makes: a pull request's reviews, and one review's comments.
   const [, number, id] = /^repos\/\{owner\}\/\{repo\}\/pulls\/(\d+)\/reviews(?:\/(\d+)\/comments)?$/.exec(args[1]) ?? [];
   if (!number) fail(`fake gh: no api ${args[1]}`);
-  const reviews = find(number).reviews ?? [];
+  // A late fuzz comment lands once the reviews have been read.
+  const pr = find(number);
+  if (pr.lateReviews?.length) {
+    if (pr.reviewReads) {
+      pr.reviews = [...(pr.reviews ?? []), ...pr.lateReviews];
+      pr.lateReviews = [];
+    }
+    pr.reviewReads = (pr.reviewReads ?? 0) + 1;
+    save();
+  }
+  const reviews = pr.reviews ?? [];
   const items = id ? (reviews.find((review) => String(review.id) === id)?.comments ?? []) : reviews.map(({ comments, ...review }) => review);
   for (const item of items) console.log(JSON.stringify(item));
   process.exit(0);
@@ -169,6 +188,12 @@ if (noun === "api") {
 if (noun === "repo" && verb === "clone") {
   const [, , url, folder] = args;
   gitAt(dirname(origin), "clone", "--quiet", join(dirname(origin), `${basename(url)}.git`), folder);
+  process.exit(0);
+}
+if (noun === "label" && verb === "create") {
+  if (!args.includes("--force") && (state.labels ?? []).includes(args[2])) fail(`label with name "${args[2]}" already exists`);
+  state.labels = [...new Set([...(state.labels ?? []), args[2]])];
+  save();
   process.exit(0);
 }
 if (noun !== "pr") fail(`fake gh: no ${noun}`);
@@ -203,17 +228,17 @@ if (verb === "list") {
     title: option("title"),
     body: readFileSync(option("body-file"), "utf8"),
     state: "OPEN",
-    isDraft: false,
+    isDraft: args.includes("--draft"),
     autoMerge: null,
     mergeCommit: null,
     headRefOid: gitAt(here, "rev-parse", `refs/heads/${head}`),
     pushes: 1,
     reviews: [],
+    labels: [],
   };
   if (here !== origin) pr.origin = here;
   pr.checks = [check(pr)];
-  const reviews = existsSync(join(fakes, "reviews.json")) ? JSON.parse(readFileSync(join(fakes, "reviews.json"), "utf8")) : {};
-  if (reviews[keyOf(head)]) pr.reviews.push(review(pr, reviews[keyOf(head)]));
+  fuzz(pr);
   state.prs.push(pr);
   save();
   console.log(pr.url);
@@ -221,7 +246,9 @@ if (verb === "list") {
   const pr = find(args[2]);
   if (pr.state !== "OPEN") fail(`Pull request #${pr.number} is not open`);
   if (args.includes("--auto") && existsSync(join(fakes, "no-auto-merge"))) fail("Auto-merge is not allowed for this repository");
-  if (args.includes("--auto")) pr.autoMerge = { mergeMethod: args.includes("--squash") ? "SQUASH" : "MERGE" };
+  if (args.includes("--disable-auto")) pr.autoMerge = null;
+  else if (args.includes("--auto")) pr.autoMerge = { mergeMethod: args.includes("--squash") ? "SQUASH" : "MERGE" };
+  else if (pr.isDraft) fail(`Pull request #${pr.number} is still a draft`);
   else if (green(pr)) squash(pr);
   else fail(`Pull request #${pr.number} is not mergeable: the base branch policy prohibits the merge.`);
   if (pr.autoMerge && !pr.isDraft && green(pr)) squash(pr);
@@ -230,6 +257,21 @@ if (verb === "list") {
   const pr = find(args[2]);
   if (option("base")) pr.baseRefName = option("base");
   if (option("body-file")) pr.body = readFileSync(option("body-file"), "utf8");
+  // GitHub refuses a label the repo does not have, so the loop makes it first with `gh label create`.
+  const named = (flag) => args.flatMap((arg, index) => (args[index - 1] === flag ? [arg] : []));
+  for (const name of named("--add-label")) {
+    if (!(state.labels ?? []).includes(name)) fail(`could not add label: '${name}' not found`);
+    if (!(pr.labels ?? []).some((label) => label.name === name)) pr.labels = [...(pr.labels ?? []), { name }];
+  }
+  const removed = named("--remove-label");
+  pr.labels = (pr.labels ?? []).filter((label) => !removed.includes(label.name));
+  save();
+} else if (verb === "ready") {
+  // `--undo` makes it a draft, which turns auto-merge off as GitHub does.
+  const pr = find(args[2]);
+  pr.isDraft = args.includes("--undo");
+  pr.events = [...(pr.events ?? []), pr.isDraft ? "convert_to_draft" : "ready_for_review"];
+  if (pr.isDraft) pr.autoMerge = null;
   save();
 } else if (verb === "comment") {
   const pr = find(args[2]);

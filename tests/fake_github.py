@@ -12,7 +12,9 @@ import sys
 from pathlib import Path
 
 GH = """
-import json, re, sys
+import json, os, re, sys
+if not os.environ.get("GH_TOKEN") and not os.environ.get("GITHUB_TOKEN"):
+    sys.exit("fake gh: no GH_TOKEN, so gh is not logged in")
 state_path = {state!r}
 state = json.load(open(state_path))
 args = sys.argv[2:]
@@ -57,7 +59,7 @@ stdin = "" if sys.stdin.isatty() else sys.stdin.read()
 with open(calls_path + ".lock", "w") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     calls = json.load(open(calls_path))
-    calls.append({{"argv": sys.argv[1:], "stdin": stdin, "api_key": os.environ.get("ANTHROPIC_API_KEY")}})
+    calls.append({{"argv": sys.argv[1:], "stdin": stdin, "api_key": os.environ.get("ANTHROPIC_API_KEY"), "gh_token": os.environ.get("GH_TOKEN"), "fuzz_review": os.environ.get("FUZZ_REVIEW")}})
     json.dump(calls, open(calls_path, "w"))
     replies = json.load(open(replies_path))
     reply = next(r for r in replies if not isinstance(r, dict) or r["when"] in stdin)
@@ -97,6 +99,8 @@ class FakeGitHub:
             "GITHUB_REPOSITORY": "kc/app",
             "PR_NUMBER": "7",
             "CLAUDE_CODE_OAUTH_TOKEN": "token",
+            "PR_TITLE": "AW-9: add a",
+            "PR_BODY": "Ticket text",
         }
         self.git("init", "-q")
         self.commit({"a.py": "one\n", "README.md": "# app\n", **(base or {})})

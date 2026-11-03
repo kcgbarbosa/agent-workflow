@@ -18,8 +18,11 @@ const DROPPED: Record<string, string> = {
   "ui.blocking": "the owner reviews the UI on staging",
   demo: "the loop no longer opens an Epic pull request with a demo",
   "tracker.name_landed_keys_only": "the loop no longer opens the Epic pull request it named the landed keys in",
-  fuzz: "the gate reads it, from the base branch",
+  review: "the gate's fuzz job replaced the review, and `[fuzz]` holds its settings",
 };
+
+export const LEVELS = ["green", "yellow", "red"] as const;
+export type Level = (typeof LEVELS)[number];
 
 export class ConfigError extends Error {}
 
@@ -43,7 +46,18 @@ export type Config = {
   fixAttempts: number;
   circuitBreaker: number;
   stack: { ports: Record<string, number>; portStep: number } | null;
-  review: { enabled: boolean; model: string | null; effort: string | null; skip: string[] };
+  /** The gate's fuzz settings, which the gate reads from the base branch. The loop checks their types and logs the model and effort. */
+  fuzz: {
+    enabled: boolean;
+    model: string | null;
+    effort: string | null;
+    adversaries: number;
+    blocking: boolean;
+    setup: string[];
+    skip: string[];
+  };
+  /** The path globs that set a pull request's blast level at least to red or yellow, and the minutes a yellow one waits after its first green. */
+  blast: { red: string[]; yellow: string[]; holdMinutes: number };
   ntfyUrl: string;
   /** `exact` is false for a `since` with a date only. */
   plans: { plan: string; since: string; exact: boolean }[];
@@ -217,7 +231,8 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
   const limits = top.table("limits", true);
   const stackTable = top.table("stack", true);
   const ui = top.table("ui", true);
-  const review = top.table("review", true);
+  const fuzz = top.table("fuzz", true);
+  const blast = top.table("blast", true);
   const notify = top.table("notify", true);
   const watch = top.table("watch", true);
   const queue = top.table("queue", true);
@@ -278,12 +293,16 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     fixAttempts: limits.number("fix_attempts", 2),
     circuitBreaker: limits.number("circuit_breaker", 2),
     stack,
-    review: {
-      enabled: review.flag("enabled", true),
-      model: review.text("model", null),
-      effort: review.text("effort", null),
-      skip: review.texts("skip", []),
+    fuzz: {
+      enabled: fuzz.flag("enabled", true),
+      model: fuzz.text("model", null),
+      effort: fuzz.text("effort", null),
+      adversaries: fuzz.number("adversaries", 3),
+      blocking: fuzz.flag("blocking", true),
+      setup: fuzz.texts("setup", []),
+      skip: fuzz.texts("skip", []),
     },
+    blast: { red: blast.texts("red", []), yellow: blast.texts("yellow", []), holdMinutes: blast.number("hold_minutes", 60) },
     ntfyUrl: notify.text("url", "https://ntfy.sh"),
     plans,
     queue: { filter: queue.text("filter", filter), pollMinutes: queue.number("poll_minutes", 2) },
@@ -291,7 +310,7 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     stateDir: stateDirOf(name),
     warnings,
   };
-  for (const table of [top, tracker, agent, limits, stackTable, ui, review, notify, watch, queue]) {
+  for (const table of [top, tracker, agent, limits, stackTable, ui, fuzz, blast, notify, watch, queue]) {
     table.done(warnings);
   }
   return config;

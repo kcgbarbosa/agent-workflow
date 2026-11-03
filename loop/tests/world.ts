@@ -39,6 +39,7 @@ export type PullRequest = {
   checks: { name: string; bucket: string; state: string }[];
   pushes?: number;
   comments?: string[];
+  labels?: { name: string }[];
 };
 
 function which(tool: string): string {
@@ -185,10 +186,14 @@ ${extra}`;
     writeFileSync(join(this.fakes, "verdicts.json"), JSON.stringify(verdicts));
   }
 
-  /** The findings of the gate's review of each new pull request, by ticket key. */
-  reviews(reviews: Record<string, { path: string; line: number; severity: "blocking" | "minor"; sentence: string; outside?: boolean }[]>): void {
-    writeFileSync(join(this.fakes, "reviews.json"), JSON.stringify(reviews));
+  /** The findings text of the gate's fuzz comment at each push of the ticket's pull request. */
+  fuzz(findings: Record<string, string[]>, late = false): void {
+    writeFileSync(join(this.fakes, "fuzz.json"), JSON.stringify(findings));
+    // Late, the comment shows only from the second read of the reviews, as when the `fuzz-report` job posts it after
+    // the fuzz check ends.
+    if (late) writeFileSync(join(this.fakes, "fuzz-late"), "");
   }
+
 
   /** The log of each failed job. */
   jobLog(text: string): void {
@@ -381,12 +386,24 @@ ${extra}`;
     });
   }
 
+  /** Puts the label on the ticket's pull request, or takes it off. */
+  label(key: string, name: string, on: boolean): void {
+    this.github((state) => {
+      for (const pr of state.prs) {
+        if (!pr.headRefName.includes(`/${key}-`)) continue;
+        pr.labels = (pr.labels ?? []).filter((label: { name: string }) => label.name !== name);
+        if (on) pr.labels.push({ name });
+      }
+    });
+  }
+
   /** Converts the ticket's pull request to a draft, which turns auto-merge off as GitHub does, or marks it ready. */
   draft(key: string, on: boolean): void {
     this.github((state) => {
       for (const pr of state.prs) {
         if (!pr.headRefName.includes(`/${key}-`)) continue;
         pr.isDraft = on;
+        pr.events = [...(pr.events ?? []), on ? "convert_to_draft" : "ready_for_review"];
         if (on) pr.autoMerge = null;
       }
     });

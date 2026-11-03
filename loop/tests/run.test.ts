@@ -87,13 +87,13 @@ test("a check that reports late keeps the loop waiting until the pull request me
 
   const running = world.loop("run", EPIC);
   await world.until(() => world.prs().length === 1, "the pull request");
-  world.setChecks("DEMO-2", { "gate / check": "pending", "gate / review": "pending" });
+  world.setChecks("DEMO-2", { "gate / check": "pending", "gate / fuzz": "pending" });
   world.setChecks("DEMO-2", { "gate / check": "pass" });
   const polls = world.ghCalls().length;
   await world.until(() => world.ghCalls().length >= polls + 6, "the loop to poll again");
   expect(world.prs()[0]!.state).toBe("OPEN");
   expect(world.steps().filter((step) => /DEMO-2 (wait|merge)/.test(step))).toEqual([]);
-  world.setChecks("DEMO-2", { "gate / review": "pass" });
+  world.setChecks("DEMO-2", { "gate / fuzz": "pass" });
   const ran = await running;
 
   expect(ran.code, ran.stderr).toBe(0);
@@ -101,7 +101,7 @@ test("a check that reports late keeps the loop waiting until the pull request me
     result: "green",
     checks: [
       { name: "gate / check", bucket: "pass" },
-      { name: "gate / review", bucket: "pass" },
+      { name: "gate / fuzz", bucket: "pass" },
     ],
   });
   expect(world.steps()).toContain("DEMO-2 merge merged");
@@ -375,9 +375,11 @@ test("the decisions log has one line per step, and no gate, review, land, or Epi
     "DEMO-2 build started",
     "DEMO-2 agent done",
     "DEMO-2 build pass",
+    "DEMO-2 blast green",
     "DEMO-2 push ok",
     "DEMO-2 pr open",
     "DEMO-2 tracker-status ok",
+    "DEMO-2 label ok",
     "DEMO-2 wait green",
     "DEMO-2 merge merged",
     "DEMO-2 tracker-status ok",
@@ -407,7 +409,7 @@ test("a blocked agent opens no pull request", async () => {
   );
 });
 
-test("an old loop.toml loads with one warning per dropped key", async () => {
+test("an old loop.toml, also with [review], loads with one warning per dropped key", async () => {
   world.jira.add("DEMO-2", "Add the login page", { parent: EPIC });
   world.verdicts({ "DEMO-2": "pass" });
   world.writeConfig(`
@@ -435,8 +437,8 @@ enabled = true
 
   expect(ran.code, ran.stderr).toBe(0);
   const warnings = ran.stderr.split("\n").filter((line) => line.includes("is no longer read"));
-  expect(warnings).toHaveLength(6);
-  for (const key of ["[gates]", "[acceptance]", "[ui].skill", "[ui].blocking", "[demo]", "[tracker].name_landed_keys_only"]) {
+  expect(warnings).toHaveLength(7);
+  for (const key of ["[gates]", "[acceptance]", "[ui].skill", "[ui].blocking", "[demo]", "[tracker].name_landed_keys_only", "[review]"]) {
     expect(warnings.filter((line) => line.startsWith(`loop.toml: ${key} `))).toHaveLength(1);
   }
 });
