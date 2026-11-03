@@ -154,7 +154,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 **Choose.** Keep the defaults of loop.md until a run's cost says otherwise. To cut the plan usage of a run, lower `effort` before you change `model`.
 
-**Check.** `loop report` after the first Epic. The tickets with the most turns and the largest peak context show where the cost goes.
+**Check.** `loop report <KEY>` on the first tickets. The turns and the peak context of each show where the cost goes.
 
 ## Connectors
 
@@ -214,7 +214,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 **Choose.** Keep `parallel` at 1 for the first Epic, because each parallel ticket runs a full stack, adds to the plan meter, and adds merge conflicts. Raise it when the first-pass rate is high and the host has memory for the stacks. The other defaults suit most repos. `agent_timeout_minutes` should exceed the longest legitimate ticket. `fix_attempts` caps the rework of one ticket. `circuit_breaker` stops a run when tickets stick in a row, because that pattern means a shared cause, such as a red main or a broken gate, and more attempts only spend the plan.
 
-**Check.** After the first Epic, `loop report` shows the tickets that hit a limit. Raise a limit only for a cause you understand.
+**Check.** After the first tickets, `loop report <KEY>` shows what each one used. Raise a limit only for a cause you understand.
 
 ## Logs
 
