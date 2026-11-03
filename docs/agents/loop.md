@@ -8,7 +8,7 @@ The loop runs from `~/dev/agent-workflow`, through the `~/.local/bin/loop` link 
 
 ### Run
 
-On t14: `cd ~/dev/agent-workflow && loop start <Epic key>`, which fast-forwards the checkout first. `loop stop <Epic key>` ends a run. `loop ticket <KEY>` builds one ticket to merge in its own unit, and `loop stop <KEY>` ends it. An Epic with tickets in machines too, such as AW-8, takes one `loop start <Epic key>` in each repo, and each builds only its own tickets. From another device, run it from a T3 Code thread on t14.
+On t14: `cd ~/dev/agent-workflow && loop start`, which fast-forwards the checkout first and starts the dispatcher, which builds each ready ticket of the queue. `loop stop` ends the dispatcher and every worker. `loop ticket <KEY>` builds one ticket to merge in its own unit, and `loop stop <KEY>` ends it and flags the ticket. An Epic with tickets in machines too, such as AW-8, is built by the dispatcher of each repo, and each builds only its own tickets. From another device, run it from a T3 Code thread on t14.
 
 ### Tracker
 
@@ -62,6 +62,10 @@ The Jira email and API token, the ntfy topic, and the Claude token of the loop a
 ### Limits
 
 In `loop.toml`.
+
+### Queue
+
+`[queue]` `filter` and `poll_minutes` in `loop.toml`. This repo's file sets neither, so the defaults of the design apply.
 
 ### Logs
 

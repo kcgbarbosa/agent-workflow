@@ -2,14 +2,16 @@
 // push, pull request, wait, merge. The gate on GitHub checks the work, so the loop runs no gate, no review,
 // no landing, and no Epic branch of its own. A red gate resumes the agent as a fix attempt, a green gate with
 // blocking review findings resumes it once to answer them, and a ticket whose blocker has an open pull request
-// stacks on it. A restart starts each ticket at its first step. A worker, `loop run-ticket`, builds one ticket
-// in its own folder, `tickets/<KEY>/`, from the main branch, and ends merged, handed back, or stuck.
+// stacks on it. A restart starts each ticket at its first step. Only the dispatcher completes an Epic. A worker,
+// `loop run-ticket`, builds one ticket in its own folder, `tickets/<KEY>/`, from the main branch, and ends
+// merged, handed back, or stuck.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { ask, type Meter, runSetup, type Session } from "./agent.ts";
-import { archive, mdLinks, specLinks } from "./archive.ts";
+import { mdLinks, specLineOf, specLinks } from "./archive.ts";
+import { DONE } from "./epic.ts";
 import type { Config } from "./config.ts";
 import { git, gitOk, originUrl, slug } from "./git.ts";
 import * as github from "./github.ts";
@@ -17,7 +19,7 @@ import { endAll, run } from "./spawn.ts";
 import { type Ticket, Jira } from "./jira.ts";
 import { ticketDir, ticketHome, worktreeOf } from "./layout.ts";
 import { Log } from "./log.ts";
-import { FIRST_SLOT, freeSlot } from "./slots.ts";
+import { composeProject, FIRST_SLOT, freeSlot, heldPorts, SPARE_SLOTS } from "./slots.ts";
 
 /** The longest the loop waits for the checks of one pull request. */
 const WAIT_MINUTES = 120;
@@ -26,17 +28,12 @@ const WAIT_MINUTES = 120;
 const LOG_TAIL_LINES = 80;
 
 /** A usage limit that resets later than this stops the run. */
-const MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60;
+export const MAX_USAGE_WAIT_SECONDS = 6 * 60 * 60;
 
 /** The run resumes this long after the reset, so the first call after it meets no limit. */
 const PAST_RESET_SECONDS = 60;
 
 
-/** The slots after the ticket slots that a ticket's stack moves to when another project holds its ports. */
-const SPARE_SLOTS = 8;
-
-/** A host port that `docker ps` lists as published, alone or as a range. */
-const PUBLISHED_PORT = /:(\d+)(?:-(\d+))?->/g;
 
 const USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now reset. Continue the work.";
 
@@ -44,8 +41,6 @@ const USAGE_RESUME_PROMPT = "The run stopped at a usage limit, which has now res
 const STUCK_PREFIX = "Stuck:";
 
 
-/** The status a ticket takes when its pull request merges, and an Epic when its last ticket merges. */
-const DONE = "Done";
 
 /** The lines of a failed setup's output that the stuck reason quotes. */
 const SETUP_TAIL = 20;
@@ -59,8 +54,6 @@ const BRANCH_KEY = new RegExp(`^(?:${BRANCH_TYPES.join("|")})/([A-Z][A-Z0-9]*-\\
 /** A repo path of a Markdown file, as a ticket names its spec. */
 const MD_PATH = /[\w./-]+\.md\b/;
 
-/** The Spec line of an Epic's description. */
-const SPEC_LINE = /^\s*\**spec\**[.:]/i;
 
 /** The component of a ticket that a person does, which no loop builds. */
 const MANUAL = "manual";
@@ -91,15 +84,11 @@ export function runName(target: Target): string {
   return `filter-${createHash("sha256").update(target.filter).digest("hex").slice(0, 8)}`;
 }
 
-function branchPrefixes(key: string): string[] {
+export function branchPrefixes(key: string): string[] {
   return BRANCH_TYPES.map((type) => `${type}/${key}-`);
 }
 
-function specLineOf(text: string): string {
-  return text.split("\n").find((line) => SPEC_LINE.test(line)) ?? "";
-}
-
-function typeOf(ticket: Ticket): string {
+export function typeOf(ticket: Ticket): string {
   return ticket.issueType === "Bug" ? "fix" : "feat";
 }
 
@@ -262,7 +251,6 @@ export class Run {
     if (stopped.length) parts.push(`stopped: ${stopped.join(", ")}`);
     if (left.length) parts.push(`waiting on a blocker: ${left.map((ticket) => ticket.key).join(", ")}`);
     if (this.halt) parts.push(`the loop stopped at the ${this.halt}`);
-    if (await this.completeEpic(tickets)) parts.push(`${this.epic} is complete`);
     const detail = parts.join(". ");
     const failed = stopped.length > 0 || this.halt !== null;
     this.own("finish", failed ? "stopped" : "ok", { detail });
@@ -319,43 +307,6 @@ export class Run {
   }
 
   /**
-   * When every ticket of the Epic has merged or is done, archives the Epic's spec, then marks the Epic done. A
-   * run that finds the Epic done does nothing, and an archive that fails leaves it open, so the next run goes on.
-   */
-  private async completeEpic(tickets: Ticket[]): Promise<boolean> {
-    if (!this.epic) return false;
-    let stillOpen = "";
-    try {
-      const epic = await this.jira.ticket(this.epic);
-      if (epic.done) return false;
-      // Read again, since a ticket of another repo or a manual one can be done by now.
-      const children = await this.jira.search(`parent = ${this.epic} ORDER BY key ASC`);
-      if (!children.length || !children.every((child) => this.merged.has(child.key) || child.done)) return false;
-      // The spec lives in the repo that the Spec line links, which can be another repo than this run's.
-      const here = await this.repoUrl();
-      const specRepo = mdLinks(specLineOf(epic.text))[0]?.prefix ?? here;
-      if (!specRepo) throw new Error(`The Spec line of ${this.epic} links no repo and no pull request of it merged, so the loop does not know the repo on GitHub.`);
-      const config = specRepo.toLowerCase() === here?.toLowerCase() ? this.config : await this.cloneOf(specRepo);
-      const archived = await archive(config, this.jira, epic, specRepo, this.home);
-      this.own("archive", archived.result, { detail: archived.detail, pr: archived.pr });
-      // The archive pull request merges on its own once its gate is green, and the Epic does not wait for it.
-      if (archived.result === "pr-open") stillOpen = ` The archive pull request ${archived.pr} is still open.`;
-    } catch (error) {
-      this.own("archive", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
-      return false;
-    }
-    try {
-      await this.jira.transition(this.epic, DONE);
-      this.own("complete", "ok", { detail: `${this.epic} is ${DONE}.${stillOpen}` });
-    } catch (error) {
-      this.own("complete", "fail", { detail: `${this.epic}: ${(error as Error).message}` });
-      return false;
-    }
-    await this.notify(`${this.epic} complete`);
-    return true;
-  }
-
-  /**
    * The tickets of the run's component among the Epic's children, the one ticket of a key, or the tickets a
    * filter finds. A ticket of another component, `manual` included, counts only as a blocker, through its
    * status. A ticket with no component refuses the run.
@@ -386,15 +337,6 @@ export class Run {
   /** The repo on GitHub of this run: the one of a merged pull request, or the origin remote. */
   private async repoUrl(): Promise<string | null> {
     return this.mergedUrls[0]?.split("/pull/")[0] ?? (await originUrl(this.config.repo));
-  }
-
-  /** The config of a clone of another repo, in the run's folder, for the archive of a spec that lives there. */
-  private async cloneOf(repoUrl: string): Promise<Config> {
-    const folder = join(this.home, "repos", repoUrl.split("/").slice(-2).join("-"));
-    if (existsSync(folder)) await git(folder, "fetch", "--prune", "--quiet", "origin");
-    else await github.clone(this.config.repo, repoUrl, folder);
-    const head = await git(folder, "symbolic-ref", "--short", "refs/remotes/origin/HEAD");
-    return { ...this.config, repo: folder, mainBranch: head.replace(/^origin\//, "") };
   }
 
   private state(ticket: Ticket): State {
@@ -1123,8 +1065,7 @@ export class Run {
     const stack = this.config.stack!;
     const env: Record<string, string> = {};
     for (const [port, base] of Object.entries(stack.ports)) env[port] = String(base + stack.portStep * slot);
-    // Compose accepts lowercase project names only.
-    env.COMPOSE_PROJECT_NAME = `${this.config.name}-${key.toLowerCase()}`;
+    env.COMPOSE_PROJECT_NAME = composeProject(this.config.name, key);
     return env;
   }
 
@@ -1136,7 +1077,7 @@ export class Run {
   private async stackEnv(key: string, slot: number): Promise<Record<string, string>> {
     if (!this.config.stack) return {};
     const env = this.slotEnv(this.slotMoves.get(slot) ?? slot, key);
-    const held = await this.heldPorts(env.COMPOSE_PROJECT_NAME!);
+    const held = await heldPorts(this.home, env.COMPOSE_PROJECT_NAME!);
     // No await from here on, so two tickets never take the same spare slot.
     const taken = this.taken(env, held);
     if (!taken) return env;
@@ -1159,21 +1100,6 @@ export class Run {
       .filter((port) => held.has(port))
       .map((port) => `Port ${port} is held by the container ${held.get(port)}.`)
       .join(" ");
-  }
-
-  /** The host ports that the running containers of other Compose projects publish, with the container of each. */
-  private async heldPorts(project: string): Promise<Map<number, string>> {
-    const format = '{{.Label "com.docker.compose.project"}}\t{{.Names}}\t{{.Ports}}';
-    const listed = await run("docker", ["ps", "--format", format], { cwd: this.home, seconds: 60 });
-    const held = new Map<number, string>();
-    for (const line of listed.code === 0 ? listed.stdout.split("\n") : []) {
-      const [owner, container, published] = line.split("\t");
-      if (!container || owner === project) continue;
-      for (const [, low, high] of (published ?? "").matchAll(PUBLISHED_PORT)) {
-        for (let port = Number(low); port <= Number(high ?? low); port++) held.set(port, container);
-      }
-    }
-    return held;
   }
 
   /** The SIGTERM of `loop stop`. It ends every agent session, and the step in progress writes no result. */

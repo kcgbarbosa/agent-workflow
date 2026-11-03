@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { EPIC, World } from "./world.ts";
 
-const UNIT = `loop-demo-${EPIC}.service`;
+const UNIT = "loop-demo-dispatch.service";
+const WORKER = "loop-demo-DEMO-2.service";
 const WATCH_UNIT = "loop-watch-8790.service";
 
 let world: World;
@@ -28,11 +29,11 @@ function runs(unit: string): string[][] {
   return world.systemd().filter((call) => call.tool === "systemd-run" && call.args.includes(`--unit=${unit}`)).map((call) => call.args);
 }
 
-test("loop start runs the loop as a systemd unit and returns, and the unit builds the Epic", async () => {
-  const ran = await world.loop("start", EPIC);
+test("loop start runs the dispatcher as a systemd unit and returns, and the dispatcher builds the ready ticket", async () => {
+  const ran = await world.loop("start");
 
   expect(ran.code, ran.stderr).toBe(0);
-  expect(ran.stdout).toMatch(new RegExp(`The loop is building ${EPIC}\\. Watch it at http://[\\d.]+:8790/#/demo/${EPIC}, or with \`journalctl --user -fu ${UNIT}\`\\.`));
+  expect(ran.stdout).toMatch(new RegExp(`The loop is building the queue of demo\\. Watch it at http://[\\d.]+:8790/#/demo, or with \`journalctl --user -fu ${UNIT}\`\\.`));
   const [args] = runs(UNIT);
   expect(args).toEqual(
     expect.arrayContaining([
@@ -47,31 +48,31 @@ test("loop start runs the loop as a systemd unit and returns, and the unit build
   expect(args!.some((arg) => arg.startsWith("--setenv=PATH="))).toBe(true);
   expect(args!.some((arg) => arg.includes("BWS_ACCESS_TOKEN"))).toBe(false);
   expect(args!.slice(-4, -1)).toEqual(["bws", "run", "--"]);
-  expect(args!.at(-1)).toMatch(/^exec '[^']*\/bin\/loop' 'run' 'DEMO-1' '--repo' '[^']*\/demo'$/);
+  expect(args!.at(-1)).toMatch(/^exec '[^']*\/bin\/loop' 'dispatch' '--repo' '[^']*\/demo'$/);
 
-  const output = await world.untilUnitEnds(UNIT);
+  await world.until(() => world.prs().some((pr) => pr.state === "MERGED"), "the merge");
+  const output = await world.untilUnitEnds(WORKER);
   expect(world.prs().map((pr) => pr.state), output).toEqual(["MERGED"]);
-  // The run holds off sleep while it lasts.
+  // The worker holds off sleep while it lasts.
   expect(world.systemd().some((call) => call.tool === "systemd-inhibit" && call.args.includes("--what=sleep:idle"))).toBe(true);
 });
 
 test("loop start takes the new commits when a tracked file has a change they do not touch", async () => {
   world.commitTo(other, { "loop/run.ts": "two\n" }, "feat: a new loop");
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("start");
 
   expect(ran.code, ran.stderr).toBe(0);
   expect(ran.stdout).toContain("The loop took 1 new commit from origin.");
   expect(readFileSync(join(world.checkout, "loop", "run.ts"), "utf8")).toBe("two\n");
   expect(readFileSync(join(world.checkout, "config", "settings.json"), "utf8")).toBe('{"theme": "dark"}\n');
-  await world.untilUnitEnds(UNIT);
-  expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED"]);
+  await world.until(() => world.prs().some((pr) => pr.state === "MERGED"), "the merge");
 });
 
 test("loop start refuses with git's message when the new commits touch the changed file", async () => {
   world.commitTo(other, { "config/settings.json": '{"theme": "light"}\n' }, "chore: a new setting");
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("start");
 
   expect(ran.code).toBe(2);
   expect(ran.stderr).toContain("config/settings.json");
@@ -81,72 +82,60 @@ test("loop start refuses with git's message when the new commits touch the chang
 });
 
 test("loop start on a current checkout runs as it is", async () => {
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("start");
 
   expect(ran.code, ran.stderr).toBe(0);
   expect(ran.stdout).toContain("The loop is current.");
-  await world.untilUnitEnds(UNIT);
+  expect(world.unitAlive(UNIT)).toBe(true);
 });
 
-test("a second loop start while a run is active is refused with the unit's name", async () => {
-  world.plan({ "DEMO-2": [{ meet: "DEMO-9" }] });
-  expect((await world.loop("start", EPIC)).code).toBe(0);
+test("a second loop start while the dispatcher is active is refused with the unit's name", async () => {
+  expect((await world.loop("start")).code).toBe(0);
 
-  const again = await world.loop("start", EPIC);
+  const again = await world.loop("start");
 
   expect(again.code).toBe(2);
-  expect(again.stderr).toContain(`A run is active: ${UNIT}. \`loop stop ${EPIC}\` stops it.`);
+  expect(again.stderr).toContain(`The dispatcher is active: ${UNIT}. \`loop stop\` stops it.`);
   expect(runs(UNIT)).toHaveLength(1);
-  expect((await world.loop("stop", EPIC)).code).toBe(0);
 });
 
-test("loop stop ends the run with a stopped line, and the next start goes on with the same ticket", async () => {
-  world.plan({ "DEMO-2": [{ meet: "DEMO-9" }] });
-  expect((await world.loop("start", EPIC)).code).toBe(0);
-  await world.until(() => world.steps().includes("DEMO-2 build started"), "the build to start");
-
-  const stopped = await world.loop("stop", EPIC);
-
-  expect(stopped.code, stopped.stderr).toBe(0);
-  expect(stopped.stdout).toContain(`The loop stopped ${EPIC}. \`loop start ${EPIC}\` goes on with the same tickets.`);
-  expect(world.unitAlive(UNIT)).toBe(false);
-  expect(world.steps().filter((step) => step.startsWith(`${EPIC} stop`))).toEqual([`${EPIC} stop stopped`]);
-  expect(world.jira.notifications, JSON.stringify(world.decisions().slice(-3))).toContain(`${EPIC} stopped`);
-
-  world.plan({});
-  expect((await world.loop("start", EPIC)).code).toBe(0);
-  await world.untilUnitEnds(UNIT);
-  expect(world.steps().filter((step) => step.startsWith("DEMO-2 start"))).toEqual(["DEMO-2 start new", "DEMO-2 start restart"]);
-  expect(world.prs().map((pr) => pr.state)).toEqual(["MERGED"]);
-});
-
-test("loop stop with no active run says so", async () => {
-  const ran = await world.loop("stop", EPIC);
+test("loop stop with no active unit says so", async () => {
+  const ran = await world.loop("stop");
 
   expect(ran.code).toBe(1);
-  expect(ran.stderr).toContain(`No run of ${EPIC} is active.`);
+  expect(ran.stderr).toContain("No unit of the demo loop is active.");
+  const one = await world.loop("stop", "DEMO-2");
+  expect(one.code).toBe(1);
+  expect(one.stderr).toContain("No worker of DEMO-2 is active.");
 });
 
-test("a failed run does not block the next start of the same Epic", async () => {
-  world.jira.add("DEMO-3", "Add the logout page", { parent: EPIC });
-  world.verdicts({ "DEMO-2": "pass", "DEMO-3": "pass" });
-  world.plan({ "DEMO-2": [{ status: "blocked", reason: "It needs KC." }] });
-  expect((await world.loop("start", EPIC)).code).toBe(0);
-  await world.untilUnitEnds(UNIT);
+test("loop start <KEY> and loop start --filter print that the command is gone", async () => {
+  for (const args of [["start", EPIC], ["start", "--filter", "project = DEMO"], ["stop", "--filter", "project = DEMO"]]) {
+    const ran = await world.loop(...args);
 
-  const again = await world.loop("start", EPIC);
+    expect(ran.code).toBe(2);
+    expect(ran.stderr.trim().split("\n")).toHaveLength(1);
+    expect(ran.stderr).toMatch(/ (is|are) gone\./);
+  }
+  expect(runs(UNIT)).toEqual([]);
+});
 
-  expect(again.code, again.stderr).toBe(0);
-  await world.untilUnitEnds(UNIT);
+test("an old loop.toml key warns and the file loads", async () => {
+  world.writeConfig("", 'gates = ["make check"]');
+
+  const ran = await world.loop("start");
+
+  expect(ran.code, ran.stderr).toBe(0);
+  expect(ran.stderr).toContain("loop.toml: [gates] is no longer read, because the merge gate runs the checks on the pull request. The loop ignores it.");
+  expect(world.unitAlive(UNIT)).toBe(true);
 });
 
 test("the watch page keeps running across a loop update, which restarts it on the new code", async () => {
-  expect((await world.loop("start", EPIC)).code).toBe(0);
-  await world.untilUnitEnds(UNIT);
+  expect((await world.loop("start")).code).toBe(0);
+  expect((await world.loop("stop")).code).toBe(0);
   world.commitTo(other, { "loop/run.ts": "two\n" }, "feat: a new loop");
 
-  expect((await world.loop("start", EPIC)).code).toBe(0);
-  await world.untilUnitEnds(UNIT);
+  expect((await world.loop("start")).code).toBe(0);
 
   const [args, ...more] = runs(WATCH_UNIT);
   expect(more).toEqual([]);
@@ -161,7 +150,7 @@ test("the watch page keeps running across a loop update, which restarts it on th
 test("loop start refuses with one line when the token file is missing", async () => {
   rmSync(world.tokenFile);
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("start");
 
   expect(ran.code).toBe(2);
   expect(ran.stderr).toBe(`This host has no Secrets Manager token file, ${world.tokenFile}. \`/setup-loop\` sets it up.\n`);
@@ -172,7 +161,7 @@ test("loop start refuses with one line naming a secret that Secrets Manager lack
   world.commitTo(world.repo, { "loop.toml": readFileSync(join(world.repo, "loop.toml"), "utf8").replace('"NTFY_TOPIC"]', '"NTFY_TOPIC", "CLAUDE_CODE_OAUTH_TOKEN"]') }, "chore: the loop account");
   world.bws({ JIRA_EMAIL: "kc@example.com", JIRA_API_TOKEN: "token", NTFY_TOPIC: "topic" });
 
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("start");
 
   expect(ran.code).toBe(2);
   expect(ran.stderr).toBe("Secrets Manager has no secret CLAUDE_CODE_OAUTH_TOKEN. `/setup-loop` sets it up.\n");
@@ -180,9 +169,9 @@ test("loop start refuses with one line naming a secret that Secrets Manager lack
 });
 
 test("the scenario suite runs with no network", async () => {
-  const ran = await world.loop("start", EPIC);
+  const ran = await world.loop("start");
   expect(ran.code, ran.stderr).toBe(0);
-  await world.untilUnitEnds(UNIT);
+  await world.until(() => world.prs().some((pr) => pr.state === "MERGED"), "the merge");
   expect(existsSync(join(world.fakes, "network.jsonl"))).toBe(false);
 
   // The guard is live: a Node process of the scenario that reaches out is refused and recorded.

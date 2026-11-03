@@ -1,9 +1,11 @@
-// `loop start <KEY>` or `loop start --filter <JQL>` updates the loop's own checkout, then starts `loop run`
-// as a systemd user unit, and the watch page as another. KEY is an Epic or a ticket. `loop stop` stops the run's
-// unit. `loop run` is the run itself, which the unit runs under `bws run`, with the secrets in its env. `loop
-// watch` serves the page of the runs on this host, and `loop report [<KEY>]` breaks down what the latest run cost
-// against the run before it. `loop ticket <KEY>` takes a slot and starts `loop run-ticket <KEY> --slot <n>` in
-// the ticket's own unit, which builds the one ticket to merge.
+// `loop start` updates the loop's own checkout, then starts the dispatcher, `loop dispatch`, as the systemd user
+// unit `loop-<name>-dispatch`, and the watch page as another. The dispatcher starts a worker, `loop run-ticket
+// <KEY> --slot <n>`, in the ticket's own unit for each ready ticket of the queue. `loop ticket <KEY>` takes a slot
+// and starts one worker by hand. `loop stop` stops the dispatcher and every worker, and `loop stop <KEY>` one
+// worker, whose ticket it flags. The units run under `bws run`, with the secrets in their env. `loop watch`
+// serves the page of the runs on this host, and `loop report [<KEY>]` breaks down what the latest run cost
+// against the run before it. `loop run <KEY>` builds an Epic in the foreground, as the scenario tests drive it,
+// and completes no Epic.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -14,28 +16,35 @@ import { git } from "./git.ts";
 import { Forecaster } from "./forecast.ts";
 import { Jira } from "./jira.ts";
 import { text } from "./report.ts";
+import { Dispatcher } from "./dispatch.ts";
 import { Run, runName, type Target } from "./run.ts";
 import { checkSecrets, readSecrets, secretNames, storedNames, storedSecrets } from "./secrets.ts";
-import { freeSlot, slotHolders, takeSlot } from "./slots.ts";
+import { composeProject, freeSlot, portsFree, takeSlot } from "./slots.ts";
 import { endAll } from "./spawn.ts";
-import { awake, runs, runUnit, startRun, startWatch, stopRun, UnitError } from "./units.ts";
+import { awake, DISPATCH, runs, runUnit, startRun, startWatch, stopRun, UnitError } from "./units.ts";
 import { sourceCheckout, update, UpdateError } from "./update.ts";
 import { comparison, pageUrl, serve, WATCH_PORT } from "./watch.ts";
 
 const KEY = /^[A-Z][A-Z0-9]*-\d+$/;
-/** A filter run is named by a hash of its JQL, as `runName` gives it. */
-const FILTER_RUN = /^filter-[0-9a-f]{8}$/;
 const USAGE = [
-  "Usage: loop start|run <KEY> [--repo <path>]",
-  "       loop start|run --filter <JQL> [--repo <path>]",
+  "Usage: loop start [--repo <path>]",
   "       loop ticket <KEY> [--repo <path>]",
+  "       loop stop [<KEY>] [--repo <path>]",
+  "       loop dispatch [--repo <path>]",
   "       loop run-ticket <KEY> --slot <n> [--repo <path>]",
-  "       loop stop <KEY>|--filter <JQL> [--repo <path>]",
+  "       loop run <KEY>|--filter <JQL> [--repo <path>]",
   "       loop watch [--repo <path>]",
   "       loop report [<KEY>] [--against <KEY>] [--json] [--repo <path>]",
 ].join("\n");
 // The seconds between two polls of a pull request. The tests set a short one.
 const POLL_SECONDS = Number(process.env.LOOP_POLL_SECONDS ?? 30);
+// The seconds between two reads of the queue, `[queue] poll_minutes` unless the tests set a short one.
+const QUEUE_SECONDS = process.env.LOOP_QUEUE_SECONDS;
+// The seconds between two Epic checks of every open Epic. The tests set a short one.
+const EPIC_SECONDS = Number(process.env.LOOP_EPIC_SECONDS ?? 60 * 60);
+/** The line of an old command, which the per-ticket loop dropped. */
+const GONE_START = "`loop start <KEY>` and `loop start --filter` are gone. `loop start` builds every ready ticket of the queue, `[queue] filter` in loop.toml picks them, and `loop ticket <KEY>` builds one ticket.";
+const GONE_STOP = "`loop stop --filter` is gone. `loop stop` stops the dispatcher and every worker, and `loop stop <KEY>` one worker.";
 // The least seconds between two plan meter lines of a running agent. The tests set a short one.
 const METER_SECONDS = Number(process.env.LOOP_METER_SECONDS ?? 60);
 // The tests take any free port.
@@ -52,18 +61,19 @@ function missingTools(needed: string[]): string[] {
   return claudePath(path) ? tools : ["claude", ...tools];
 }
 
-/** Starts the run in its unit, and the watch page in its own, then returns. The run checks the rest itself. */
-async function start(target: { key: string } | { filter: string }, repoArg: string | undefined, newCode: boolean): Promise<number> {
+/** Starts the dispatcher in its unit, and the watch page in its own, then returns. The dispatcher checks the rest. */
+async function start(repoArg: string | undefined, newCode: boolean): Promise<number> {
   const repo = await mainCheckout(resolve(repoArg ?? process.cwd()));
-  const { name: project, secrets } = peek(repo);
-  await checkSecrets(secrets);
-  const [active] = await runs(project);
-  if (active) throw new UnitError(`A run is active: ${runUnit(project, active)}. \`loop stop ${active}\` stops it.`);
-  const name = runName(target);
-  const unit = await startRun(repo, project, name, "key" in target ? [target.key] : ["--filter", target.filter]);
+  const config = load(repo);
+  for (const warning of config.warnings) console.error(warning);
+  await checkSecrets(config.secrets);
+  if ((await runs(config.name)).includes(DISPATCH)) {
+    return refuse(`The dispatcher is active: ${runUnit(config.name, DISPATCH)}. \`loop stop\` stops it.`);
+  }
+  const unit = await startRun(repo, config.name, DISPATCH, [], DISPATCH);
   await startWatch(repo, newCode);
-  openOnScreen(`http://127.0.0.1:${WATCH_PORT}/#/${project}/${name}`);
-  console.log(`The loop is building ${name}. Watch it at ${await pageUrl(project, name)}, or with \`journalctl --user -fu ${unit}\`.`);
+  openOnScreen(`http://127.0.0.1:${WATCH_PORT}/#/${config.name}`);
+  console.log(`The loop is building the queue of ${config.name}. Watch it at ${await pageUrl(config.name)}, or with \`journalctl --user -fu ${unit}\`.`);
   return 0;
 }
 
@@ -78,10 +88,6 @@ async function ticket(key: string, repoArg: string | undefined, newCode: boolean
   await checkSecrets(config.secrets);
   const active = new Set(await runs(config.name));
   if (active.has(key)) return refuse(`${key} is building in ${runUnit(config.name, key)}. \`loop stop ${key}\` stops it.`);
-  // An Epic or filter run hands out its slots with no slot folder, so a worker never runs beside one.
-  const holders = slotHolders(config.stateDir);
-  const run = [...active].find((name) => !holders.has(name));
-  if (run) return refuse(`A run is active: ${runUnit(config.name, run)}. \`loop stop ${run}\` stops it.`);
   let why: string | null;
   try {
     why = await unbuildable(config, key);
@@ -89,7 +95,8 @@ async function ticket(key: string, repoArg: string | undefined, newCode: boolean
     return refuse(`The loop cannot read ${key} in Jira: ${(error as Error).message}`);
   }
   if (why) return refuse(why);
-  const slot = takeSlot(config.stateDir, key, config.parallel, active);
+  const usable = await portsFree(config.stateDir, composeProject(config.name, key), config.stack);
+  const slot = takeSlot(config.stateDir, key, runUnit(config.name, key), config.parallel, active, usable);
   if (slot === null) return refuse(`No slot is free: ${config.parallel} of ${config.parallel} tickets are building. \`loop stop <KEY>\` frees one.`);
   let unit: string;
   try {
@@ -104,11 +111,15 @@ async function ticket(key: string, repoArg: string | undefined, newCode: boolean
   return 0;
 }
 
+/** Jira, with the secrets of Secrets Manager, for a command that runs outside `bws run`. */
+async function storedJira(config: Config): Promise<Jira> {
+  const secrets = await storedSecrets();
+  return new Jira(config.trackerUrl, secrets.get("JIRA_EMAIL") ?? "", secrets.get("JIRA_API_TOKEN") ?? "");
+}
+
 /** Why this repo's loop does not build the ticket, or null when it does. */
 async function unbuildable(config: Config, key: string): Promise<string | null> {
-  const secrets = await storedSecrets();
-  const jira = new Jira(config.trackerUrl, secrets.get("JIRA_EMAIL") ?? "", secrets.get("JIRA_API_TOKEN") ?? "");
-  const found = await jira.ticket(key);
+  const found = await (await storedJira(config)).ticket(key);
   if (found.flagged) return `${key} is Flagged. Unflag it in Jira, and \`loop ticket ${key}\` builds it.`;
   if (!found.components.length) return `${key} has no component. Set its Jira component to the repo it changes, or manual for work no loop builds.`;
   if (!found.components.includes(config.component)) {
@@ -129,14 +140,56 @@ function openOnScreen(url: string): void {
   spawn("xdg-open", [url], { stdio: "ignore", detached: true }).on("error", () => {}).unref();
 }
 
-async function stop(name: string, repoArg: string | undefined): Promise<number> {
+/** Stops the dispatcher, then each worker, and flags nothing, so the next `loop start` goes on with the same tickets. */
+async function stopAll(repoArg: string | undefined): Promise<number> {
   const project = peek(await mainCheckout(resolve(repoArg ?? process.cwd()))).name;
-  if (!(await stopRun(project, name))) {
-    console.error(`No run of ${name} is active.`);
+  const active = await runs(project);
+  if (!active.length) {
+    console.error(`No unit of the ${project} loop is active.`);
     return 1;
   }
-  console.log(`The loop stopped ${name}. \`loop start ${name.startsWith("filter-") ? "--filter <JQL>" : name}\` goes on with the same tickets.`);
+  // The dispatcher first, so it starts no worker while the workers stop.
+  const names = [...active.filter((name) => name === DISPATCH), ...active.filter((name) => name !== DISPATCH)];
+  for (const name of names) await stopRun(project, name);
+  console.log(`The loop stopped ${names.map((name) => runUnit(project, name)).join(", ")}. Nothing is flagged, and \`loop start\` goes on with the same tickets.`);
   return 0;
+}
+
+/** The comment of a ticket that `loop stop <KEY>` stopped. */
+const STOPPED = "Stopped by the owner";
+
+/**
+ * Flags the ticket, then stops its worker, so the dispatcher never starts it again in between. It stays
+ * Flagged until the owner unflags it.
+ */
+async function stopTicket(key: string, repoArg: string | undefined): Promise<number> {
+  const config = load(await mainCheckout(resolve(repoArg ?? process.cwd())));
+  if (!(await runs(config.name)).includes(key)) {
+    console.error(`No worker of ${key} is active.`);
+    return 1;
+  }
+  const jira = await storedJira(config);
+  await jira.comment(key, STOPPED);
+  await jira.flag(key);
+  await stopRun(config.name, key);
+  console.log(`The loop stopped ${key} and flagged it. Unflag it in Jira, and the dispatcher starts it again.`);
+  return 0;
+}
+
+/** Runs the dispatcher until its unit stops. */
+async function dispatch(repoArg: string | undefined): Promise<number> {
+  const config = load(await mainCheckout(resolve(repoArg ?? process.cwd())));
+  for (const warning of config.warnings) console.error(warning);
+  const secrets = readSecrets(config.secrets);
+  const pollSeconds = QUEUE_SECONDS === undefined ? config.queue.pollMinutes * 60 : Number(QUEUE_SECONDS);
+  const dispatcher = new Dispatcher(config, secrets, { pollSeconds, epicSeconds: EPIC_SECONDS });
+  const stop = () => {
+    dispatcher.stop();
+    process.exit(143);
+  };
+  process.once("SIGTERM", stop);
+  process.once("SIGINT", stop);
+  return dispatcher.run();
 }
 
 async function run(target: Target, repoArg: string | undefined): Promise<number> {
@@ -243,12 +296,14 @@ export async function main(argv: string[]): Promise<number> {
   try {
     if (command === "watch" && bare) return await watch(repo);
     if (command === "report" && reportArgs) return await report(key, against, json ?? false, repo);
-    // `loop stop` also takes the name of a filter run, which `loop start` prints when one is active.
-    const runArg = !filter && !rest.length && !against && !json && key && FILTER_RUN.test(key);
-    if (command === "stop" && (targetArgs || runArg)) return await stop(runArg ? key! : runName(target), repo);
+    if (command === "start" && targetArgs) return refuse(GONE_START);
+    if (command === "stop" && filter) return refuse(GONE_STOP);
+    if (command === "stop" && bare && !slot) return await stopAll(repo);
+    if (command === "stop" && ticketArgs && !slot) return await stopTicket(key!, repo);
+    if (command === "dispatch" && bare && !slot) return await dispatch(repo);
     if (command === "run" && targetArgs) return await run(target, repo);
     if (command === "run-ticket" && ticketArgs && slot && /^\d+$/.test(slot)) return await run({ ticket: key!, slot: Number(slot) }, repo);
-    if ((command === "start" && targetArgs) || (command === "ticket" && ticketArgs && !slot)) {
+    if ((command === "start" && bare && !slot) || (command === "ticket" && ticketArgs && !slot)) {
       const checkout = sourceCheckout();
       let newCode = false;
       if (checkout) {
@@ -256,7 +311,7 @@ export async function main(argv: string[]): Promise<number> {
         console.log(message);
         newCode = updated;
       }
-      return command === "ticket" ? await ticket(key!, repo, newCode) : await start(target, repo, newCode);
+      return command === "ticket" ? await ticket(key!, repo, newCode) : await start(repo, newCode);
     }
   } catch (error) {
     if (error instanceof ConfigError || error instanceof UpdateError || error instanceof UnitError) {

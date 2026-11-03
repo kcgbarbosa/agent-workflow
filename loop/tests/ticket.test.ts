@@ -73,23 +73,6 @@ test("loop ticket starts the ticket's unit, which builds it to merge in its own 
   expect(existsSync(join(world.state, "slots", "2"))).toBe(false);
 });
 
-test("loop ticket refuses beside an active Epic run, which hands out slots with no slot folder", async () => {
-  world.jira.add("DEMO-1", "The Epic", { issueType: "Epic" });
-  world.jira.add("DEMO-3", "Add the logout page", { parent: "DEMO-1" });
-  world.jira.add(KEY, "Add the login page");
-  const started = await world.loop("start", "DEMO-1");
-  expect(started.code, started.stderr).toBe(0);
-  await world.until(() => world.prs().length === 1, "the Epic's pull request");
-
-  const ran = await world.loop("ticket", KEY);
-
-  expect(ran.code).toBe(2);
-  expect(ran.stderr.trim()).toBe("A run is active: loop-demo-DEMO-1.service. `loop stop DEMO-1` stops it.");
-  expect(unitArgs(UNIT)).toEqual([]);
-  world.setCheck("DEMO-3", "pass");
-  await world.untilUnitEnds("loop-demo-DEMO-1.service");
-});
-
 test("loop ticket takes back a slot left behind by a ticket with no unit", async () => {
   world.jira.add(KEY, "Add the login page");
   world.verdicts({ [KEY]: "pass" });

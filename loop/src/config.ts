@@ -46,6 +46,8 @@ export type Config = {
   ntfyUrl: string;
   /** `exact` is false for a `since` with a date only. */
   plans: { plan: string; since: string; exact: boolean }[];
+  /** The JQL the dispatcher reads the queue with, in the order it starts the tickets, and the minutes between two reads. */
+  queue: { filter: string; pollMinutes: number };
   /** The env var names of the secrets of `loop.toml`, beside REQUIRED_SECRETS. */
   secrets: string[];
   stateDir: string;
@@ -217,6 +219,7 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
   const review = top.table("review", true);
   const notify = top.table("notify", true);
   const watch = top.table("watch", true);
+  const queue = top.table("queue", true);
 
   // The old `[secrets]` table mapped each env var to a Bitwarden item and field.
   let secrets: string[] = [];
@@ -250,17 +253,23 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
   ui.text("path", null);
   ui.texts("accepted_unchecked", []);
 
+  const component = top.text("component", name);
+  const inProgress = tracker.text("in_progress", "In Progress");
+  const inReview = tracker.text("landed", "In Review");
+  const statuses = ["To Do", inProgress, inReview].map((status) => JSON.stringify(status)).join(", ");
+  const filter = `component = ${JSON.stringify(component)} AND status in (${statuses}) AND Flagged is EMPTY ORDER BY priority DESC, key ASC`;
+
   const config: Config = {
     repo,
     name,
-    component: top.text("component", name),
+    component,
     mainBranch: top.text("main_branch", "main"),
     tools: top.texts("tools", []),
     setup: top.texts("setup", []),
     agentHint: top.text("agent_hint", ""),
     trackerUrl: tracker.text("url"),
-    inProgress: tracker.text("in_progress", "In Progress"),
-    inReview: tracker.text("landed", "In Review"),
+    inProgress,
+    inReview,
     agentModel: agent.text("model", "claude-opus-5-5"),
     agentEffort: agent.text("effort", "high"),
     parallel: limits.number("parallel", 1),
@@ -276,11 +285,12 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     },
     ntfyUrl: notify.text("url", "https://ntfy.sh"),
     plans,
+    queue: { filter: queue.text("filter", filter), pollMinutes: queue.number("poll_minutes", 2) },
     secrets,
     stateDir: stateDirOf(name),
     warnings,
   };
-  for (const table of [top, tracker, agent, limits, stackTable, ui, review, notify, watch]) {
+  for (const table of [top, tracker, agent, limits, stackTable, ui, review, notify, watch, queue]) {
     table.done(warnings);
   }
   return config;
