@@ -6,7 +6,7 @@
 import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { startCorrect } from "./correct.ts";
-import { completeEpic } from "./epic.ts";
+import { completeEpic, DONE } from "./epic.ts";
 import { originUrl, slug } from "./git.ts";
 import * as github from "./github.ts";
 import { Jira, type Ticket } from "./jira.ts";
@@ -210,7 +210,10 @@ export class Dispatcher {
     if (!ticket.components.includes(this.config.component)) return "not this component";
     if (ticket.done) return "merged";
     const prs = await this.pullRequests(ticket);
-    if (prs.some((pr) => pr.state === "MERGED")) return "merged";
+    if (prs.some((pr) => pr.state === "MERGED")) {
+      await this.setDone(ticket.key);
+      return "merged";
+    }
     for (const blocker of ticket.blockers) {
       if (blocker.done) continue;
       if (!(await this.pullRequests(await this.jira.ticket(blocker.key))).some((pr) => pr.state === "MERGED")) return `waiting on ${blocker.key}`;
@@ -224,6 +227,16 @@ export class Dispatcher {
       if (until && until.getTime() > Date.now()) return `held until ${until.toISOString()}`;
     }
     return "ready";
+  }
+
+  /** A pull request merged with no worker, as a merge by hand does, leaves no one else to set the ticket Done. A failure tries again at the next poll. */
+  private async setDone(key: string): Promise<void> {
+    try {
+      await this.jira.transition(key, DONE);
+      this.log.write(key, "tracker-status", "ok", { detail: DONE });
+    } catch (error) {
+      this.log.write(key, "tracker-status", "fail", { detail: `${DONE}: ${(error as Error).message}` });
+    }
   }
 
   /** Takes a slot with the `docker ps` rule, and starts the ticket's worker. False when no slot is free. */

@@ -106,6 +106,34 @@ test("a Flagged ticket, one of another component, one with no component, and one
   await world.until(() => started().includes("DEMO-5"), "DEMO-5 to start once its blocker merged");
 });
 
+test("a ticket whose pull request merged with no worker is set Done, and no worker starts", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { status: "In Review" });
+  world.mergedBefore("DEMO-2", "feat/DEMO-2-add-the-login-page");
+
+  await start();
+
+  await world.until(() => world.jira.issues.get("DEMO-2")!.status === "Done", "the ticket to be Done");
+  expect(world.jira.issues.get("DEMO-2")!.statuses).toEqual(["Done"]);
+  expect(dispatched()).toContain("DEMO-2 tracker-status ok");
+  expect(started()).toEqual([]);
+});
+
+test("a ticket that cannot move to Done logs it, stays in the queue, and moves once it can", async () => {
+  world.jira.add("DEMO-2", "Add the login page", { status: "In Review", unreachable: ["Done"] });
+  world.mergedBefore("DEMO-2", "feat/DEMO-2-add-the-login-page");
+
+  await start();
+
+  await world.until(() => dispatched().includes("DEMO-2 tracker-status fail"), "the failed move");
+  expect(world.jira.issues.get("DEMO-2")!.status).toBe("In Review");
+  expect(started()).toEqual([]);
+
+  world.jira.issues.get("DEMO-2")!.unreachable = [];
+
+  await world.until(() => world.jira.issues.get("DEMO-2")!.status === "Done", "the move at a later poll");
+  expect(started()).toEqual([]);
+});
+
 test("loop stop <KEY> ends one worker and flags its ticket, and loop stop ends the dispatcher and every worker and flags nothing", async () => {
   world.writeConfig("[limits]\nparallel = 2\n");
   world.jira.add("DEMO-2", "Add the login page");
