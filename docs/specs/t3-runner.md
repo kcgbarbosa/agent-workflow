@@ -20,7 +20,7 @@ US-3. As the owner, I want a ticket with a blocker that has not merged to wait, 
 US-4. As the owner, I want ready tickets to start by priority, then key, so that the priority I set is the order.
 US-5. As the owner, I want a ticket of another component, or with none, left untouched, so that one repo's runner never touches another's tickets.
 US-6. As the owner, I want a ticket's thread titled `<KEY>: <summary>`, so that I can find it in T3 by key.
-US-7. As the owner, I want no new thread for a ticket that has a thread with that key in its title, so that a ticket never builds twice.
+US-7. As the owner, I want no new thread for a ticket that has a thread whose title starts with `<KEY>:`, and a side thread that only names the key left alone, so that a ticket never builds twice and a side thread never blocks a build.
 US-8. As the owner, I want no new thread for a ticket that has an open or merged pull request for its key, so that a thread I started by hand under another title is not duplicated.
 US-9. As the owner, I want each new thread to start in its own worktree from `main`, on the ticket's branch, with the configured provider and model, so that threads never share a checkout.
 
@@ -90,7 +90,7 @@ US-47. As the maintainer, I want a command that installs the timer and the servi
 
 - A new `runner` folder at the repo root, in TypeScript that Node runs as it is, in the loop's style: only syntax Node can strip. The `runner` command has `tick`, `tick --dry-run`, `install` and `uninstall`.
 - The tick is three steps. `read` gathers the state, with no writes. `decide` is a pure function from that state and the config to a list of actions. `act` performs them. `--dry-run` stops before `act`.
-- Reads in `read`: the tickets of the repo's component that are not Done, with their comments, blockers and parent, from Jira; each ticket's pull requests and required checks from `gh`, by the key in the branch name; threads from `t3`, as Further Notes gives.
+- Reads in `read`: the tickets of the repo's component that are not Done, with their comments, blockers and parent, from Jira; each ticket's pull requests and required checks from `gh`, by the key in the branch name or a `(<KEY>):` scope in the title; threads from `t3`, as Further Notes gives.
 - Actions of `decide`: start a thread, send a message, comment on a pull request, comment on a ticket, set a status, set Flagged, notify, turn on auto-merge, complete an Epic, archive a spec.
 
 For each ticket, the first match decides:
@@ -176,6 +176,8 @@ Measured on 2026-11-04 on t14, `t3` v0.1.5, with scratch threads on a scratch pr
 - `updatedAt` does not move during a long foreground tool call: a 100-second command showed no change until it ended. A test run longer than `quiet_minutes` flags a healthy thread, which costs an unflag.
 - The project's default model was ignored for a CLI-started thread, so the runner always passes `--provider` and `--model`. Effort was not measured.
 - Project scripts with `runOnWorktreeCreate` did not fire for a CLI-started thread (ADR-0005).
+- A `--title` held through one short turn of a scratch thread. Runner-started threads were not observed.
+- `--project` and the positional project match only a path inside the main checkout, not a T3 worktree, so the runner passes the main checkout.
 - The links `t3` prints use `127.0.0.1`. The link in a notification needs the tailnet address, which is a config value.
 - With `storageCleanup.worktreeOnMerge` on, T3's source removes a worktree whose pull request merged, on its own schedule. Not observed on a real merge.
 

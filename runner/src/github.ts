@@ -5,6 +5,7 @@ export type Check = { name: string; bucket: string };
 
 export type PullRequest = {
   number: number;
+  title: string;
   url: string;
   state: "OPEN" | "MERGED" | "CLOSED";
   headRefName: string;
@@ -19,7 +20,7 @@ export type PullRequest = {
   checks: Check[];
 };
 
-const FIELDS = "number,url,state,headRefName,headRefOid,isDraft,mergeable,autoMergeRequest,comments";
+const FIELDS = "number,title,url,state,headRefName,headRefOid,isDraft,mergeable,autoMergeRequest,comments";
 
 /**
  * The pull requests in any state that may be the ticket's. A search for the key in the title finds one whose branch

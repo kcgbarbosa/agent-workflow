@@ -2,7 +2,7 @@
 // prints log lines on stdout unless `--log-level error` comes before the subcommand, `list` leaves out
 // `activeRunId` and `pendingRequestCount`, and it shows a thread waiting on a question as `running`.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const args = process.argv.slice(2);
 const dir = process.env.FAKE_DIR;
@@ -23,8 +23,16 @@ function flag(name) {
   return at < 0 ? undefined : rest[at + 1];
 }
 
+/** Like the real one, a path names a project only from inside its workspace root, and a T3 worktree is outside it. */
+function refuseUnregistered(project) {
+  if (resolve(project) === state.project || resolve(project).startsWith(`${state.project}/`)) return;
+  console.error(`No T3 Code project matches '${project}'`);
+  process.exit(1);
+}
+
 const [group, verb] = rest;
 if (group === "thread" && verb === "list") {
+  refuseUnregistered(flag("--project"));
   const listed = state.threads.map(({ activeRunId: _run, pendingRequestCount: _pending, ...thread }) => thread);
   console.log(JSON.stringify(listed));
 } else if (group === "thread" && verb === "show") {
@@ -36,6 +44,7 @@ if (group === "thread" && verb === "list") {
   console.log(JSON.stringify({ thread, messages: [] }));
 } else if (group === "thread" && verb === "start") {
   const title = flag("--title");
+  refuseUnregistered(rest.at(-2));
   if (state.failStart.some((key) => title?.startsWith(key))) {
     console.error(`could not start ${title}`);
     process.exit(1);
