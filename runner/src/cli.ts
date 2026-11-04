@@ -1,11 +1,13 @@
 // The `runner` command. A tick reads the state, decides the steps, and acts on them. `--dry-run` stops before it acts.
+// `install` and `uninstall` turn the timer of the current repo on and off.
 import { act } from "./act.ts";
 import { load } from "./config.ts";
 import { decide, lineOf } from "./decide.ts";
+import { install, uninstall } from "./install.ts";
 import { Jira } from "./jira.ts";
 import { read } from "./read.ts";
 
-const USAGE = "usage: runner tick [--dry-run]";
+const USAGE = "usage: runner tick [--dry-run] | install | uninstall";
 
 /** A secret from the env, which `bws run` fills as it does for the loop. */
 function secret(name: string): string {
@@ -30,6 +32,10 @@ async function tick(dryRun: boolean): Promise<number> {
 async function main(args: string[]): Promise<number> {
   if (args[0] === "tick" && args.length === 1) return tick(false);
   if (args[0] === "tick" && args[1] === "--dry-run" && args.length === 2) return tick(true);
+  if (args.length === 1 && (args[0] === "install" || args[0] === "uninstall")) {
+    console.log(await (args[0] === "install" ? install : uninstall)(process.cwd()));
+    return 0;
+  }
   console.error(USAGE);
   return 2;
 }

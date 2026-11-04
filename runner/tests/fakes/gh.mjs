@@ -1,6 +1,7 @@
 // A fake `gh`. State is $FAKE_DIR/github.json, and each call is logged to $FAKE_DIR/gh.jsonl. It knows the reads and
 // writes of the runner, and fails any other call. Like the real one, `pr list` gives only the fields it is asked for,
 // and `pr checks` exits 8 while a check is pending and 1 when one failed or none has reported.
+import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -29,8 +30,16 @@ function save() {
   writeFileSync(file, JSON.stringify(pullRequests));
 }
 
+if (args[0] === "repo" && args[1] === "clone") {
+  // Each repo on the fake GitHub is a bare repo under $FAKE_DIR/repos, by its name.
+  const origin = join(dir, "repos", `${args[2].split("/").at(-1)}.git`);
+  if (!existsSync(origin)) refuse("repo");
+  execFileSync("git", ["clone", "--quiet", origin, args[3]]);
+  process.exit(0);
+}
 if (args[0] !== "pr") refuse("call");
 if (args[1] === "list") list();
+else if (args[1] === "create") create();
 else if (args[1] === "checks") checks();
 else if (args[1] === "comment") {
   byUrl().comments.push({ body: flag("--body") ?? refuse("comment"), createdAt: new Date().toISOString() });
@@ -42,13 +51,42 @@ else if (args[1] === "comment") {
 } else refuse("call");
 
 function list() {
-  if (flag("--state") !== "all" || !flag("--json")) refuse("list");
+  const state = flag("--state");
+  if ((state !== "all" && state !== "open") || !flag("--json")) refuse("list");
   const head = flag("--head");
   const term = /^"(.+)" in:title$/.exec(flag("--search") ?? "")?.[1];
   if (!head && !term) refuse("search");
   const fields = flag("--json").split(",");
-  const found = pullRequests.filter((pr) => (head ? pr.headRefName === head : pr.title.includes(term)));
+  const found = pullRequests.filter((pr) => (head ? pr.headRefName === head : pr.title.includes(term)) && (state === "all" || pr.state === "OPEN"));
   console.log(JSON.stringify(found.map((pr) => Object.fromEntries(fields.map((field) => [field, pr[field]])))));
+}
+
+// Like the real one, it refuses a branch that is not on origin, and it opens against the default branch.
+function create() {
+  if (existsSync(join(dir, "gh.failcreate"))) {
+    console.error("gh: GraphQL: was submitted too quickly");
+    process.exit(1);
+  }
+  const head = flag("--head") ?? refuse("create");
+  execFileSync("git", ["ls-remote", "--exit-code", "--quiet", "origin", `refs/heads/${head}`]);
+  const number = pullRequests.length + 1;
+  const url = `https://github.com/o/r/pull/${number}`;
+  pullRequests.push({
+    number,
+    url,
+    title: flag("--title") ?? refuse("create"),
+    body: flag("--body") ?? refuse("create"),
+    headRefName: head,
+    state: "OPEN",
+    isDraft: false,
+    headRefOid: "aaa111",
+    mergeable: "MERGEABLE",
+    autoMergeRequest: null,
+    comments: [],
+    checks: [],
+  });
+  save();
+  console.log(url);
 }
 
 function checks() {
