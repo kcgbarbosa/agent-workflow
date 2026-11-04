@@ -6,7 +6,7 @@ Skills, the loop, and KC's global instructions. `~/.claude` links into a clone o
 skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
 bots/chief.md    the Chief's prompt, which the owner pastes into Grokbot
 agents/<name>.md a subagent tier on a cheaper model. The loop gives its agents the same files
-loop/            the loop command, which turns each ticket of an Epic into a pull request, unattended. Its design is skills/setup-loop/loop.md
+loop/            the loop command, which turns each ready ticket of the queue into a pull request, unattended. Its design is skills/setup-loop/loop.md
 switchboard/     a phone line to the Claude Code sessions on the T14, for the car. Its README is the setup
 config/          the shared Claude Code files settings.json, statusline.sh, keybindings.json, notify.sh and format-markdown.ts, the hook that runs Prettier on each Markdown file an agent edits. install.sh links them into ~/.claude
 docs/            project-skills.md, the registry of skills that live in project repos

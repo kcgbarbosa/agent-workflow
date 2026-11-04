@@ -4,18 +4,23 @@ Tickets live in Jira, project `<KEY>`. They are not files in this repo.
 
 ## Documents
 
-| Document | Where it lives                            | Written by    |
-| -------- | ----------------------------------------- | ------------- |
-| Epic     | A Jira Epic, one for each feature         | `/to-spec`    |
-| Spec     | `<spec folder>/<feature>.md` in this repo | `/to-spec`    |
-| Ticket   | A Jira Task under the Epic                | `/to-tickets` |
+| Document | Where it lives                                     | Written by               |
+| -------- | -------------------------------------------------- | ------------------------ |
+| Epic     | A Jira Epic, one for each feature                  | `/to-spec`               |
+| Spec     | `<spec folder>/<feature>.md` in this repo          | `/to-spec`               |
+| Ticket   | A Jira Task under an Epic, or a Bug with no parent | `/to-tickets`, `/to-bug` |
 
 `/to-spec` creates the Epic when the spec names none. The Epic's description is one line, `Spec: <link>`, which links the spec on the default branch.
 
 The brief is not a ticket. It lives at `README.md`.
 The spec is the source of truth for the build, the tests and the tickets. A ticket names the spec by its repo path, as text with no link, and cites story IDs. It does not copy the spec. Only the Epic links the spec.
 
-When the Epic merges, a pull request deletes the spec, and the Spec line of the Epic changes to link the spec at the head of the default branch at that point, a commit git keeps. With the loop, the archive step does both when the last ticket of the Epic merges, as rule 10 of `~/.claude/skills/setup-loop/loop.md` gives. Without the loop, the owner does both by hand. The Spec line is the one line of the Epic that changes after it is written, and no ticket changes.
+When the Epic merges, a pull request deletes the spec, and the Spec line of the Epic changes to link the spec at the head of the default branch at that point, a commit git keeps. With the loop, the dispatcher does both once every Epic whose Spec line links it is Done, as rule 10 of `~/.claude/skills/setup-loop/loop.md` gives. Without the loop, the owner does both by hand. The Spec line is the one line of the Epic that changes after it is written, and no ticket changes.
+
+## What Jira holds
+
+Jira holds only work an agent does. A step only the owner can do, such as a meeting or a signature, gets no ticket.
+The project has no resolution field, so Done alone reads as complete work. A ticket closed without its work moves to Done with the label `wont-do` and a comment that gives the reason.
 
 ## The PRD
 
@@ -31,11 +36,15 @@ The PRD owner shown on the PRD is `<PRD owner>`.
 
 Issues carry these fields.
 
-| Field         | Values                              | Who sets it |
-| ------------- | ----------------------------------- | ----------- |
-| Status        | To Do, In Progress, In Review, Done | The loop    |
-| Priority      | Highest, High, Medium, Low          | The owner   |
-| <Extra field> | <Values>                            | The owner   |
+| Field         | Values                              | Who sets it   |
+| ------------- | ----------------------------------- | ------------- |
+| Status        | To Do, In Progress, In Review, Done | The loop      |
+| Priority      | Highest, High, Medium, Low          | The owner     |
+| <Extra field> | <Values>                            | The owner     |
+| Component     | The repo the ticket changes         | `/to-tickets` |
+
+A ticket is a Task under an Epic or a Bug with no parent, which `/to-bug` writes from a report.
+Flagged means the ticket waits on the owner, whether it is stuck, proposed, or dangerous.
 
 The owner sets priority and the other hand-set fields. A skill that creates an issue leaves them at the Jira default or empty.
 

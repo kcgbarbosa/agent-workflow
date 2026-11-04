@@ -133,4 +133,4 @@ Both steps are safe to run again. A second run of `protect` in a repo already on
 
 Tell the user which files you wrote. Say that they can edit `docs/agents/*.md` directly, and that this skill needs to run again only to change the Jira project, the PRD, or the acceptance suite.
 
-End by pointing at `/setup-loop`: run it to let the loop build an Epic unattended. Skip it for a repo that builds with `implement` only.
+End by pointing at `/setup-loop`: run it to let the loop build the repo's ready tickets unattended. Skip it for a repo that builds with `implement` only.

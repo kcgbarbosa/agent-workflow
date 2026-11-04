@@ -1,6 +1,6 @@
 # The loop
 
-The `loop` command turns each ticket of an Epic into a pull request, unattended. Read the fixed design it follows first, at `~/.claude/skills/setup-loop/loop.md`. Both live in this repo, in `loop/` and `skills/setup-loop/loop.md`, and `loop/CLAUDE.md` gives the rules for a change to them. `loop.toml` holds the values the command reads. This file holds the other settings of this repo.
+The `loop` command turns each ready ticket of the queue into a pull request, unattended. Read the fixed design it follows first, at `~/.claude/skills/setup-loop/loop.md`. Both live in this repo, in `loop/` and `skills/setup-loop/loop.md`, and `loop/CLAUDE.md` gives the rules for a change to them. `loop.toml` holds the values the command reads. This file holds the other settings of this repo.
 
 The loop runs from `~/dev/agent-workflow`, through the `~/.local/bin/loop` link that `install.sh` makes, while it builds this same repo. Each ticket's pull request merges to `main` when the gate passes, and the next `loop start` fast-forwards the checkout, so a run builds on the loop as it was when the run started.
 
@@ -13,7 +13,7 @@ On t14: `cd ~/dev/agent-workflow && loop start`, which fast-forwards the checkou
 ### Tracker
 
 Jira, project `AW`. `loop.toml` gives the site. Children are `parent = <Epic key>`. Edges are the "Blocks" link type, which `to-tickets` writes.
-Each ticket's Jira component is the repo it changes, `agent-workflow` or `machines`, or `manual` for a step only KC can do. `loop.toml` sets no `component`, so a run here builds the `agent-workflow` tickets.
+Each ticket's Jira component is the repo it changes, `agent-workflow` or `machines`. `loop.toml` sets no `component`, so the dispatcher here builds the `agent-workflow` tickets.
 
 ### Status and stuck marker
 
@@ -21,7 +21,7 @@ The loop sets In Progress when a ticket starts, In Review when its pull request 
 
 ### Human steps
 
-A step only KC can do is a ticket with the component `manual`, which no loop builds. KC sets it Done, and the next run starts the tickets that wait on it. KC's `gh` login on t14 has admin on the repo, so an agent can change repo settings through `gh api`. When auto mode holds such a change, KC approves it from the phone.
+A step only KC can do gets no ticket. A Flagged ticket is an agent's ticket that waits on KC, and the dispatcher's next poll starts it once it is unflagged. KC's `gh` login on t14 has admin on the repo, so an agent can change repo settings through `gh api`. When auto mode holds such a change, KC approves it from the phone.
 
 ### Branches and commits
 
