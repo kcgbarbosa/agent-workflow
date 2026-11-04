@@ -25,12 +25,12 @@ The project has no resolution field, so Done alone reads as complete work. A tic
 
 Issues carry these fields.
 
-| Field     | Values                                                 | Who sets it                |
-| --------- | ------------------------------------------------------ | -------------------------- |
+| Field     | Values                                       | Who sets it                |
+| --------- | -------------------------------------------- | -------------------------- |
 | Status    | Awaiting Approval, To Do, In Progress, In Review, Done | The owner, then the runner |
-| Priority  | Highest, High, Medium, Low                             | The owner                  |
-| Sprint    | The board's sprints                                    | The owner                  |
-| Component | The repo the ticket changes                            | `/to-tickets`              |
+| Priority  | Highest, High, Medium, Low                   | The owner                  |
+| Sprint    | The board's sprints                          | The owner                  |
+| Component | The repo the ticket changes                  | `/to-tickets`              |
 
 A new issue starts as Awaiting Approval. The owner moves a ticket to To Do to approve its build, and the runner sets every later status. A ticket moved back to Awaiting Approval stops.
 A ticket is a Task under an Epic or a Bug with no parent, which `/to-bug` writes from a report.
