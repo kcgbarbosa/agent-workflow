@@ -53,3 +53,14 @@ export async function comment(cwd: string, url: string, body: string): Promise<v
 export async function autoMerge(cwd: string, url: string): Promise<void> {
   await run("gh", ["pr", "merge", url, "--auto", "--squash"], cwd);
 }
+
+/** The url of the open pull request from the branch, if any. */
+export async function openFrom(cwd: string, branch: string): Promise<string | null> {
+  const [open] = JSON.parse((await run("gh", ["pr", "list", "--head", branch, "--state", "open", "--json", "url"], cwd)) || "[]");
+  return open?.url ?? null;
+}
+
+/** Opens a pull request of the pushed branch against the default branch, and returns its url. */
+export async function create(cwd: string, head: string, title: string, body: string): Promise<string> {
+  return (await run("gh", ["pr", "create", "--head", head, "--title", title, "--body", body], cwd)).trim().split("\n").at(-1) as string;
+}

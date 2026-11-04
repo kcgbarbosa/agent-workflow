@@ -1,13 +1,16 @@
 // The second step of a tick: a pure function from the state, the config and the time to the steps, one per action
 // and skip. The tickets come in queue order, by priority, then key. The first match in `planOf` decides a ticket, in
 // the order of the spec's table.
+import { pinsOf, type Pin, specLinks } from "./archive.ts";
 import type { Config } from "./config.ts";
 import type { PullRequest } from "./github.ts";
 import type { Ticket, TicketComment } from "./jira.ts";
 import type { Thread } from "./t3.ts";
 
 export type TicketState = { ticket: Ticket; comments: TicketComment[]; threads: Thread[]; pullRequests: PullRequest[] };
-export type State = TicketState[];
+/** An open Epic with a child of this repo's component. `linking` holds the other Epics that link its spec, once its children are all Done. */
+export type EpicState = { epic: Ticket; children: Ticket[]; linking: Ticket[] };
+export type State = { tickets: TicketState[]; epics: EpicState[] };
 
 export type Step = { key: string; reason: string } & (
   | { kind: "skip" }
@@ -19,6 +22,7 @@ export type Step = { key: string; reason: string } & (
   | { kind: "auto-merge"; url: string }
   | { kind: "flag" }
   | { kind: "notify"; text: string }
+  | { kind: "archive"; summary: string; pins: Pin[] }
 );
 
 /** What a ticket does at this tick. `turn` starts an agent turn, so it needs a place against the limit, and comes after `steps`. A fix or a retry is a `message`, which takes its place before any new start. */
@@ -171,7 +175,33 @@ function planOf(item: TicketState, config: Config, now: number): Plan {
   };
 }
 
-export function decide(state: State, config: Config, now: number): Step[] {
+/**
+ * What an open Epic does, after the tickets. A failed archive drops the Done that follows it, so the next tick tries
+ * again. Two Epics that link one spec can close on one tick, and then the first by key archives it, so the spec gets
+ * one pull request.
+ */
+function epicSteps(epics: EpicState[]): Step[] {
+  const allDone = (item: EpicState): boolean => item.children.every((child) => child.done);
+  const closing = new Set(epics.filter(allDone).map((item) => item.epic.key));
+  return epics.flatMap((item): Step[] => {
+    const { epic, children, linking } = item;
+    const { key } = epic;
+    if (!allDone(item)) {
+      const open = children.filter((child) => !child.done).map((child) => child.key);
+      return [{ kind: "skip", key, reason: `${open.join(", ")} ${open.length === 1 ? "is" : "are"} not Done` }];
+    }
+    const done: Step = { kind: "status", key, status: DONE, reason: "its last child is Done" };
+    if (!specLinks(epic.text).length) return [{ kind: "skip", key, reason: "its description has no Spec line that links a spec" }, done];
+    const waiting = linking.filter((other) => !other.done && !(closing.has(other.key) && key < other.key)).map((other) => other.key);
+    if (waiting.length) {
+      const verbs = waiting.length === 1 ? "links it and is" : "link it and are";
+      return [{ kind: "skip", key, reason: `the spec stays, since ${waiting.join(", ")} ${verbs} not Done` }, done];
+    }
+    return [{ kind: "archive", key, summary: epic.summary, pins: pinsOf(epic, linking), reason: "every Epic that links the spec is Done" }, done];
+  });
+}
+
+export function decide({ tickets: state, epics }: State, config: Config, now: number): Step[] {
   const plans = state.map((item) => planOf(item, config, now));
   // A stopped thread that is Flagged at this tick is stuck from here on, so it holds its place at once.
   let taken = state.filter((item, at) => holdsPlace(item) || (item.threads.length > 0 && plans[at].steps.some((step) => step.kind === "flag"))).length;
@@ -183,7 +213,7 @@ export function decide(state: State, config: Config, now: number): Step[] {
     return [...plan.steps, ...plan.turn(place)];
   };
   const inOrder = (message: boolean): Step[] => plans.flatMap((plan, at) => (Boolean(plan.message) === message ? placed(plan, at) : []));
-  return [...inOrder(true), ...inOrder(false)];
+  return [...inOrder(true), ...inOrder(false), ...epicSteps(epics)];
 }
 
 /** The log line of a step. */

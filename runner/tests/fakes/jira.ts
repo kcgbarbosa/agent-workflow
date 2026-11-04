@@ -14,12 +14,18 @@ export type Issue = {
   /** The tickets that block this one, each with its status. */
   blockedBy: Record<string, string>;
   comments: { text: string; created: string }[];
+  parent: string | null;
+  /** The description as Jira holds it, a document. */
+  description: unknown;
 };
 
 const FLAGGED = "customfield_10021";
 const PAGE = 2;
 const PRIORITIES = ["Lowest", "Low", "Medium", "High", "Highest"];
 const JQL = /^component = "([^"]+)" AND statusCategory != Done ORDER BY priority DESC, key ASC$/;
+const OPEN_EPICS = "issuetype = Epic AND statusCategory != Done ORDER BY key ASC";
+const CHILDREN = /^parent = ([A-Z]+-\d+) ORDER BY key ASC$/;
+const NAMING = /^issuetype = Epic AND description ~ "\\"(.+)\\"" ORDER BY key ASC$/;
 
 /** A time as Jira writes it, with no colon in its offset. */
 export function jiraTime(ms: number): string {
@@ -28,6 +34,12 @@ export function jiraTime(ms: number): string {
 
 function category(status: string) {
   return { key: status === "Done" ? "done" : status === "To Do" || status === "Backlog" ? "new" : "indeterminate" };
+}
+
+/** A description of one line, `Spec: <link>`, as `/to-spec` writes it: the URL is both the text and the link's target. */
+export function specLine(url: string): unknown {
+  const link = { type: "text", text: url, marks: [{ type: "link", attrs: { href: url } }] };
+  return { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: "Spec: " }, link] }] };
 }
 
 export class FakeJira {
@@ -70,6 +82,8 @@ export class FakeJira {
       flagged: false,
       blockedBy: {},
       comments: [],
+      parent: null,
+      description: null,
       ...values,
     });
   }
@@ -84,6 +98,7 @@ export class FakeJira {
     if (commented) return this.comment(method, commented[1], url, body);
     const edited = /^\/rest\/api\/3\/issue\/([^/]+)$/.exec(pathname);
     if (edited && method === "PUT") return this.edit(edited[1], body);
+    if (edited && method === "GET" && this.issues.has(edited[1])) return [200, this.fields(this.issues.get(edited[1])!)];
     const transitions = /^\/rest\/api\/3\/issue\/([^/]+)\/transitions$/.exec(pathname);
     const issue = transitions ? this.issues.get(transitions[1]) : undefined;
     if (issue && method === "GET") {
@@ -117,6 +132,11 @@ export class FakeJira {
 
   private edit(key: string, body: any): [number, unknown] {
     const issue = this.issues.get(key);
+    if (issue && body.fields?.description) {
+      issue.description = body.fields.description;
+      this.writes.push(`describe ${key}`);
+      return [204, null];
+    }
     if (!issue || !body.fields?.[FLAGGED]) return [400, { errorMessages: [`bad edit of ${key}`] }];
     issue.flagged = true;
     this.writes.push(`flag ${key}`);
@@ -124,14 +144,8 @@ export class FakeJira {
   }
 
   private search(body: { jql: string; nextPageToken?: string }): [number, unknown] {
-    const match = JQL.exec(body.jql);
-    if (!match) return [400, { errorMessages: [`unknown JQL: ${body.jql}`] }];
-    const found = [...this.issues.values()]
-      .filter((issue) => issue.components.includes(match[1]) && issue.status !== "Done")
-      .sort(
-        (a, b) =>
-          PRIORITIES.indexOf(b.priority) - PRIORITIES.indexOf(a.priority) || Number(a.key.split("-")[1]) - Number(b.key.split("-")[1]),
-      );
+    const found = this.matching(body.jql);
+    if (!found) return [400, { errorMessages: [`unknown JQL: ${body.jql}`] }];
     const start = Number(body.nextPageToken ?? 0);
     const next = start + PAGE;
     return [
@@ -144,6 +158,23 @@ export class FakeJira {
     ];
   }
 
+  private matching(jql: string): Issue[] | null {
+    const all = [...this.issues.values()];
+    const byKey = (a: Issue, b: Issue) => Number(a.key.split("-")[1]) - Number(b.key.split("-")[1]);
+    const queue = JQL.exec(jql);
+    if (queue) {
+      return all
+        .filter((issue) => issue.components.includes(queue[1]) && issue.status !== "Done")
+        .sort((a, b) => PRIORITIES.indexOf(b.priority) - PRIORITIES.indexOf(a.priority) || byKey(a, b));
+    }
+    if (jql === OPEN_EPICS) return all.filter((issue) => issue.issueType === "Epic" && issue.status !== "Done").sort(byKey);
+    const children = CHILDREN.exec(jql);
+    if (children) return all.filter((issue) => issue.parent === children[1]).sort(byKey);
+    const naming = NAMING.exec(jql);
+    if (naming) return all.filter((issue) => issue.issueType === "Epic" && JSON.stringify(issue.description).includes(naming[1])).sort(byKey);
+    return null;
+  }
+
   private fields(issue: Issue): unknown {
     return {
       key: issue.key,
@@ -152,6 +183,7 @@ export class FakeJira {
         status: { name: issue.status, statusCategory: category(issue.status) },
         issuetype: { name: issue.issueType },
         components: issue.components.map((name) => ({ name })),
+        description: issue.description,
         [FLAGGED]: issue.flagged ? [{ value: "Impediment" }] : null,
         issuelinks: [
           // The other direction of a link, which blocks nothing here.

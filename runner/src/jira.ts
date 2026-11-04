@@ -4,8 +4,13 @@ export type Ticket = {
   summary: string;
   issueType: string;
   status: string;
+  done: boolean;
   flagged: boolean;
+  /** The Jira components: the repos the ticket changes. */
+  components: string[];
   blockers: { key: string; done: boolean }[];
+  /** The description, a line for each block, with the target of each link. */
+  text: string;
 };
 
 export type TicketComment = { text: string; created: string };
@@ -26,7 +31,7 @@ export class Jira {
 
   async search(jql: string): Promise<Ticket[]> {
     const flagged = await this.flaggedField();
-    const fields = ["summary", "status", "issuetype", "issuelinks", flagged];
+    const fields = ["summary", "status", "issuetype", "issuelinks", "components", "description", flagged];
     const tickets: Ticket[] = [];
     let token: string | undefined;
     for (;;) {
@@ -70,6 +75,14 @@ export class Jira {
     await this.request("POST", path, { transition: { id: match.id } });
   }
 
+  /** Replaces the text in the description, in its text and its link targets. */
+  async replaceInDescription(key: string, old: string, text: string): Promise<void> {
+    const data = await this.request("GET", `/rest/api/3/issue/${key}?fields=description`);
+    const raw = JSON.stringify(data.fields?.description ?? null);
+    if (!raw.includes(old)) return;
+    await this.request("PUT", `/rest/api/3/issue/${key}`, { fields: { description: JSON.parse(raw.replaceAll(old, text)) } });
+  }
+
   private async flaggedField(): Promise<string> {
     if (this.flaggedId === null) {
       const fields: Fields[] = await this.request("GET", "/rest/api/3/field");
@@ -98,6 +111,18 @@ function textOf(node: Fields | undefined): string {
   return String(node?.text ?? "") + ((node?.content ?? []) as Fields[]).map(textOf).join("");
 }
 
+function descriptionOf(node: Fields | null | undefined): string {
+  if (!node) return "";
+  if (node.type === "text") {
+    const href = (node.marks as Fields[] | undefined)?.find((mark) => mark.type === "link")?.attrs?.href;
+    return href ? `[${node.text}](${href})` : String(node.text ?? "");
+  }
+  if (node.type === "inlineCard") return String(node.attrs?.url ?? "");
+  if (node.type === "hardBreak") return "\n";
+  const inner = ((node.content ?? []) as Fields[]).map(descriptionOf);
+  return inner.join(node.type === "paragraph" || node.type === "heading" ? "" : "\n");
+}
+
 function parse(data: Fields, flagged: string): Ticket {
   const fields: Fields = data.fields ?? {};
   const links: Fields[] = fields.issuelinks ?? [];
@@ -106,7 +131,10 @@ function parse(data: Fields, flagged: string): Ticket {
     summary: fields.summary ?? "",
     issueType: fields.issuetype?.name ?? "Task",
     status: fields.status?.name ?? "",
+    done: fields.status?.statusCategory?.key === "done",
     flagged: Boolean(fields[flagged]),
+    components: ((fields.components ?? []) as Fields[]).map((component) => component.name),
+    text: descriptionOf(fields.description),
     blockers: links
       .filter((link) => link.type?.name === "Blocks" && link.inwardIssue)
       .map((link) => ({ key: link.inwardIssue.key, done: link.inwardIssue.fields?.status?.statusCategory?.key === "done" })),

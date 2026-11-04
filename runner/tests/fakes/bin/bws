@@ -1,0 +1,3 @@
+#!/bin/sh
+# Like the real `bws run -- <line>`: it runs the line under sh. The secrets are in the world's env already.
+exec sh -c "$3"

@@ -1,5 +1,6 @@
 // The third step of a tick: it performs the steps and logs each. A step that fails drops the rest of its ticket's
 // steps and holds up no other ticket. The next tick reads what happened, so nothing is done twice.
+import { archive } from "./archive.ts";
 import type { Config } from "./config.ts";
 import { lineOf, type Step } from "./decide.ts";
 import { run } from "./exec.ts";
@@ -35,6 +36,8 @@ export async function act(steps: Step[], config: Config, jira: Jira, topic: stri
         await autoMerge(cwd, step.url);
       } else if (step.kind === "flag") {
         await jira.flag(step.key);
+      } else if (step.kind === "archive") {
+        console.log(`${step.key} archive: ${await archive(step.key, step.summary, step.pins, jira, cwd)}`);
       } else if (step.kind === "notify") {
         await post(config.ntfyUrl, topic, step.text);
       }

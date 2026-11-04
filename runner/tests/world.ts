@@ -1,6 +1,6 @@
 // A scenario's world: a repo with a bare origin, a fake Jira, and the fakes of `t3` and `gh` on the PATH.
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { FakeJira, jiraTime } from "./fakes/jira.ts";
@@ -46,6 +46,10 @@ export class World {
       FAKE_DIR: this.fakes,
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@example.com",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@example.com",
       JIRA_EMAIL: "owner@example.com",
       JIRA_API_TOKEN: "token",
       NTFY_TOPIC: "the-topic",
@@ -71,6 +75,33 @@ export class World {
   commit(message: string): string {
     this.git(this.repo, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "--quiet", "--allow-empty", "-m", message);
     return this.git(this.repo, "rev-parse", "HEAD");
+  }
+
+  /** A repo on the fake GitHub, with these files on its main. Returns its bare origin. */
+  githubRepo(name: string, files: Record<string, string>): string {
+    const origin = join(this.fakes, "repos", `${name}.git`);
+    const work = join(this.root, `${name}-work`);
+    mkdirSync(origin, { recursive: true });
+    this.git(origin, "init", "--quiet", "--bare", "--initial-branch=main");
+    this.git(this.root, "clone", "--quiet", origin, work);
+    this.git(work, "checkout", "--quiet", "-B", "main");
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(work, path)), { recursive: true });
+      writeFileSync(join(work, path), text);
+    }
+    this.git(work, "add", ".");
+    this.git(work, "commit", "--quiet", "--allow-empty", "-m", "first");
+    this.git(work, "push", "--quiet", "origin", "main");
+    rmSync(work, { recursive: true });
+    return origin;
+  }
+
+  /** Moves the main of a repo on the fake GitHub on by one empty commit. */
+  githubRepoCommit(name: string, message: string): void {
+    const origin = join(this.fakes, "repos", `${name}.git`);
+    const tree = this.git(origin, "rev-parse", "main^{tree}");
+    const parent = this.git(origin, "rev-parse", "main");
+    this.git(origin, "update-ref", "refs/heads/main", this.git(origin, "commit-tree", tree, "-p", parent, "-m", message));
   }
 
   /** Writes `runner.toml`, with the keys every repo must set before these. */
@@ -145,7 +176,7 @@ export class World {
   }
 
   /** Makes `t3` or `gh` fail each call. */
-  down(tool: "t3" | "gh"): void {
+  down(tool: "t3" | "gh" | "systemctl"): void {
     writeFileSync(join(this.fakes, `${tool}.down`), "");
   }
 
@@ -171,12 +202,35 @@ export class World {
     return this.runner("tick", "--dry-run");
   }
 
+  /** Makes `gh pr create` fail, once a branch is pushed. */
+  failPullRequestCreate(fail = true): void {
+    const file = join(this.fakes, "gh.failcreate");
+    if (fail) writeFileSync(file, "");
+    else rmSync(file);
+  }
+
+  /** Runs a command line in the repo, with the env of a tick. It runs apart, since the fake Jira shares this process. */
+  shell(command: string): Promise<Tick> {
+    return new Promise((resolve) => {
+      execFile("sh", ["-c", command], { cwd: this.repo, env: this.env, timeout: 30_000 }, (error, stdout, stderr) => {
+        resolve({ code: error ? 1 : 0, stdout, stderr, lines: stdout.split("\n").filter(Boolean) });
+      });
+    });
+  }
+
+  /** Each `systemctl` call that reached the fake, as its arguments. */
+  systemctlCalls(): string[][] {
+    const file = join(this.fakes, "systemctl.jsonl");
+    if (!existsSync(file)) return [];
+    return readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  }
+
   /** Each `gh` call that reached the fake and wrote, as its arguments. */
   ghWrites(): string[][] {
     const file = join(this.fakes, "gh.jsonl");
     if (!existsSync(file)) return [];
     const calls: string[][] = readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    return calls.filter(([, verb]) => verb === "comment" || verb === "merge");
+    return calls.filter(([, verb]) => verb === "comment" || verb === "merge" || verb === "create");
   }
 
   /** Each message sent to a thread, as its thread's id and its text. */
