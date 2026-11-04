@@ -8,6 +8,8 @@ export type Ticket = {
   blockers: { key: string; done: boolean }[];
 };
 
+export type TicketComment = { text: string; created: string };
+
 const FALLBACK_FLAGGED = "customfield_10021";
 
 type Fields = Record<string, any>;
@@ -35,6 +37,28 @@ export class Jira {
       if (page.isLast || !page.nextPageToken) return tickets;
       token = page.nextPageToken;
     }
+  }
+
+  async comments(key: string): Promise<TicketComment[]> {
+    const found: TicketComment[] = [];
+    for (let start = 0; ; ) {
+      const page = await this.request("GET", `/rest/api/3/issue/${key}/comment?orderBy=created&startAt=${start}`);
+      const comments: Fields[] = page.comments ?? [];
+      for (const comment of comments) found.push({ text: textOf(comment.body).trim(), created: comment.created });
+      start += comments.length;
+      if (!comments.length || start >= (page.total ?? 0)) return found;
+    }
+  }
+
+  async comment(key: string, text: string): Promise<void> {
+    const content = text.split("\n").map((line) => ({ type: "paragraph", content: line ? [{ type: "text", text: line }] : [] }));
+    await this.request("POST", `/rest/api/3/issue/${key}/comment`, { body: { type: "doc", version: 1, content } });
+  }
+
+  /** Sets the Flagged field, the mark of a ticket that waits on the owner. */
+  async flag(key: string): Promise<void> {
+    const field = await this.flaggedField();
+    await this.request("PUT", `/rest/api/3/issue/${key}`, { fields: { [field]: [{ value: "Impediment" }] } });
   }
 
   /** Moves the ticket to the status of that name, through the transition that leads there. */
@@ -67,6 +91,11 @@ export class Jira {
     if (!response.ok) throw new Error(`Jira ${method} ${path}: HTTP ${response.status} ${text.slice(0, 300)}`);
     return text ? JSON.parse(text) : null;
   }
+}
+
+/** The text of a comment's document, enough to read how it starts. */
+function textOf(node: Fields | undefined): string {
+  return String(node?.text ?? "") + ((node?.content ?? []) as Fields[]).map(textOf).join("");
 }
 
 function parse(data: Fields, flagged: string): Ticket {

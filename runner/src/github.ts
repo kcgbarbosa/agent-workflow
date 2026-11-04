@@ -1,24 +1,55 @@
-// The pull request reads of the runner, cut from the loop's, all through `gh`.
-import { run } from "./exec.ts";
+// The pull request calls of the runner, cut from the loop's, all through `gh`.
+import { output, run } from "./exec.ts";
+
+export type Check = { name: string; bucket: string };
 
 export type PullRequest = {
   number: number;
   url: string;
   state: "OPEN" | "MERGED" | "CLOSED";
   headRefName: string;
+  headRefOid: string;
+  isDraft: boolean;
+  /** MERGEABLE, CONFLICTING, or UNKNOWN while GitHub works it out. */
+  mergeable: string;
+  /** Set while auto-merge is on. */
+  autoMergeRequest: unknown;
+  comments: { body: string; createdAt: string }[];
+  /** The required checks of an open pull request. */
+  checks: Check[];
 };
 
-const FIELDS = "number,url,state,headRefName";
+const FIELDS = "number,url,state,headRefName,headRefOid,isDraft,mergeable,autoMergeRequest,comments";
 
 /**
  * The pull requests in any state that may be the ticket's. A search for the key in the title finds one whose branch
  * was named from an older summary, and the head branch finds one the search index has not taken in yet. Neither
  * has a count that older pull requests of the repo could fill.
  */
-export async function pullRequestsNaming(cwd: string, key: string, branch: string): Promise<PullRequest[]> {
+export async function pullRequestsNaming(cwd: string, key: string, branch: string): Promise<Omit<PullRequest, "checks">[]> {
   const searched = await run("gh", ["pr", "list", "--state", "all", "--search", `"${key}" in:title`, "--limit", "100", "--json", FIELDS], cwd);
   const headed = await run("gh", ["pr", "list", "--head", branch, "--state", "all", "--json", FIELDS], cwd);
-  const found = new Map<number, PullRequest>();
+  const found = new Map<number, Omit<PullRequest, "checks">>();
   for (const pr of [...JSON.parse(searched || "[]"), ...JSON.parse(headed || "[]")] as PullRequest[]) found.set(pr.number, pr);
   return [...found.values()];
+}
+
+/**
+ * The required check runs, so a failing check that branch protection does not require never reads as red.
+ * `gh pr checks` exits 8 while one is pending and 1 when one failed or none exist yet.
+ */
+export async function checksOf(cwd: string, url: string): Promise<Check[]> {
+  const { stdout, stderr } = await output("gh", ["pr", "checks", url, "--required", "--json", "name,bucket"], cwd);
+  if (stdout.trim().startsWith("[")) return JSON.parse(stdout);
+  if (/no (?:required )?checks reported/i.test(stderr)) return [];
+  throw new Error(`gh pr checks: ${(stderr || stdout).trim()}`);
+}
+
+export async function comment(cwd: string, url: string, body: string): Promise<void> {
+  await run("gh", ["pr", "comment", url, "--body", body], cwd);
+}
+
+/** Auto-merge as a squash, so the pull request title becomes the commit on main. */
+export async function autoMerge(cwd: string, url: string): Promise<void> {
+  await run("gh", ["pr", "merge", url, "--auto", "--squash"], cwd);
 }

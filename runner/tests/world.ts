@@ -3,18 +3,31 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { FakeJira } from "./fakes/jira.ts";
+import { FakeJira, jiraTime } from "./fakes/jira.ts";
+import { FakeNtfy } from "./fakes/ntfy.ts";
 
 const HERE = import.meta.dirname;
 const RUNNER = join(HERE, "..", "bin", "runner");
 const GIT = dirname(execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim());
 
 export type Tick = { code: number; stdout: string; stderr: string; lines: string[] };
-export type Thread = { title: string; running?: boolean; waiting?: boolean };
-export type PullRequest = { title: string; headRefName: string; state?: "OPEN" | "MERGED" | "CLOSED" };
+export type Thread = { title: string; running?: boolean; waiting?: boolean; failed?: boolean; quietMinutes?: number };
+export type Check = { name: string; bucket: "pass" | "fail" | "pending" | "cancel" | "skipping" };
+export type PullRequest = {
+  title: string;
+  headRefName: string;
+  state?: "OPEN" | "MERGED" | "CLOSED";
+  isDraft?: boolean;
+  headRefOid?: string;
+  mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  checks?: Check[];
+};
+
+const MINUTE = 60_000;
 
 export class World {
   jira = new FakeJira();
+  ntfy = new FakeNtfy();
   root = mkdtempSync(join(tmpdir(), "runner-"));
   repo = join(this.root, "repo");
   origin = join(this.root, "origin.git");
@@ -23,6 +36,7 @@ export class World {
 
   async start(config = ""): Promise<void> {
     await this.jira.start();
+    await this.ntfy.start();
     execFileSync("mkdir", ["-p", this.fakes]);
     writeFileSync(join(this.fakes, "t3.json"), JSON.stringify({ threads: [], failStart: [] }));
     writeFileSync(join(this.fakes, "github.json"), "[]");
@@ -34,6 +48,7 @@ export class World {
       GIT_CONFIG_NOSYSTEM: "1",
       JIRA_EMAIL: "owner@example.com",
       JIRA_API_TOKEN: "token",
+      NTFY_TOPIC: "the-topic",
     };
     this.git(this.root, "init", "--quiet", "--bare", "--initial-branch=main", this.origin);
     this.git(this.root, "init", "--quiet", "--initial-branch=main", this.repo);
@@ -45,6 +60,7 @@ export class World {
 
   async stop(): Promise<void> {
     await this.jira.stop();
+    await this.ntfy.stop();
     rmSync(this.root, { recursive: true, force: true });
   }
 
@@ -59,7 +75,7 @@ export class World {
 
   /** Writes `runner.toml`, with the keys every repo must set before these. */
   config(extra = ""): void {
-    writeFileSync(join(this.repo, "runner.toml"), `component = "agent-workflow"\njira_url = "${this.jira.url}"\n${extra}\n`);
+    writeFileSync(join(this.repo, "runner.toml"), `component = "agent-workflow"\njira_url = "${this.jira.url}"\nntfy_url = "${this.ntfy.url}"\n${extra}\n`);
   }
 
   thread(thread: Thread): void {
@@ -69,11 +85,20 @@ export class World {
     state.threads.push({
       threadId,
       title: thread.title,
-      status: thread.running || thread.waiting ? "running" : "completed",
+      link: `http://127.0.0.1:3773/env/${encodeURIComponent(threadId)}`,
+      status: thread.running || thread.waiting ? "running" : thread.failed ? "failed" : "completed",
       activeRunId: thread.running || thread.waiting ? `run:${threadId}` : null,
       pendingRequestCount: thread.waiting ? 1 : 0,
-      updatedAt: "2026-11-04T00:00:00.000Z",
+      updatedAt: new Date(Date.now() - (thread.quietMinutes ?? 0) * MINUTE).toISOString(),
     });
+    writeFileSync(file, JSON.stringify(state));
+  }
+
+  /** Ends every thread's turn, as a turn that finishes between ticks does. */
+  stopThreads(): void {
+    const file = join(this.fakes, "t3.json");
+    const state = JSON.parse(readFileSync(file, "utf8"));
+    for (const thread of state.threads) Object.assign(thread, { status: "completed", activeRunId: null, pendingRequestCount: 0 });
     writeFileSync(file, JSON.stringify(state));
   }
 
@@ -84,12 +109,39 @@ export class World {
     writeFileSync(file, JSON.stringify(state));
   }
 
-  pullRequest({ title, headRefName, state = "OPEN" }: PullRequest): void {
-    const file = join(this.fakes, "github.json");
-    const pullRequests = JSON.parse(readFileSync(file, "utf8"));
+  pullRequest({ title, headRefName, state = "OPEN", isDraft = false, headRefOid = "aaa111", mergeable = "MERGEABLE", checks = [] }: PullRequest): void {
+    const pullRequests = this.pullRequests();
     const number = pullRequests.length + 1;
-    pullRequests.push({ number, url: `https://github.com/o/r/pull/${number}`, title, headRefName, state, isDraft: false });
-    writeFileSync(file, JSON.stringify(pullRequests));
+    const url = `https://github.com/o/r/pull/${number}`;
+    pullRequests.push({ number, url, title, headRefName, state, isDraft, headRefOid, mergeable, autoMergeRequest: null, comments: [], checks });
+    this.savePullRequests(pullRequests);
+  }
+
+  /** Changes the first pull request, as a push or a finished check does. */
+  updatePullRequest(values: Partial<PullRequest>): void {
+    const pullRequests = this.pullRequests();
+    Object.assign(pullRequests[0], values);
+    this.savePullRequests(pullRequests);
+  }
+
+  /** A comment on the first pull request, written that long ago. */
+  prComment(body: string, minutesAgo = 0): void {
+    const pullRequests = this.pullRequests();
+    pullRequests[0].comments.push({ body, createdAt: new Date(Date.now() - minutesAgo * MINUTE).toISOString() });
+    this.savePullRequests(pullRequests);
+  }
+
+  /** A comment on the ticket, written that long ago. */
+  ticketComment(key: string, text: string, minutesAgo = 0): void {
+    this.jira.issues.get(key)?.comments.push({ text, created: jiraTime(Date.now() - minutesAgo * MINUTE) });
+  }
+
+  pullRequests(): any[] {
+    return JSON.parse(readFileSync(join(this.fakes, "github.json"), "utf8"));
+  }
+
+  private savePullRequests(pullRequests: unknown[]): void {
+    writeFileSync(join(this.fakes, "github.json"), JSON.stringify(pullRequests));
   }
 
   /** Makes `t3` or `gh` fail each call. */
@@ -117,6 +169,21 @@ export class World {
 
   dryRun(): Promise<Tick> {
     return this.runner("tick", "--dry-run");
+  }
+
+  /** Each `gh` call that reached the fake and wrote, as its arguments. */
+  ghWrites(): string[][] {
+    const file = join(this.fakes, "gh.jsonl");
+    if (!existsSync(file)) return [];
+    const calls: string[][] = readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return calls.filter(([, verb]) => verb === "comment" || verb === "merge");
+  }
+
+  /** Each message sent to a thread, as its thread's id and its text. */
+  sends(): { threadId: string; message: string }[] {
+    return this.t3Calls()
+      .filter((args) => args.includes("send"))
+      .map((args) => ({ threadId: args.at(-2) as string, message: args.at(-1) as string }));
   }
 
   /** Each `t3` call that reached the fake, as its arguments. */

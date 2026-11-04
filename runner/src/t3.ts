@@ -6,8 +6,13 @@ import { run } from "./exec.ts";
 export type Thread = {
   threadId: string;
   title: string;
+  /** The thread's address on this host, as `t3` prints it. */
+  link: string;
+  status: string;
   activeRunId: string | null;
   pendingRequestCount: number;
+  /** Does not move during a long foreground tool call, so a command longer than the quiet period flags a healthy thread. */
+  updatedAt: string;
 };
 
 export type NewThread = {
@@ -36,4 +41,9 @@ export async function showThread(cwd: string, id: string): Promise<Thread> {
 export async function startThread(cwd: string, thread: NewThread): Promise<void> {
   const { title, provider, model, base, branch, message } = thread;
   await t3(["start", "--title", title, "--provider", provider, "--model", model, "--worktree", base, "--branch", branch, ".", message], cwd);
+}
+
+/** Sends a message to the thread and returns, with no `--wait`. A busy thread gets it as its next turn. */
+export async function sendMessage(cwd: string, id: string, message: string): Promise<void> {
+  await t3(["send", id, message], cwd);
 }
