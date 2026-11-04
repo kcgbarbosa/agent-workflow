@@ -43,7 +43,7 @@ test("the Chief's prompt holds each rule of the spec", () => {
 
 test("to-bug writes a Flagged Bug with no parent, its trace as text, and the intake comment", () => {
   const skill = read("skills/to-bug/SKILL.md");
-  for (const rule of ["with no parent", "**Reproduce.**", "pasted in as text", "states the correct behaviour", "Set the component", "Flagged", "Move it from Backlog to To Do", "`Proposed by intake`"]) {
+  for (const rule of ["with no parent", "**Reproduce.**", "pasted in as text", "states the correct behaviour", "Set the component", "Flagged", "Move it from Awaiting Approval to To Do", "`Proposed by intake`"]) {
     expect(skill).toContain(rule);
   }
 });

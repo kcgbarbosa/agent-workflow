@@ -13,7 +13,7 @@ Do `/setup-repo` first, so the repo is on the shared gate and has its agent docs
 ## Process
 
 1. **Register the project.** `t3 project add <path to the main checkout>`, unless T3 has it.
-2. **Check the tracker has Backlog.** The repo's Jira project needs the status `Backlog`, in the To Do category, as its initial status, and as the first column of its board. Moving a ticket from Backlog to To Do is the owner's approval of its build, and without the status every new ticket builds at once. Stop until the project has it.
+2. **Check the tracker has Awaiting Approval.** The repo's Jira project needs the status `Awaiting Approval`, in the To Do category, as its initial status, and as the first column of its board. Moving a ticket from Awaiting Approval to To Do is the owner's approval of its build, and without the status every new ticket builds at once. Stop until the project has it.
 3. **Write `runner.toml`** at the repo root: `component`, the repo's Jira component, and `jira_url`. `runner/src/config.ts` in agent-workflow gives the other keys and their defaults. Use `first_message` for a line every thread of this repo needs.
 4. **Write `docs/agents/runner.md`**, with `docs/agents/runner.md` of agent-workflow as its shape, and point `AGENTS.md` at it.
 5. **Give a stack its ports**, in a repo with a stack, as ADR-0005 gives. Each port reads an env var with today's port as its default. The repo's `make` target claims a free port set from a fixed list when a stack starts, writes the env file, and stops any stack whose worktree is gone, with its database. When the product checks the origin, such as a bucket's CORS rule, the list holds only the ports it allows.

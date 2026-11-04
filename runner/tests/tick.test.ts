@@ -80,7 +80,7 @@ test("a ticket whose blockers have all merged starts", async () => {
 });
 
 test.each([
-  ["Backlog", { status: "Backlog" }, "status Backlog"],
+  ["Awaiting Approval", { status: "Awaiting Approval" }, "status Awaiting Approval"],
   ["an unmerged blocker", { blockedBy: { "AW-9": "Done", "AW-8": "In Review" } }, "blocked by AW-8"],
   ["Flagged", { flagged: true }, "Flagged"],
   ["an Epic", { issueType: "Epic" }, "an Epic"],
@@ -93,8 +93,8 @@ test.each([
   expect(tick.lines).toEqual([`AW-1 skip: ${reason}`]);
 });
 
-test("a ticket moved from Backlog to To Do starts at a later tick", async () => {
-  world.jira.add("AW-1", "Waits for the owner", { status: "Backlog" });
+test("a ticket moved from Awaiting Approval to To Do starts at a later tick", async () => {
+  world.jira.add("AW-1", "Waits for the owner", { status: "Awaiting Approval" });
 
   await world.tick();
   expect(world.starts()).toEqual([]);
@@ -106,60 +106,60 @@ test("a ticket moved from Backlog to To Do starts at a later tick", async () => 
   expect(world.jira.issues.get("AW-1")?.status).toBe("In Progress");
 });
 
-test("a To Do ticket blocked by a Backlog ticket waits", async () => {
-  world.jira.add("AW-1", "The blocker", { status: "Backlog" });
-  world.jira.add("AW-2", "Blocked", { blockedBy: { "AW-1": "Backlog" } });
+test("a To Do ticket blocked by a Awaiting Approval ticket waits", async () => {
+  world.jira.add("AW-1", "The blocker", { status: "Awaiting Approval" });
+  world.jira.add("AW-2", "Blocked", { blockedBy: { "AW-1": "Awaiting Approval" } });
 
   const tick = await world.tick();
 
   expect(world.starts()).toEqual([]);
   expect(world.jira.writes).toEqual([]);
-  expect(tick.lines).toEqual(["AW-1 skip: status Backlog", "AW-2 skip: blocked by AW-1"]);
+  expect(tick.lines).toEqual(["AW-1 skip: status Awaiting Approval", "AW-2 skip: blocked by AW-1"]);
 });
 
 test.each([
   ["a stopped thread", { title: "AW-1: Moved back" }],
   ["a failed thread", { title: "AW-1: Moved back", failed: true }],
-])("a ticket moved back to Backlog with %s does not start again", async (_name, thread) => {
-  world.jira.add("AW-1", "Moved back", { status: "Backlog" });
+])("a ticket moved back to Awaiting Approval with %s does not start again", async (_name, thread) => {
+  world.jira.add("AW-1", "Moved back", { status: "Awaiting Approval" });
   world.thread(thread);
 
   const tick = await world.tick();
 
-  expect(tick.lines).toEqual(["AW-1 skip: status Backlog"]);
+  expect(tick.lines).toEqual(["AW-1 skip: status Awaiting Approval"]);
   expect(world.starts()).toEqual([]);
   expect(world.sends()).toEqual([]);
   expect(world.jira.writes).toEqual([]);
 });
 
-test("a ticket moved back to Backlog with a red pull request gets no fix and no auto-merge", async () => {
-  world.jira.add("AW-1", "Moved back", { status: "Backlog" });
+test("a ticket moved back to Awaiting Approval with a red pull request gets no fix and no auto-merge", async () => {
+  world.jira.add("AW-1", "Moved back", { status: "Awaiting Approval" });
   world.thread({ title: "AW-1: Moved back" });
   world.pullRequest({ title: "feat(AW-1): moved back", headRefName: "feat/AW-1-moved-back", checks: [{ name: "gate / check", bucket: "fail" }] });
 
   const tick = await world.tick();
 
-  expect(tick.lines).toEqual(["AW-1 skip: status Backlog"]);
+  expect(tick.lines).toEqual(["AW-1 skip: status Awaiting Approval"]);
   expect(world.sends()).toEqual([]);
   expect(world.ghWrites()).toEqual([]);
   expect(world.jira.writes).toEqual([]);
 });
 
-test("a turn still running on a ticket moved back to Backlog holds its place, and gets no status", async () => {
+test("a turn still running on a ticket moved back to Awaiting Approval holds its place, and gets no status", async () => {
   world.config("limit = 1");
-  world.jira.add("AW-1", "Moved back", { status: "Backlog" });
+  world.jira.add("AW-1", "Moved back", { status: "Awaiting Approval" });
   world.thread({ title: "AW-1: Moved back", running: true });
   world.jira.add("AW-2", "Next");
 
   const tick = await world.tick();
 
-  expect(tick.lines).toEqual(["AW-1 skip: status Backlog", "AW-2 skip: wait, 1 of 1 places taken"]);
+  expect(tick.lines).toEqual(["AW-1 skip: status Awaiting Approval", "AW-2 skip: wait, 1 of 1 places taken"]);
   expect(world.starts()).toEqual([]);
   expect(world.jira.writes).toEqual([]);
 });
 
-test("a ticket moved back to Backlog whose pull request merged moves to Done", async () => {
-  world.jira.add("AW-1", "Moved back", { status: "Backlog" });
+test("a ticket moved back to Awaiting Approval whose pull request merged moves to Done", async () => {
+  world.jira.add("AW-1", "Moved back", { status: "Awaiting Approval" });
   world.pullRequest({ title: "feat(AW-1): moved back", headRefName: "feat/AW-1-moved-back", state: "MERGED" });
 
   await world.tick();
@@ -321,7 +321,7 @@ test("each action and skip logs one line with its reason", async () => {
   world.config("limit = 1");
   world.jira.add("AW-1", "Ready");
   world.jira.add("AW-2", "Over the limit");
-  world.jira.add("AW-3", "Backlog", { status: "Backlog" });
+  world.jira.add("AW-3", "Awaiting Approval", { status: "Awaiting Approval" });
 
   const tick = await world.tick();
 
@@ -329,7 +329,7 @@ test("each action and skip logs one line with its reason", async () => {
     'AW-1 start "AW-1: Ready" on feat/AW-1-ready: ready, 0 of 1 places taken',
     "AW-1 status In Progress: the thread started",
     "AW-2 skip: wait, 1 of 1 places taken",
-    "AW-3 skip: status Backlog",
+    "AW-3 skip: status Awaiting Approval",
   ]);
 });
 

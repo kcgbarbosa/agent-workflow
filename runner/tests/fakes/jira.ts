@@ -33,7 +33,7 @@ export function jiraTime(ms: number): string {
 }
 
 function category(status: string) {
-  return { key: status === "Done" ? "done" : status === "To Do" || status === "Backlog" ? "new" : "indeterminate" };
+  return { key: status === "Done" ? "done" : status === "To Do" || status === "Awaiting Approval" ? "new" : "indeterminate" };
 }
 
 /** A description of one line, `Spec: <link>`, as `/to-spec` writes it: the URL is both the text and the link's target. */
