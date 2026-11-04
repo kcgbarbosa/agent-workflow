@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # Setup runner
 
-The **runner** is a stateless tick on a timer: it reads Jira, GitHub and T3, does the next action for each ticket, and exits. `docs/specs/t3-runner.md` and `docs/adr/` in agent-workflow give the design. This skill fills in one repo.
+The **runner** is a stateless tick on a timer: it reads Jira, GitHub and T3, does the next action for each ticket, and exits. `docs/adr/` in agent-workflow gives the decisions. This skill fills in one repo.
 
 Do `/setup-repo` first, so the repo is on the shared gate and has its agent docs.
 
