@@ -25,7 +25,7 @@ Find the facts behind every settings section of loop.md yourself. Read the Find 
 - `claude mcp list`, for the connectors an agent gets
 - the machine README, `~/dev/machines/README.md`, for the hosts, what each has installed, and how secrets reach them
 
-An existing `docs/agents/loop.md` means a re-run. Start from its values.
+An existing `docs/agents/loop.md` means a re-run. Start from its values, and from step 3 on bring an old `loop.toml` to the new keys.
 
 Done when each settings section has a found value or a named decision for the user, and no hard-coded port, status name, or link type is left unread.
 
@@ -45,6 +45,14 @@ Draft `loop.toml` at the repo root with every key a settings section names, then
 - the workflow doc: the loop builds an Epic, and `implement` stays for a single ticket
 - the go-live checklist, if the repo has one: an item to undo each development-only setting, such as the headless sign-in of the UI review and its test users
 - the `## Agent skills` block of the repo's `AGENTS.md`: one line pointing to `docs/agents/loop.md`, and one line routing a loop failure: a wrong value is fixed in this repo's `loop.toml` or `docs/agents/loop.md`; anything else is a loop bug, fixed in `~/dev/agent-workflow`, where `loop/` and `skills/setup-loop/loop.md` change in one pull request
+
+On a re-run, bring an old `loop.toml` to the new keys, keeping each value it has:
+
+- `[review]` becomes `[fuzz]`, and no `[review]` stays. `/setup-repo` moves it the same way.
+- `[queue]` gets `filter` and `poll_minutes` when the default filter does not fit the repo.
+- `[blast]` gets the `red` and `yellow` globs of the Gate section.
+
+Redraft `docs/agents/loop.md` to the per-ticket loop: the Queue, Blast radius, Notifications, and Correct sections of values.md, and no line on an Epic run or a stacked pull request. `loop start` warns for each key the loop no longer reads, and a re-run clears each warning.
 
 Show the drafts, take edits, then write.
 

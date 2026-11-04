@@ -1,7 +1,7 @@
 // What KC sees of a run from the phone: the watch page, the cost report, and the forecast, all read from the
 // decisions log, so they work with no network.
 import { execFileSync } from "node:child_process";
-import { existsSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { EPIC, type Watching, World } from "./world.ts";
@@ -756,4 +756,98 @@ test("the epic, usage, report and forecast routes answer as before", async () =>
   expect(usage.body.five_hour).toMatchObject({ utilization: 0.4, resets_at: 1 });
   expect(report.body.rows.find((item: { label: string }) => item.label === "Tickets merged")).toMatchObject({ current: 1 });
   expect(forecast.body.plan).toMatchObject({ key: "max-5x" });
+});
+
+/** The time of a line, this many minutes ago. */
+function minutesAgo(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString().replace(/\.\d+Z$/, "+00:00");
+}
+
+/** A dispatcher and its workers, each line of the last hour. */
+function aQueue(dispatcher: object[] = []): void {
+  const at = (lines: object[]) => lines.map((line) => ({ time: minutesAgo(30), ...line }));
+  world.record(at([
+    { ticket: "dispatch", step: "start", result: "ok", pid: process.pid },
+    { ticket: "dispatch", step: "queue", result: "ok", detail: "", tickets: [{ key: "DEMO-2", state: "building" }, { key: "DEMO-3", state: "a draft" }, { key: "DEMO-4", state: "waiting on DEMO-2" }] },
+    ...dispatcher,
+  ]), "");
+  world.record(at([
+    { ticket: "DEMO-2", step: "start", result: "ok", pid: process.pid, run: true },
+    { ticket: "DEMO-2", step: "start", result: "new", detail: "feat/DEMO-2" },
+    { ticket: "DEMO-2", step: "build", result: "started", attempt: 1 },
+  ]), "tickets/DEMO-2");
+  world.record(at([
+    { ticket: "DEMO-3", step: "start", result: "ok", pid: 2 ** 22 + 1, run: true },
+    { ticket: "DEMO-3", step: "pr", result: "open", pr: `${PR}3` },
+    { ticket: "DEMO-3", step: "hand-back", result: "red", detail: "The draft waits for the owner." },
+    { ticket: "DEMO-3", step: "finish", result: "handed-back", run: true },
+  ]), "tickets/DEMO-3");
+  world.record(at([
+    { ticket: "DEMO-5", step: "start", result: "ok", pid: 2 ** 22 + 1, run: true },
+    { ticket: "DEMO-5", step: "stuck", result: "ok", detail: "The spec names no provider." },
+    { ticket: "DEMO-5", step: "finish", result: "stuck", run: true },
+  ]), "tickets/DEMO-5");
+}
+
+test("the project card gives the dispatcher's state, a running ticket with its step, a handed-back one with why, and those that wait or stick", async () => {
+  aQueue();
+  watching = await world.watch();
+
+  const { queue, state } = await homeOf("demo");
+
+  expect(state).toBe("needs_kc");
+  expect(queue).toMatchObject({
+    state: "running",
+    why: null,
+    running: [{ key: "DEMO-2", step: expect.any(String), since: expect.any(String) }],
+    handed_back: [{ key: "DEMO-3", why: "The draft waits for the owner.", pr: `${PR}3` }],
+    waiting: [{ key: "DEMO-4", on: "DEMO-2" }],
+    stuck: [{ key: "DEMO-5", why: "The spec names no provider.", pr: null }],
+  });
+});
+
+test("a held queue is paused, with why, and a stopped dispatcher is idle", async () => {
+  aQueue([{ ticket: "dispatch", step: "circuit-breaker", result: "open", detail: "DEMO-5 and DEMO-6 are stuck in a row." }]);
+  watching = await world.watch();
+  expect((await homeOf("demo")).queue).toMatchObject({ state: "paused", why: "DEMO-5 and DEMO-6 are stuck in a row." });
+  await watching.close();
+
+  aQueue([{ ticket: "dispatch", step: "stop", result: "stopped" }]);
+  watching = await world.watch();
+  expect((await homeOf("demo")).queue).toMatchObject({ state: "idle", why: null });
+});
+
+test("a stuck ticket older than the card's days leaves it, and an Epic run with no queue has no queue on its card", async () => {
+  world.record([{ ticket: "DEMO-5", step: "start", result: "ok", pid: 1, run: true }, { ticket: "DEMO-5", step: "finish", result: "stuck", run: true }], "tickets/DEMO-5");
+  world.record([{ ticket: EPIC, step: "start", result: "ok", pid: 1 }], EPIC, "beta");
+  watching = await world.watch();
+
+  expect((await homeOf("demo")).queue).toMatchObject({ stuck: [] });
+  expect((await homeOf("beta")).queue).toBeUndefined();
+});
+
+test("the page has a ticket picker by day in place of the Epic picker", () => {
+  const page = readFileSync(new URL("../src/watch.html", import.meta.url), "utf8");
+
+  expect(page).toContain('"aria-label": "Ticket"');
+  expect(page).toContain("optgroup");
+  expect(page).not.toContain('"aria-label": "Epic"');
+});
+
+test("the Usage view and the forecast read the logs of the ticket workers", async () => {
+  world.writeConfig('[watch]\nplans = [{ plan = "max-5x", since = 2026-10-01T00:00:00Z }]\n');
+  world.jira.filters.set("project in (DEMO) AND issuetype = Epic AND statusCategory != Done ORDER BY key ASC", []);
+  world.record([
+    { ticket: "DEMO-2", step: "start", result: "ok", pid: 1, run: true },
+    { ticket: "DEMO-2", step: "agent", result: "done", plan: { five_hour: { start: 0.1, end: 0.2, resets_at: 2_000_000_000 } } },
+    { ticket: "DEMO-2", step: "meter", result: "read", meter: { five_hour: { utilization: 0.2, resets_at: 2_000_000_000 } } },
+    { ticket: "DEMO-2", step: "merge", result: "merged", pr: `${PR}2` },
+    { ticket: "DEMO-2", step: "finish", result: "ok", run: true },
+  ], "tickets/DEMO-2");
+  watching = await world.watch();
+
+  const { body: usage } = await watching.get("/api/usage");
+  expect(usage.five_hour.utilization).toBe(0.2);
+  const { body: forecast } = await watching.get("/api/forecast");
+  expect(forecast.periods[0]).toMatchObject({ plan: "max-5x", runs: 1, merged: 1 });
 });

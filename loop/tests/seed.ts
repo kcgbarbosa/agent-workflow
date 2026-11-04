@@ -246,6 +246,28 @@ writeFileSync(join(session, "agent-1.jsonl"), [
 write("FIND-1", finished("FIND-1", true), 900, other("find"));
 write("FIND-5", finished("FIND-5", false), 120, other("find"));
 other("notes");
+// A project on the queue: the dispatcher's log, a running worker, a handed-back one, a stuck one, and one that waits.
+const tide = other("tide");
+write("", () => [
+  { ticket: "dispatch", step: "start", result: "ok", pid: process.pid },
+  { ticket: "dispatch", step: "queue", result: "ok", detail: "TIDE-2 building, TIDE-3 a draft, TIDE-4 waiting on TIDE-2.", tickets: [{ key: "TIDE-2", state: "building" }, { key: "TIDE-3", state: "a draft" }, { key: "TIDE-4", state: "waiting on TIDE-2" }] },
+], 1, tide);
+write("tickets/TIDE-2", () => [
+  { ticket: "TIDE-2", step: "start", result: "ok", pid: process.pid, run: true },
+  { ticket: "TIDE-2", step: "start", result: "new", detail: "feat/TIDE-2" },
+  { ticket: "TIDE-2", step: "build", result: "started", attempt: 1 },
+], 3, tide);
+write("tickets/TIDE-3", () => [
+  { ticket: "TIDE-3", step: "start", result: "ok", pid: 1, run: true },
+  ...opened("TIDE-3", 50),
+  { ticket: "TIDE-3", step: "hand-back", result: "red", detail: "A changed file matches a red glob, so the draft waits for the owner." },
+  { ticket: "TIDE-3", step: "finish", result: "handed-back", run: true },
+], 30, tide);
+write("tickets/TIDE-5", () => [
+  { ticket: "TIDE-5", step: "start", result: "ok", pid: 1, run: true },
+  { ticket: "TIDE-5", step: "stuck", result: "ok", detail: "The spec names no provider." },
+  { ticket: "TIDE-5", step: "finish", result: "stuck", run: true },
+], 90, tide);
 
 const server = await serve(stateDir, Number(process.argv[2] ?? 8791));
 for (const url of server.urls) console.log(`The seeded run is at ${url}#/demo/${EPIC}`);

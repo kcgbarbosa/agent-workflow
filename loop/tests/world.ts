@@ -166,12 +166,12 @@ ${extra}`;
     writeFileSync(join(this.fakes, "bws.json"), JSON.stringify(secrets));
   }
 
-  /** The command line and env of a loop command, as its unit runs it: `loop run`, `loop run-ticket`, `loop
+  /** The command line and env of a loop command, as its unit runs it: `loop run`, `loop run-ticket`, `loop run-correct`, `loop
    * dispatch`, and `loop watch` under `bws run`, with the host's token.
    */
   private invocation(args: string[]): [string, string[], NodeJS.ProcessEnv] {
     const command = [LOOP, ...args, "--repo", this.repo];
-    if (!["run", "run-ticket", "dispatch", "watch"].includes(args[0] ?? "")) return [LOOP, command.slice(1), this.env];
+    if (!["run", "run-ticket", "run-correct", "dispatch", "watch"].includes(args[0] ?? "")) return [LOOP, command.slice(1), this.env];
     const [bws, ...rest] = underBws(command);
     return [bws!, rest, { ...this.env, BWS_ACCESS_TOKEN: TOKEN }];
   }
@@ -426,6 +426,23 @@ ${extra}`;
       autoMerge: null,
       mergeCommit: { oid: "0".repeat(40) },
       checks: [{ name: "gate / check", bucket: "pass", state: "SUCCESS" }],
+    }));
+  }
+
+  /** A pull request of `loop correct` that merged at this commit. */
+  mergedCorrect(oid: string): void {
+    this.github((state) => state.prs.push({
+      number: 100 + state.prs.length,
+      url: `https://github.com/kcgbarbosa/demo/pull/${100 + state.prs.length}`,
+      headRefName: "chore/correct-202601010600",
+      baseRefName: "main",
+      title: "chore: an earlier correction",
+      body: "",
+      state: "MERGED",
+      autoMerge: null,
+      mergeCommit: { oid },
+      labels: [{ name: "correct" }],
+      checks: [],
     }));
   }
 

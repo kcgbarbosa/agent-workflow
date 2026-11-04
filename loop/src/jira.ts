@@ -8,7 +8,7 @@ export type Ticket = {
   status: string;
   done: boolean;
   flagged: boolean;
-  /** The Jira components: the repo the ticket changes, or `manual` for work no loop builds. */
+  /** The Jira components: the repo the ticket changes. */
   components: string[];
   blockers: { key: string; done: boolean }[];
   parent: string | null;

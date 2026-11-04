@@ -2,7 +2,7 @@
 
 These skills live in project repos, not in this repo. This file lists that they exist and which kind of project each belongs to. Each skill's own description says how it works.
 
-Update this file when a project skill is added, renamed or removed. The `retro` skill checks it.
+Update this file when a project skill is added, renamed or removed.
 
 | Skill              | What it does                                                                                                                | Who runs it                                      | Kind of project |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | --------------- |

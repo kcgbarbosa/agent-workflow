@@ -20,6 +20,7 @@ import { endAll, run } from "./spawn.ts";
 import { type Ticket, Jira } from "./jira.ts";
 import { ticketDir, ticketHome, worktreeOf } from "./layout.ts";
 import { Log } from "./log.ts";
+import { post } from "./notify.ts";
 import { composeProject, FIRST_SLOT, freeSlot, heldPorts, SPARE_SLOTS } from "./slots.ts";
 
 /** The longest the loop waits for the checks of one pull request. */
@@ -62,8 +63,6 @@ const BRANCH_KEY = new RegExp(`^(?:${BRANCH_TYPES.join("|")})/([A-Z][A-Z0-9]*-\\
 const MD_PATH = /[\w./-]+\.md\b/;
 
 
-/** The component of a ticket that a person does, which no loop builds. */
-const MANUAL = "manual";
 
 export type Target = { key: string } | { filter: string } | { ticket: string; slot: number };
 
@@ -182,7 +181,16 @@ function globPattern(glob: string): RegExp {
 }
 
 /** The higher of two blast levels. */
-function higher(a: Level, b: Level): Level {
+/** The level the `[blast]` globs set for these changed files, and the file that set it. */
+export function globFloor(blast: Config["blast"], changed: string[]): { floor: Level; file: string | undefined } {
+  const matches = (globs: string[]) => changed.find((file) => globs.some((glob) => globMatch(file, glob)));
+  const red = matches(blast.red);
+  if (red) return { floor: "red", file: red };
+  const yellow = matches(blast.yellow);
+  return yellow ? { floor: "yellow", file: yellow } : { floor: "green", file: undefined };
+}
+
+export function higher(a: Level, b: Level): Level {
   return LEVELS.indexOf(a) >= LEVELS.indexOf(b) ? a : b;
 }
 
@@ -398,7 +406,7 @@ export class Run {
 
   /**
    * The tickets of the run's component among the Epic's children, the one ticket of a key, or the tickets a
-   * filter finds. A ticket of another component, `manual` included, counts only as a blocker, through its
+   * filter finds. A ticket of another component counts only as a blocker, through its
    * status. A ticket with no component refuses the run.
    */
   private async tickets(): Promise<Ticket[]> {
@@ -419,7 +427,7 @@ export class Run {
     const none = tickets.filter((ticket) => !ticket.components.length).map((ticket) => ticket.key);
     if (none.length) {
       const have = none.length === 1 ? "has" : "have";
-      throw new Refused(`${none.join(", ")} ${have} no component. Set the Jira component of each to the repo it changes, or ${MANUAL} for work no loop builds.`);
+      throw new Refused(`${none.join(", ")} ${have} no component. Set the Jira component of each to ${this.config.component}, the repo it changes.`);
     }
     return tickets.filter((ticket) => ticket.components.includes(this.config.component));
   }
@@ -905,13 +913,10 @@ export class Run {
   private async blast(key: string, worktree: string, base: string, before: Level, agent: Level | undefined): Promise<Level> {
     // With no rename detection, a file moved out from under a glob lists its old path too. With -z, git quotes no name.
     const changed = (await git(worktree, "diff", "--name-only", "--no-renames", "-z", `origin/${base}...HEAD`)).split("\0").filter(Boolean);
-    const matches = (globs: string[]) => changed.find((file) => globs.some((glob) => globMatch(file, glob)));
-    const redFile = matches(this.config.blast.red);
-    const yellowFile = redFile ? undefined : matches(this.config.blast.yellow);
-    const floor: Level = redFile ? "red" : yellowFile ? "yellow" : "green";
+    const { floor, file } = globFloor(this.config.blast, changed);
     const level = higher(higher(before, floor), agent && LEVELS.includes(agent) ? agent : "green");
     const why = [
-      redFile || yellowFile ? `${redFile ?? yellowFile} matches a ${floor} glob` : "no changed file matches a glob",
+      file ? `${file} matches a ${floor} glob` : "no changed file matches a glob",
       `the agent gave ${agent ?? "none"}`,
       ...(before !== "green" ? [`it was ${before}`] : []),
     ];
@@ -1317,12 +1322,10 @@ export class Run {
     if (!this.stopping) await this.send(message);
   }
 
-  /** An ntfy message holds the run and its result only. */
+  /** A message holds the run and its result only. */
   private async send(message: string): Promise<void> {
-    const url = `${this.config.ntfyUrl.replace(/\/$/, "")}/${this.secrets.NTFY_TOPIC}`;
     try {
-      const response = await fetch(url, { method: "POST", body: message, signal: AbortSignal.timeout(30_000) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await post(this.config, this.secrets, message);
       this.own("notify", "ok", { detail: message });
     } catch (error) {
       this.own("notify", "fail", { detail: `${message}: ${(error as Error).message}` });
@@ -1338,7 +1341,7 @@ function conflictPrompt(url: string, base = "main"): string {
   );
 }
 
-function nextLog(runDir: string): string {
+export function nextLog(runDir: string): string {
   const taken = readdirSync(runDir).filter((name) => /^agent-\d+\.jsonl$/.test(name)).length;
   return join(runDir, `agent-${taken + 1}.jsonl`);
 }

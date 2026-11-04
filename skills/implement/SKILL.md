@@ -8,6 +8,8 @@ Implement the work described by the user in the spec or tickets.
 
 Read `docs/agents/testing.md`. For each "What the user sees" line, write its acceptance test first, then build until it passes. Use /tdd where possible, at pre-agreed seams.
 
+For a Bug, reproduce it first: write the acceptance test of the first "What the user sees" line, and see it fail twice on the stack before you fix it. In a repo with no acceptance suite, the reproduction is a test at the seam the repo's testing doc names.
+
 Run typechecking and single test files regularly. Before you finish, run the tests that cover your change.
 
 Before you return, run the blast-radius skill on the branch diff. When the loop runs you, set `blast` in your output to the level it gives: `green`, `yellow`, or `red`. A person reads the writeup.

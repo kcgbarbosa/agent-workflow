@@ -8,7 +8,7 @@ The loop runs from `~/dev/agent-workflow`, through the `~/.local/bin/loop` link 
 
 ### Run
 
-On t14: `cd ~/dev/agent-workflow && loop start`, which fast-forwards the checkout first and starts the dispatcher, which builds each ready ticket of the queue. `loop stop` ends the dispatcher and every worker. `loop ticket <KEY>` builds one ticket to merge in its own unit, and `loop stop <KEY>` ends it and flags the ticket. An Epic with tickets in machines too, such as AW-8, is built by the dispatcher of each repo, and each builds only its own tickets. From another device, run it from a T3 Code thread on t14.
+On t14: `cd ~/dev/agent-workflow && loop start`, which fast-forwards the checkout first and starts the dispatcher, which builds each ready ticket of the queue. `loop stop` ends the dispatcher, every worker, and `loop correct`. `loop ticket <KEY>` builds one ticket to merge in its own unit, and `loop stop <KEY>` ends it and flags the ticket. An Epic with tickets in machines too, such as AW-8, is built by the dispatcher of each repo, and each builds only its own tickets. From another device, run it from a T3 Code thread on t14.
 
 ### Tracker
 
@@ -53,7 +53,7 @@ None. `.mcp.json` lists no server, so each agent run gets no MCP server.
 
 ### Notifications
 
-The ntfy topic that Pitchridge uses. A message holds the key and the status only, and the `AW-` key tells the two projects apart.
+`[notify] kind` is not set, so this is the ntfy topic that Pitchridge uses. A message holds the key and the status only, and the `AW-` key tells the two projects apart. The design file gives the Slack webhook, `[notify] kind` and `secret`.
 
 ### Secrets
 
@@ -62,6 +62,10 @@ The Jira email and API token, the ntfy topic, and the Claude token of the loop a
 ### Hosts
 
 `t14` only. The machine README, `~/dev/machines/README.md`, gives how to reach it.
+
+### Correct
+
+`[correct]` is not set, so the dispatcher does not start `loop correct`. `loop correct` runs it by hand.
 
 ### Limits
 
@@ -73,7 +77,7 @@ In `loop.toml`.
 
 ### Logs
 
-`~/.local/state/agent-workflow-loop/<Epic key>/`. The `loop watch` page serves every project on t14, as the design gives.
+`~/.local/state/agent-workflow-loop/`: `tickets/<KEY>/` for a worker, `correct/` for `loop correct`, and the dispatcher's `decisions.jsonl` at its top. `loop report <KEY>` reads a ticket's log, and `loop report` lists the day's merges and its share of each plan window. The `loop watch` page serves every project on t14, as the design gives.
 
 ### Setup
 

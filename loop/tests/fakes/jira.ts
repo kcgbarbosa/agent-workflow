@@ -53,6 +53,8 @@ export class FakeJira {
   readonly filters = new Map<string, string[]>();
   readonly requests: string[] = [];
   readonly notifications: string[] = [];
+  /** The posts to the fake Slack webhooks, `<fake>/slack/<name>`. */
+  readonly slack: { path: string; body: unknown }[] = [];
   private readonly server: Server;
 
   private constructor(server: Server) {
@@ -152,6 +154,10 @@ export class FakeJira {
     const body = raw ? JSON.parse(method === "POST" && pathname.startsWith("/ntfy/") ? "null" : raw) : null;
     if (method === "POST" && pathname.startsWith("/ntfy/")) {
       this.notifications.push(raw);
+      return [200, {}];
+    }
+    if (method === "POST" && pathname.startsWith("/slack/")) {
+      this.slack.push({ path: pathname, body });
       return [200, {}];
     }
     if (pathname === "/rest/api/3/myself") return [200, { accountId: "fake" }];

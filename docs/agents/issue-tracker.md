@@ -27,6 +27,9 @@ Issues carry these fields.
 | Sprint    | The board's sprints                                                  | The owner     |
 | Component | The repo the ticket changes, or `manual` for a ticket no loop builds | `/to-tickets` |
 
+A ticket is a Task under an Epic or a Bug with no parent, which `/to-bug` writes from a report.
+Flagged means the ticket waits on the owner, whether it is stuck, proposed, or dangerous.
+
 The owner sets priority and the other hand-set fields. A skill that creates an issue leaves them at the Jira default or empty.
 
 ## The ticket body

@@ -11,17 +11,19 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { claudePath } from "./agent.ts";
+import { runCorrect, startCorrect } from "./correct.ts";
 import { type Config, ConfigError, load, peek } from "./config.ts";
 import { git } from "./git.ts";
 import { Forecaster } from "./forecast.ts";
 import { Jira } from "./jira.ts";
-import { text } from "./report.ts";
+import { CORRECT, DISPATCH } from "./layout.ts";
+import { dayReport, dayText, text } from "./report.ts";
 import { Dispatcher } from "./dispatch.ts";
 import { Run, runName, type Target } from "./run.ts";
 import { checkSecrets, readSecrets, secretNames, storedNames, storedSecrets } from "./secrets.ts";
 import { composeProject, freeSlot, portsFree, takeSlot } from "./slots.ts";
 import { endAll } from "./spawn.ts";
-import { awake, DISPATCH, runs, runUnit, startRun, startWatch, stopRun, UnitError } from "./units.ts";
+import { awake, runs, runUnit, startRun, startWatch, stopRun, UnitError } from "./units.ts";
 import { sourceCheckout, update, UpdateError } from "./update.ts";
 import { comparison, pageUrl, serve, WATCH_PORT } from "./watch.ts";
 
@@ -30,8 +32,10 @@ const USAGE = [
   "Usage: loop start [--repo <path>]",
   "       loop ticket <KEY> [--repo <path>]",
   "       loop stop [<KEY>] [--repo <path>]",
+  "       loop correct [--repo <path>]",
   "       loop dispatch [--repo <path>]",
   "       loop run-ticket <KEY> --slot <n> [--repo <path>]",
+  "       loop run-correct --slot <n> [--repo <path>]",
   "       loop run <KEY>|--filter <JQL> [--repo <path>]",
   "       loop watch [--repo <path>]",
   "       loop report [<KEY>] [--against <KEY>] [--json] [--repo <path>]",
@@ -121,7 +125,7 @@ async function storedJira(config: Config): Promise<Jira> {
 async function unbuildable(config: Config, key: string): Promise<string | null> {
   const found = await (await storedJira(config)).ticket(key);
   if (found.flagged) return `${key} is Flagged. Unflag it in Jira, and \`loop ticket ${key}\` builds it.`;
-  if (!found.components.length) return `${key} has no component. Set its Jira component to the repo it changes, or manual for work no loop builds.`;
+  if (!found.components.length) return `${key} has no component. Set its Jira component to ${config.component}, the repo it changes.`;
   if (!found.components.includes(config.component)) {
     return `${key} is of the component ${found.components.join(", ")}, not ${config.component}, so this repo's loop does not build it.`;
   }
@@ -220,6 +224,29 @@ async function run(target: Target, repoArg: string | undefined): Promise<number>
   return stopping ?? code;
 }
 
+/** Takes a slot and starts the `correct` unit by hand, then returns. It refuses when the unit is active or no slot is free. */
+async function correct(repoArg: string | undefined): Promise<number> {
+  const config = load(await mainCheckout(resolve(repoArg ?? process.cwd())));
+  await checkSecrets(config.secrets);
+  const active = new Set(await runs(config.name));
+  if (active.has(CORRECT)) return refuse(`\`loop correct\` is running in ${runUnit(config.name, CORRECT)}. \`loop stop\` stops it.`);
+  const started = await startCorrect(config, active);
+  if (!started) return refuse(`No slot is free: ${config.parallel} of ${config.parallel} are building.`);
+  console.log(`\`loop correct\` runs in slot ${started.slot}, in ${started.unit}. Follow it with \`journalctl --user -fu ${started.unit}\`.`);
+  return 0;
+}
+
+/** The body of the `correct` unit. */
+async function workCorrect(slot: number, repoArg: string | undefined): Promise<number> {
+  const config = load(await mainCheckout(resolve(repoArg ?? process.cwd())));
+  for (const warning of config.warnings) console.error(warning);
+  const secrets = readSecrets(config.secrets);
+  await awake(config.name, CORRECT);
+  process.once("SIGTERM", () => process.exit(143));
+  process.once("SIGINT", () => process.exit(143));
+  return runCorrect(config, secrets, slot);
+}
+
 /** Serves the page until the process stops. It changes nothing the loop reads. */
 async function watch(repoArg: string | undefined): Promise<number> {
   const config = load(await mainCheckout(resolve(repoArg ?? process.cwd())));
@@ -256,12 +283,17 @@ async function watch(repoArg: string | undefined): Promise<number> {
   return 0;
 }
 
-/** The breakdown of what a run cost, against the run before it, from the logs on this host. */
+/** The breakdown of what one ticket cost, against the run before it, or with no key the tickets merged today and the day's share of each plan window, from the logs on this host. */
 async function report(key: string | undefined, against: string | undefined, json: boolean, repoArg: string | undefined): Promise<number> {
   const config = load(await mainCheckout(resolve(repoArg ?? process.cwd())));
+  if (!key) {
+    const day = dayReport(config.stateDir, Date.now() / 1000);
+    console.log(json ? JSON.stringify(day, null, 1) : dayText(day));
+    return 0;
+  }
   const found = comparison(config.stateDir, key, against);
   if (!found) {
-    console.error(key ? `This host has no run of ${key}.` : "This host has no run.");
+    console.error(`This host has no run of ${key}.`);
     return 1;
   }
   console.log(json ? JSON.stringify(found, null, 1) : text(found.current, found.previous, found.rows));
@@ -289,7 +321,7 @@ export async function main(argv: string[]): Promise<number> {
   const [command, key, ...rest] = parsed.positionals;
   const { filter, against, json, repo, slot } = parsed.values;
   const bare = !key && !filter && !against && !json;
-  const reportArgs = !filter && !rest.length && (!key || KEY.test(key)) && (!against || KEY.test(against));
+  const reportArgs = !filter && !rest.length && (!key || KEY.test(key)) && (!against || (key !== undefined && KEY.test(against)));
   const targetArgs = !rest.length && !against && !json && !slot && (filter ? !key : key && KEY.test(key));
   const ticketArgs = !rest.length && !against && !json && !filter && key !== undefined && KEY.test(key);
   const target = filter ? { filter } : { key: key ?? "" };
@@ -301,6 +333,8 @@ export async function main(argv: string[]): Promise<number> {
     if (command === "stop" && bare && !slot) return await stopAll(repo);
     if (command === "stop" && ticketArgs && !slot) return await stopTicket(key!, repo);
     if (command === "dispatch" && bare && !slot) return await dispatch(repo);
+    if (command === "correct" && bare && !slot) return await correct(repo);
+    if (command === "run-correct" && bare && slot && /^\d+$/.test(slot)) return await workCorrect(Number(slot), repo);
     if (command === "run" && targetArgs) return await run(target, repo);
     if (command === "run-ticket" && ticketArgs && slot && /^\d+$/.test(slot)) return await run({ ticket: key!, slot: Number(slot) }, repo);
     if ((command === "start" && bare && !slot) || (command === "ticket" && ticketArgs && !slot)) {

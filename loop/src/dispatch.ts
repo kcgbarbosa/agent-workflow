@@ -5,15 +5,18 @@
 // the state folder. It never stops a worker: `loop stop` does.
 import { join } from "node:path";
 import type { Config } from "./config.ts";
+import { startCorrect } from "./correct.ts";
 import { completeEpic } from "./epic.ts";
 import { originUrl, slug } from "./git.ts";
 import * as github from "./github.ts";
 import { Jira, type Ticket } from "./jira.ts";
-import { ticketHome } from "./layout.ts";
+import { CORRECT, DISPATCH, ticketHome } from "./layout.ts";
 import { DECISIONS, type Line, Log } from "./log.ts";
+import { post } from "./notify.ts";
 import { branchPrefixes, HOLD_LABEL, holdOf, MAX_USAGE_WAIT_SECONDS, typeOf } from "./run.ts";
 import { composeProject, freeLeftSlots, portsFree, takeSlot } from "./slots.ts";
-import { DISPATCH, runs, runUnit, startRun } from "./units.ts";
+import { localDay } from "./report.ts";
+import { runs, runUnit, startRun } from "./units.ts";
 
 const KEY = /^[A-Z][A-Z0-9]*-\d+$/;
 
@@ -46,6 +49,8 @@ export class Dispatcher {
   /** The repo on GitHub, from a pull request the dispatcher saw. */
   private repoUrl: string | null = null;
   private stopping = false;
+  /** The local day `loop correct` last started, from the log, so a restart does not start it twice. */
+  private correctDay: string | null | undefined;
 
   constructor(config: Config, secrets: Record<string, string>, options: DispatchOptions) {
     this.config = config;
@@ -92,6 +97,7 @@ export class Dispatcher {
     if (this.breakerOpen) await this.closeBreaker();
     this.usagePause();
     await this.startReady(active);
+    await this.startCorrect(active);
     await this.checkEpics();
   }
 
@@ -154,22 +160,46 @@ export class Dispatcher {
   /** Starts a worker for each ready ticket of the queue, in its order, while a slot is free. */
   private async startReady(active: Set<string>): Promise<void> {
     const queue = await this.jira.search(this.config.queue.filter);
-    const states: string[] = [];
-    const held = this.breakerOpen ? "the circuit breaker is open" : this.holdUntil > Date.now() ? "a usage limit holds" : null;
+    const states: { key: string; state: string }[] = [];
+    const held = this.held();
     for (const ticket of queue) {
       const state = await this.stateOf(ticket, active);
       if (state === "ready" && !held && this.running(active) < this.config.parallel) {
-        states.push(`${ticket.key} ${(await this.start(ticket.key, active)) ? "started" : "ready"}`);
-      } else states.push(`${ticket.key} ${state}`);
+        states.push({ key: ticket.key, state: (await this.start(ticket.key, active)) ? "started" : "ready" });
+      } else states.push({ key: ticket.key, state });
     }
-    const line = states.join(", ") || "No ticket is in the queue";
+    const line = states.map(({ key, state }) => `${key} ${state}`).join(", ") || "No ticket is in the queue";
     if (`${line}|${held}` === this.lastQueue) return;
     this.lastQueue = `${line}|${held}`;
-    this.own("queue", held ? "held" : "ok", { detail: held ? `${line}. No ticket starts: ${held}.` : `${line}.` });
+    this.own("queue", held ? "held" : "ok", { detail: held ? `${line}. No ticket starts: ${held}.` : `${line}.`, tickets: states });
   }
 
+  /** Why no ticket starts now, or null. */
+  private held(): string | null {
+    return this.breakerOpen ? "the circuit breaker is open" : this.holdUntil > Date.now() ? "a usage limit holds" : null;
+  }
+
+  /** What holds a slot: each worker and the `correct` unit. */
   private running(active: Set<string>): number {
-    return [...active].filter((name) => KEY.test(name)).length;
+    return [...active].filter((name) => KEY.test(name) || name === CORRECT).length;
+  }
+
+  /** Starts `loop correct` once a day from `[correct] hour` on, when a slot is left after the queue's tickets. */
+  private async startCorrect(active: Set<string>): Promise<void> {
+    const { enabled, hour } = this.config.correct;
+    if (!enabled || new Date().getHours() < hour || active.has(CORRECT) || this.held()) return;
+    const today = localDay(Date.now() / 1000);
+    this.correctDay ??= this.log.lines().findLast((line) => line.step === "correct" && line.result === "started")?.day as string | undefined ?? null;
+    if (this.correctDay === today || this.running(active) >= this.config.parallel) return;
+    try {
+      const started = await startCorrect(this.config, active);
+      if (!started) return;
+      this.correctDay = today;
+      active.add(CORRECT);
+      this.own("correct", "started", { detail: `\`loop correct\` runs in slot ${started.slot}, in ${started.unit}.`, day: today, slot: started.slot, unit: started.unit });
+    } catch (error) {
+      this.own("correct", "fail", { detail: (error as Error).message });
+    }
   }
 
   /** Why a ticket of the queue starts or not. A ticket the filter should not have found never starts. */
@@ -256,13 +286,11 @@ export class Dispatcher {
     return new Log(join(ticketHome(this.config.stateDir, key), DECISIONS), key).lines();
   }
 
-  /** An ntfy message holds the repo or ticket and its event only. */
+  /** A message holds the repo or ticket and its event only. */
   private async notify(message: string): Promise<void> {
     if (this.stopping) return;
-    const url = `${this.config.ntfyUrl.replace(/\/$/, "")}/${this.secrets.NTFY_TOPIC}`;
     try {
-      const response = await fetch(url, { method: "POST", body: message, signal: AbortSignal.timeout(30_000) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await post(this.config, this.secrets, message);
       this.own("notify", "ok", { detail: message });
     } catch (error) {
       this.own("notify", "fail", { detail: `${message}: ${(error as Error).message}` });

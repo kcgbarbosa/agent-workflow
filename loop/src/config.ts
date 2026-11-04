@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { parse, TomlDate } from "smol-toml";
 
 export const FILE = "loop.toml";
-export const REQUIRED_SECRETS = ["JIRA_EMAIL", "JIRA_API_TOKEN", "NTFY_TOPIC"] as const;
+export const REQUIRED_SECRETS = ["JIRA_EMAIL", "JIRA_API_TOKEN"] as const;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PLAN_KEYS = ["pro", "max-5x", "max-20x"];
 
@@ -59,11 +59,15 @@ export type Config = {
   /** The path globs that set a pull request's blast level at least to red or yellow, and the minutes a yellow one waits after its first green. */
   blast: { red: string[]; yellow: string[]; holdMinutes: number };
   ntfyUrl: string;
+  /** Where a notification goes: the ntfy topic, or the Slack webhook in the secret that `secret` names. */
+  notify: { kind: "ntfy" | "slack"; secret: string };
+  /** Whether the dispatcher starts `loop correct` once a day, and the host's local hour it starts from. */
+  correct: { enabled: boolean; hour: number };
   /** `exact` is false for a `since` with a date only. */
   plans: { plan: string; since: string; exact: boolean }[];
   /** The JQL the dispatcher reads the queue with, in the order it starts the tickets, and the minutes between two reads. */
   queue: { filter: string; pollMinutes: number };
-  /** The env var names of the secrets of `loop.toml`, beside REQUIRED_SECRETS. */
+  /** The env var names of the secrets of `loop.toml` and of the notification channel, beside REQUIRED_SECRETS. */
   secrets: string[];
   stateDir: string;
   warnings: string[];
@@ -236,6 +240,7 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
   const notify = top.table("notify", true);
   const watch = top.table("watch", true);
   const queue = top.table("queue", true);
+  const correct = top.table("correct", true);
 
   // The old `[secrets]` table mapped each env var to a Bitwarden item and field.
   let secrets: string[] = [];
@@ -245,6 +250,13 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
   } else secrets = top.texts("secrets", []);
   const bad = secrets.filter((env) => !ENV_NAME.test(env));
   if (bad.length) throw new ConfigError(`secrets: ${bad.join(", ")} is not an env var name`);
+
+  const notifyKind = notify.text("kind", "ntfy");
+  if (notifyKind !== "ntfy" && notifyKind !== "slack") throw new ConfigError("notify.kind: must be ntfy or slack");
+  const notifySecret = notify.text("secret", "SLACK_WEBHOOK_URL");
+  if (!ENV_NAME.test(notifySecret)) throw new ConfigError(`notify.secret: ${notifySecret} is not an env var name`);
+  const correctHour = correct.number("hour", 6);
+  if (!Number.isInteger(correctHour) || correctHour < 0 || correctHour > 23) throw new ConfigError("correct.hour: must be a whole hour from 0 to 23");
 
   let stack: Config["stack"] = null;
   if (!stackTable.empty()) {
@@ -304,13 +316,15 @@ function parseConfig(repo: string, data: Record<string, Value>): Config {
     },
     blast: { red: blast.texts("red", []), yellow: blast.texts("yellow", []), holdMinutes: blast.number("hold_minutes", 60) },
     ntfyUrl: notify.text("url", "https://ntfy.sh"),
+    notify: { kind: notifyKind, secret: notifySecret },
+    correct: { enabled: correct.flag("enabled", false), hour: correctHour },
     plans,
     queue: { filter: queue.text("filter", filter), pollMinutes: queue.number("poll_minutes", 2) },
-    secrets,
+    secrets: [...new Set([...secrets, notifyKind === "slack" ? notifySecret : "NTFY_TOPIC"])],
     stateDir: stateDirOf(name),
     warnings,
   };
-  for (const table of [top, tracker, agent, limits, stackTable, ui, fuzz, blast, notify, watch, queue]) {
+  for (const table of [top, tracker, agent, limits, stackTable, ui, fuzz, blast, notify, watch, queue, correct]) {
     table.done(warnings);
   }
   return config;
