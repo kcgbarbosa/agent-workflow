@@ -1,0 +1,4 @@
+# The runner's settings for agent-workflow, read by the `runner` command from this same repo.
+# runner/src/config.ts gives the other keys and their defaults.
+component = "agent-workflow"
+jira_url = "https://kcgbarbosa.atlassian.net"

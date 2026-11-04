@@ -1,0 +1,23 @@
+{
+  "name": "runner",
+  "private": true,
+  "description": "The runner: a stateless tick that turns each ready ticket into a T3 thread.",
+  "type": "module",
+  "bin": {
+    "runner": "bin/runner"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "check": "tsc && vitest run"
+  },
+  "dependencies": {
+    "smol-toml": "1.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

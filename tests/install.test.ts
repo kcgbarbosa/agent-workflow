@@ -48,7 +48,7 @@ function snapshot(root: string): Record<string, string> {
   return entries;
 }
 
-test("links every skill, tier, and CLAUDE.md, and installs the loop", () => {
+test("links every skill, tier, and CLAUDE.md, and installs the loop and the runner", () => {
   const { dir, home, claude, run } = setup();
   run();
   for (const skill of skills()) expect(linksTo(join(claude, "skills", skill), join(REPO, "skills", skill)), skill).toBe(true);
@@ -56,6 +56,8 @@ test("links every skill, tier, and CLAUDE.md, and installs the loop", () => {
   expect(linksTo(join(claude, "CLAUDE.md"), join(REPO, "config", "CLAUDE.md"))).toBe(true);
   expect(readFileSync(join(dir, "npm.log"), "utf8")).toContain(`ci --prefix ${REPO}/loop`);
   expect(linksTo(join(home, ".local", "bin", "loop"), join(REPO, "loop", "bin", "loop"))).toBe(true);
+  expect(readFileSync(join(dir, "npm.log"), "utf8")).toContain(`ci --prefix ${REPO}/runner`);
+  expect(linksTo(join(home, ".local", "bin", "runner"), join(REPO, "runner", "bin", "runner"))).toBe(true);
 });
 
 test("adds each MCP server once", () => {

@@ -89,3 +89,15 @@ if command -v npm >/dev/null 2>&1; then
 else
   echo "agent-workflow: skipped the loop command, npm is missing" >&2
 fi
+
+# The runner command is a link too. Nothing runs it until the switch-over.
+if command -v npm >/dev/null 2>&1; then
+  if npm ci --prefix "$repo/runner" --no-audit --no-fund --silent; then
+    mkdir -p "$HOME/.local/bin"
+    ln -sfn "$repo/runner/bin/runner" "$HOME/.local/bin/runner"
+  else
+    echo "agent-workflow: the runner command did not install" >&2
+  fi
+else
+  echo "agent-workflow: skipped the runner command, npm is missing" >&2
+fi
