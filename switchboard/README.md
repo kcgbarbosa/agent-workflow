@@ -1,6 +1,6 @@
 # Switchboard
 
-A phone line to KC's T3 Code threads. On CarPlay, KC says "Hey Siri, call Switchboard" and talks to one Claude Code session on the T14. That session lists the threads, reads how each one is doing, passes messages to them, starts new ones, and reads the replies back. It reads the loop's status too. It also grills, plans and triages on the call.
+A phone line to KC's T3 Code threads. On CarPlay, KC says "Hey Siri, call Switchboard" and talks to one Claude Code session on the T14. That session lists the threads, reads how each one is doing, passes messages to them, starts new ones, and reads the replies back. It also grills, plans and triages on the call.
 
 ## How a call goes
 
@@ -39,6 +39,6 @@ Done once, by KC, in the two dashboards.
 ## Limits
 
 - A message from the call lands in a T3 Code thread as a turn that starts "From the car:", so the thread and KC can tell it from KC typing.
-- It reads the loop with `loop report` and never messages the loop's agents.
-- A session in another permission mode holds a `SendMessage` for approval, and nothing reaches the switchboard then. The switchboard runs in bypass mode, like T3 Code threads and the default of `config/settings.json`. The loop's agents run in auto mode.
+- It reads runner threads, whose titles start with `<KEY>:`, and never messages them. A blocked ticket is Flagged in Jira.
+- A session in another permission mode holds a `SendMessage` for approval, and nothing reaches the switchboard then. The switchboard runs in bypass mode, like T3 Code threads and the default of `config/settings.json`.
 - Every call costs ElevenLabs agent minutes and Twilio minutes, and every turn costs Claude usage.

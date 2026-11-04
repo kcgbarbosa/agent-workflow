@@ -5,7 +5,7 @@ The skills, the agents and the code that build KC's repos from a ticket to a mer
 ## Language
 
 **Runner**:
-The code that turns ready tickets into T3 threads and acts on what Jira, GitHub and T3 show. It replaces the loop.
+The code that turns ready tickets into T3 threads and acts on what Jira, GitHub and T3 show.
 _Avoid_: Dispatcher, orchestrator
 
 **Tick**:

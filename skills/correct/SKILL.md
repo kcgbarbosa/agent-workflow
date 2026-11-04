@@ -1,6 +1,6 @@
 ---
 name: correct
-description: "Find the mistakes agents keep repeating in this repo and make each one impossible. Try architecture first, then types, then a lint whose error names the fix, then a test, and write docs last. Prove each check fails on a real past mistake. The loop runs it once a day. Use for /correct."
+description: "Find the mistakes agents keep repeating in this repo and make each one impossible. Try architecture first, then types, then a lint whose error names the fix, then a test, and write docs last. Prove each check fails on a real past mistake. Use for /correct."
 disable-model-invocation: true
 ---
 
@@ -12,7 +12,7 @@ Assume every contributor is an agent that sees only the files it opened, copies 
 
 ## Find the mistake classes
 
-First, read recent commits, reverts, review comments, agent instruction files, and comments that explain workarounds. When the loop runs you, its argument is a file that lists the commits and the reverts since the last correction, the fix attempts in the loop logs, and the pull requests with a red fuzz check, whose findings are in the fuzz comment. Group the mistakes into classes. A class counts once it has happened twice.
+First, read recent commits, reverts, review comments, agent instruction files, and comments that explain workarounds. Read the runner's fix attempts in pull request comments, and the pull requests with a red fuzz check, whose findings are in the fuzz comment. Group the mistakes into classes. A class counts once it has happened twice.
 
 ## Fix the most frequent class at the highest level that works
 
@@ -25,7 +25,7 @@ First, read recent commits, reverts, review comments, agent instruction files, a
 
 Then fix the most frequent class now, in this run, and leave the others for the next one. Each run opens at most one pull request. Prove each new check fails on a real past mistake. Run the same command locally and in CI. Exceptions go on the offending line with a reason, an expiry date, and a human's approval.
 
-When no class has happened twice, change nothing. Commit on the current branch, and do not push: the loop pushes and opens the pull request, with your commit's subject as its title.
+When no class has happened twice, change nothing. Commit on the current branch, push it, and open the pull request, with your commit's subject as its title.
 
 ## Keep the rule table
 

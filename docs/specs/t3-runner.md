@@ -82,7 +82,7 @@ US-43. As the owner, I want a repeat tick after a crash to do no action twice, s
 ### Behind the scenes (Must)
 
 US-44. As the maintainer, I want the limit, the fix cap, the quiet period, the provider and the model in the repo's runner config with defaults, so that a value changes with no code change.
-US-45. As the maintainer, I want the runner to import nothing from the loop, so that the loop can be deleted without touching it.
+US-45. As the maintainer, I want the runner to stand alone, so that a change to it reaches no other part of the repo.
 US-46. As the maintainer, I want `make check` to run the runner's checks, so that the gate covers it.
 US-47. As the maintainer, I want a command that installs the timer and the service for a repo, and one that removes them, so that the switch-over is one step and easy to reverse.
 
@@ -117,8 +117,8 @@ For each ticket, the first match decides:
 - The branch is `<type>/<KEY>-<slug>`: `fix` for a Bug and `feat` otherwise, as `docs/agents/issue-tracker.md` gives.
 - Secrets are the Jira email and token and the ntfy topic, read the way the loop reads them, from Bitwarden Secrets Manager or the environment. The runner needs no Claude token, because T3 owns the agent's account.
 - `install` writes a user systemd timer and a oneshot service, every 2 minutes, named `runner-<repo>`. A running oneshot service does not start again, so two ticks of one repo cannot overlap.
-- The repo's Jira and GitHub calls may start as copies of the loop's `github.ts`, `jira.ts`, `epic.ts` and `archive.ts`, cut to what the runner calls. The runner imports nothing from `loop/`.
-- Switchboard reads progress from `t3 thread list` and blocked work from Jira Flagged. It reads runner threads and does not message them. This changes its prompt and its README at the switch-over.
+- The repo's Jira and GitHub calls live in the runner.
+- Switchboard reads progress from `t3 thread list` and blocked work from Jira Flagged. It reads runner threads and does not message them. Its prompt and its README say so.
 - `correct` becomes a T3 scheduled thread at the switch-over, with no code in the runner.
 
 ## Testing Decisions
@@ -150,17 +150,16 @@ The seam is the scenario test of the `runner` command, with fakes for `t3`, `gh`
 | Every action and skip logs a line, and a dry run writes nothing                          | US-40, US-41        |
 | A failed read of each source exits non-zero with no writes                               | US-42               |
 | Config defaults load, and each value changes behaviour                                   | US-44               |
-| No file of the runner imports from the loop                                              | US-45               |
 | Install writes the timer and service with fakes, and uninstall removes them              | US-47               |
 
-US-46 is shown by the gate running the new target.
+US-45 and US-46 are shown by the gate running the new target with the loop gone.
 
 ## Out of Scope
 
 - A status page or a usage view. Technical and user-visible. Reason: the T3 sidebar and Switchboard replace them. None planned.
 - Blast levels, labels, holds and path globs. User-visible. Reason: ADR-0004. None planned.
 - A stack's port sets and cleanup. Technical. Reason: ADR-0005 makes them the repo's, and agent-workflow has no stack. Picked up when Pitchridge moves to the runner, no ticket yet.
-- Moving Pitchridge, deleting the loop, and removing the watch page. Technical. Reason: the old loop stays the rollback until the runner has run for real on both repos. No ticket yet.
+- Moving Pitchridge. Technical. Reason: it needs its port sets first (ADR-0005), and it builds in T3 threads by hand until then. No ticket yet.
 - A limit shared across repos. Technical. Reason: one repo uses the runner at first. Decide at the Pitchridge move.
 - A separate Claude account for runner threads. Technical. Reason: the owner has one. None planned.
 - Setting effort from the runner. Technical. Reason: the `t3` CLI has no flag for it. None planned.
@@ -183,6 +182,6 @@ Measured on 2026-11-04 on t14, `t3` v0.1.5, with scratch threads on a scratch pr
 
 To check on the first real run, since no scratch thread could show them: that a merged ticket's worktree goes away, and that `pullRequests` on a thread is not needed, because the tick finds pull requests with `gh`.
 
-The loop's dispatcher builds this Epic. The runner stays off until the owner's switch-over, a Flagged ticket under this Epic. Stop the dispatcher before turning the runner on, because both would act on the same tickets.
+The owner retired the loop on 2026-11-04, before the runner's first real run, with no rollback kept beyond `git revert`. The gate's settings moved from `loop.toml` to `gate.toml`. A repo pinned to an older gate commit, such as Pitchridge, keeps reading `loop.toml` until it moves its pin.
 
 Pitchridge's branch protection requires `gate / check` and `gate / review`, not `gate / fuzz`. A Pitchridge move should decide this.

@@ -19,7 +19,7 @@ KC's work runs in T3 Code threads on this computer. Each repo in `~/dev` is a T3
 - `t3 thread send <threadId> -` sends the message on stdin. A busy thread gets it as its next turn.
 - `t3 thread start ~/dev/<repo> -` starts a thread with the message on stdin and prints its `threadId`.
 
-The loop builds an Epic on its own. `loop report --repo ~/dev/<repo> --json` says how its run is going. Read it, and never message the loop's agents.
+The runner builds each ready ticket in a T3 thread, titled `<KEY>: <summary>`. For how builds are going, list the threads of the repo. A ticket is blocked when it is Flagged in Jira. Read runner threads, and never message them.
 
 ## What KC asks for
 

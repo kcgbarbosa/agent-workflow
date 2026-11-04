@@ -22,15 +22,15 @@ on:
         type: boolean
         default: true
       fuzz-model:
-        description: The fuzz job's model. loop.toml [fuzz] overrides it.
+        description: The fuzz job's model. gate.toml [fuzz] overrides it.
         type: string
         default: claude-opus-5-5
       fuzz-effort:
-        description: The fuzz job's effort. loop.toml [fuzz] overrides it.
+        description: The fuzz job's effort. gate.toml [fuzz] overrides it.
         type: string
         default: high
       fuzz-skip:
-        description: Path globs the fuzz job skips, split on whitespace. loop.toml [fuzz] `skip` overrides them.
+        description: Path globs the fuzz job skips, split on whitespace. gate.toml [fuzz] `skip` overrides them.
         type: string
         default: "*.md docs/* *.lock package-lock.json pnpm-lock.yaml yarn.lock"
     # The fuzz job bills one of the two: a Claude plan through CLAUDE_CODE_OAUTH_TOKEN, or the API through ANTHROPIC_API_KEY.

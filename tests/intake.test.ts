@@ -10,12 +10,12 @@ test("the Chief's prompt holds each rule of the spec", () => {
     "Tickets, not code",
     "Never merge",
     "The owner's asks come in the DM",
-    "the loop's messages come in the repo's channel",
+    "the runner's messages come in the repo's channel",
     "Find a duplicate in Jira first",
     "Never post a root message",
     "What waits on the owner",
     "Retried by the Chief: <fingerprint>",
-    "a timeout, a setup failure, no free slot, a usage limit, a runner or Docker failure in the gate's log, or a `FLAKY` line",
+    "a timeout, a setup failure, a usage limit, a runner or Docker failure in the gate's log, or a `FLAKY` line",
     "suggested answer",
     "touch nothing",
     "sticks twice in seven days",
@@ -29,7 +29,7 @@ test("the Chief's prompt holds each rule of the spec", () => {
     "`#agent-workflow`",
     "by an edit right after the create",
     "starts with `Chief:`",
-    "pull request, merge, deploy, and loop status messages",
+    "pull request, merge, deploy, and runner status messages",
     "7 AM to 11 PM ET",
     "the label `agents` and without the label `triaged`",
     "one root message",
@@ -59,13 +59,4 @@ test("correct is carried from pstack at the pinned commit, and retro is gone wit
   expect(read("skills/correct/SKILL.md")).toContain("`pstack/skills/correct` of `cursor/plugins` at `ae5650febf4320793844c12c4adaa937f417f8da`");
   expect(existsSync(new URL("../skills/retro", import.meta.url))).toBe(false);
   for (const path of ["docs/agents/workflow.md", "docs/project-skills.md", "skills/setup-repo/workflow.md"]) expect(read(path)).not.toMatch(/\bretro\b/);
-});
-
-test("setup-loop brings an old loop.toml to the new keys", () => {
-  const skill = read("skills/setup-loop/SKILL.md");
-  for (const key of ["`[review]` becomes `[fuzz]`", "`[queue]`", "`[blast]`"]) expect(skill).toContain(key);
-});
-
-test("the design file loses each line on stacking", () => {
-  expect(read("skills/setup-loop/loop.md")).not.toMatch(/\bstack(s|ed|ing)? on\b|\bA stacked\b|\bwhen it stacks\b/);
 });

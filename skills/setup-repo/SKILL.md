@@ -27,7 +27,7 @@ Look at the current repo to understand its starting state. Read whatever exists;
 - `AGENTS.md` and `CLAUDE.md` at the repo root. Is there already an `## Agent skills` section? Does `CLAUDE.md` exist?
 - `GLOSSARY.md`, `docs/adr/`, `docs/product/` (does it hold a metrics file or a personas file?), and the Users table in `README.md`
 - `docs/agents/`: does this skill's prior output already exist? A labels file, or a GitHub or local-files `issue-tracker.md`, is output of the retired setup skill.
-- `loop.toml` and `docs/agents/loop.md`: is there a loop?
+- `runner.toml` and `docs/agents/runner.md`: is there a runner?
 - The test folders, the test commands in the `Makefile` or `package.json`, and the seed: is there a suite that runs on the real stack, and a stubbed one?
 - `.github/workflows/`, the `check` and `check-docs` targets of the `Makefile`, and a `mise.toml` or `.tool-versions`: is the repo on the gate?
 - `lefthook.yml` and `git config --local core.hooksPath`: are the checks wired?
@@ -106,7 +106,7 @@ Each "What the user sees" line is an acceptance test on the real stack. See `doc
 
 ### Workflow
 
-grill-with-docs → to-spec → to-tickets → the loop or a T3 Code thread → the gate. See `docs/agents/workflow.md`.
+grill-with-docs → to-spec → to-tickets → the runner or a T3 Code thread → the gate. See `docs/agents/workflow.md`.
 ```
 
 When a labels file from the retired setup skill exists in `docs/agents/`, tell the user it is obsolete and offer to delete it. Delete it only if they agree.
@@ -119,12 +119,12 @@ Draft the start of the `check` target of the `Makefile` with `lefthook run pre-c
 
 ### 6. Put the repo on the gate
 
-The shared merge gate is `.github/workflows/gate.yml` in agent-workflow. It runs the repo's `make check` on each pull request, and `make check-docs` on one that changes only `*.md` files and `docs/`. Beside the check, `gate / fuzz` has adversaries try to break the pull request against the checkout and the stack, except on a docs-only one, and fails on a finding whose reproduction fails again on the head and not the same way on the base. It bills the repo secret `CLAUDE_CODE_OAUTH_TOKEN`, a Claude plan, or `ANTHROPIC_API_KEY`, the API. The check and the fuzz job get the keys their stack needs from the optional repo secret `CHECK_ENV`, one `NAME=value` per line, and `[fuzz] setup` in `loop.toml` brings the stack up for the fuzz job. `skills/setup-loop/loop.md` (Gate) gives the `[fuzz]` keys. When the `Makefile` lacks either target, draft it from the test commands that exploration found, and write it once the user approves.
+The shared merge gate is `.github/workflows/gate.yml` in agent-workflow. It runs the repo's `make check` on each pull request, and `make check-docs` on one that changes only `*.md` files and `docs/`. Beside the check, `gate / fuzz` has adversaries try to break the pull request against the checkout and the stack, except on a docs-only one, and fails on a finding whose reproduction fails again on the head and not the same way on the base. It bills the repo secret `CLAUDE_CODE_OAUTH_TOKEN`, a Claude plan, or `ANTHROPIC_API_KEY`, the API. The check and the fuzz job get the keys their stack needs from the optional repo secret `CHECK_ENV`, one `NAME=value` per line, and `[fuzz] setup` in `gate.toml` brings the stack up for the fuzz job. `actions/fuzz/action.yml` gives the `[fuzz]` keys. When the `Makefile` lacks either target, draft it from the test commands that exploration found, and write it once the user approves.
 
 Then, at the repo root:
 
 1. Ask whether the fuzz job is on. Recommend off for a small private repo, where a model run on each pull request costs more than it saves.
-2. Run `~/.claude/skills/setup-repo/gate.sh write`. Its header lists the files it writes: the call to the gate, a `mise.toml` when there is no mise file, and the gate's `loop.toml` settings with the fuzz job on. When the answer was off, set `enabled = false` in the `[fuzz]` table. In a repo already on the gate, it renames `[review]` to `[fuzz]`. Show the user the diff. A CI workflow that runs the same tests as `make check` can go once the gate runs. The gate reads `loop.toml` from the base branch, so on this first pull request `gate / fuzz` runs as if it were on. In a repo with no token, it prints a warning and passes.
+2. Run `~/.claude/skills/setup-repo/gate.sh write`. Its header lists the files it writes: the call to the gate, a `mise.toml` when there is no mise file, and the gate's `gate.toml` settings with the fuzz job on. When the answer was off, set `enabled = false` in the `[fuzz]` table. Show the user the diff. A CI workflow that runs the same tests as `make check` can go once the gate runs. The gate reads `gate.toml` from the base branch, so on this first pull request `gate / fuzz` runs as if it were on. In a repo with no token, it prints a warning and passes.
 3. Ask before you run `~/.claude/skills/setup-repo/gate.sh protect`. It changes the GitHub settings and needs an admin token: squash merges only with the pull request title, auto-merge on, delete branch on merge, and the default branch protected with required checks `gate / check` and `gate / fuzz` alone, no required approvals, and no force push. Run it after the pull request that adds the workflows merges, so no open pull request waits on a check it cannot run.
 
 Both steps are safe to run again. A second run of `protect` in a repo already on the gate replaces its required checks with these two, so `gate / review` goes. A pull request with auto-merge on merges itself when every required check is green. A draft pull request waits.
@@ -133,4 +133,4 @@ Both steps are safe to run again. A second run of `protect` in a repo already on
 
 Tell the user which files you wrote. Say that they can edit `docs/agents/*.md` directly, and that this skill needs to run again only to change the Jira project, the PRD, or the acceptance suite.
 
-End by pointing at `/setup-loop`: run it to let the loop build the repo's ready tickets unattended. Skip it for a repo that builds with `implement` only.
+End by pointing at `/setup-runner`: run it to let the runner build the repo's ready tickets unattended. Skip it for a repo that builds with `implement` only.

@@ -83,11 +83,9 @@ class Finding:
 
 
 def settings() -> Settings:
-    """The gate's inputs, with `loop.toml [fuzz]` of the base over them, so a pull request cannot turn off its own fuzz."""
-    shown = subprocess.run(["git", "show", f"{os.environ['BASE_SHA']}:loop.toml"], capture_output=True, text=True)
+    """The gate's inputs, with `gate.toml [fuzz]` of the base over them, so a pull request cannot turn off its own fuzz."""
+    shown = subprocess.run(["git", "show", f"{os.environ['BASE_SHA']}:gate.toml"], capture_output=True, text=True)
     data = tomllib.loads(shown.stdout) if shown.returncode == 0 else {}
-    if "review" in data:
-        print("::warning::loop.toml [review] is no longer read, because the fuzz job replaced the review. [fuzz] holds its settings.")
     table = data.get("fuzz", {})
     return Settings(
         enabled=table.get("enabled", True),
@@ -358,7 +356,7 @@ def review_file() -> Path:
 def main() -> int:
     config = settings()
     if not config.enabled:
-        print("gate / fuzz: off in the base's loop.toml [fuzz], so no model runs.")
+        print("gate / fuzz: off in the base's gate.toml [fuzz], so no model runs.")
         return 0
 
     number = os.environ["PR_NUMBER"]

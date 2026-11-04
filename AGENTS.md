@@ -1,10 +1,10 @@
 # agent-workflow
 
-The skills, the subagent tiers, the loop, and the switchboard that every repo of KC's uses. `README.md` gives the layout.
+The skills, the subagent tiers, the runner, and the switchboard that every repo of KC's uses. `README.md` gives the layout.
 KC's global instructions are `config/CLAUDE.md`, which `install.sh` links to `~/.claude/CLAUDE.md`, so they reach every repo. This file holds only what applies in this repo.
 
 - The gate runs `make check` on each pull request, so an agent runs the tests that cover its change, not the full `make check`. `docs/agents/testing.md` gives the commands.
-- `skills/setup-loop/loop.md` is the design the loop follows. `loop/CLAUDE.md` gives the rules for a change to it.
+- `docs/specs/t3-runner.md` and `docs/adr/` are the design the runner follows. `runner/CLAUDE.md` gives the rules for a change to it.
 - `config/settings.json` is linked as `~/.claude/settings.json`. Never put a token in it, and check `git diff config/` before a commit.
 
 ## Agent skills
@@ -23,9 +23,9 @@ No acceptance suite. See `docs/agents/testing.md`.
 
 ### Workflow
 
-grill-with-docs → to-spec → to-tickets → the loop or a T3 Code thread → the gate. See `docs/agents/workflow.md`.
+grill-with-docs → to-spec → to-tickets → the runner or a T3 Code thread → the gate. See `docs/agents/workflow.md`.
 
-### Loop
+### Runner
 
-The loop builds each ready ticket with the `agent-workflow` component. See `docs/agents/loop.md`.
-When a run fails, a wrong value is fixed in `loop.toml` or `docs/agents/loop.md`. Anything else is a loop bug, fixed in `loop/` and `skills/setup-loop/loop.md` in one pull request.
+The runner builds each ready ticket with the `agent-workflow` component. See `docs/agents/runner.md`.
+When a run fails, a wrong value is fixed in `runner.toml` or `docs/agents/runner.md`. Anything else is a runner bug, fixed in `runner/`.

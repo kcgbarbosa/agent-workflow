@@ -6,7 +6,7 @@ set -uo pipefail
 
 found=0
 if ! grep -qE '^(feat|fix|docs|refactor|test|chore|ci|perf|build|style|revert)(\([^)]+\))?!?: .+' <<< "${TITLE:-}"; then
-  echo "The title must start with a type, such as 'fix(loop): stop a stuck session'." >&2
+  echo "The title must start with a type, such as 'fix(runner): stop a stuck session'." >&2
   found=1
 fi
 if printf '%s\n%s\n' "${TITLE:-}" "${BODY:-}" | grep -q $'\xe2\x80\x94'; then

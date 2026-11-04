@@ -15,7 +15,7 @@ Tickets live in Jira, project `<KEY>`. They are not files in this repo.
 The brief is not a ticket. It lives at `README.md`.
 The spec is the source of truth for the build, the tests and the tickets. A ticket names the spec by its repo path, as text with no link, and cites story IDs. It does not copy the spec. Only the Epic links the spec.
 
-When the Epic merges, a pull request deletes the spec, and the Spec line of the Epic changes to link the spec at the head of the default branch at that point, a commit git keeps. With the loop, the dispatcher does both once every Epic whose Spec line links it is Done, as rule 10 of `~/.claude/skills/setup-loop/loop.md` gives. Without the loop, the owner does both by hand. The Spec line is the one line of the Epic that changes after it is written, and no ticket changes.
+When the Epic merges, a pull request deletes the spec, and the Spec line of the Epic changes to link the spec at the head of the default branch at that point, a commit git keeps. With the runner, it does both once every Epic whose Spec line links it is Done. Without the runner, the owner does both by hand. The Spec line is the one line of the Epic that changes after it is written, and no ticket changes.
 
 ## What Jira holds
 
@@ -38,7 +38,7 @@ Issues carry these fields.
 
 | Field         | Values                              | Who sets it   |
 | ------------- | ----------------------------------- | ------------- |
-| Status        | To Do, In Progress, In Review, Done | The loop      |
+| Status        | To Do, In Progress, In Review, Done | The runner    |
 | Priority      | Highest, High, Medium, Low          | The owner     |
 | <Extra field> | <Values>                            | The owner     |
 | Component     | The repo the ticket changes         | `/to-tickets` |

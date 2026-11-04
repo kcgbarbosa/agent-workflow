@@ -6,7 +6,7 @@ disable-model-invocation: true
 
 # To Bug
 
-Turn one report into one **Bug** the loop can reproduce. The agent that builds it has no Sentry connector and no Slack, so everything it needs goes in the ticket as text.
+Turn one report into one **Bug** that a T3 thread can reproduce. The agent that builds it has no Sentry connector and no Slack, so everything it needs goes in the ticket as text.
 
 Read `docs/agents/issue-tracker.md` for the project, the fields, and the ticket body.
 

@@ -1,19 +1,18 @@
 # agent-workflow
 
-Skills, the loop, and KC's global instructions. `~/.claude` links into a clone of this repo.
+Skills, the runner, and KC's global instructions. `~/.claude` links into a clone of this repo.
 
 ```
 skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
 bots/chief.md    the Chief's prompt, which the owner pastes into Grokbot
-agents/<name>.md a subagent tier on a cheaper model. The loop gives its agents the same files
-loop/            the loop command, which turns each ready ticket of the queue into a pull request, unattended. Its design is skills/setup-loop/loop.md
-runner/          the runner command, a stateless tick that starts a T3 thread for each ready ticket. Nothing calls it until the switch-over. docs/specs/t3-runner.md is its spec
+agents/<name>.md a subagent tier on a cheaper model
+runner/          the runner command, a stateless tick that starts a T3 thread for each ready ticket. docs/agents/runner.md gives how it runs here
 switchboard/     a phone line to the Claude Code sessions on the T14, for the car. Its README is the setup
 config/          the shared Claude Code files settings.json, statusline.sh, keybindings.json, notify.sh and format-markdown.ts, the hook that runs Prettier on each Markdown file an agent edits. install.sh links them into ~/.claude
 docs/            project-skills.md, the registry of skills that live in project repos
 config/CLAUDE.md the global instructions, linked to ~/.claude/CLAUDE.md, the name Claude Code reads
 AGENTS.md        this repo's own instructions
-install.sh       makes the links and installs the loop command. Safe to run again
+install.sh       makes the links and installs the runner command. Safe to run again
 tests/           the repo checks on Vitest, and the gate scripts' tests on pytest. make check runs them after the checks of lefthook.yml
 lefthook.yml     every format, lint and policy check of this repo, run at each commit and first in make check
 .github/         the shared merge gate, workflows/gate.yml, which every repo calls, and this repo's own call to it
@@ -35,7 +34,7 @@ Clone to `~/dev/agent-workflow`, run `./install.sh`. On a machine that `chezmoi`
 - Linux needs `notify-send` (package `libnotify-bin`) for notifications. Without it, the hook does nothing.
 - `config/settings.json` is public, and `~/.claude/settings.json` is a link to it. Never put a token in it. Claude Code can write to it through the link, for example when you choose "always allow", so check `git diff config/` before you commit.
 - Project repos use `AGENTS.md`. Never create `CLAUDE.md` or `CLAUDE.local.md` in one, because either hides `AGENTS.md`.
-- Change the loop: edit `loop/`. `loop/CLAUDE.md` gives the rules. `loop start` fast-forwards each computer's clone, so a merged change reaches every host on its next run.
+- Change the runner: edit `runner/`. `runner/CLAUDE.md` gives the rules. Run `git pull` in the clone that runs the timer, since a merged change reaches a host only then.
 - After a rename or move of a linked file, run `./install.sh` again on every computer.
 
 ## Cloud environment setup script

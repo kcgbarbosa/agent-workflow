@@ -29,28 +29,28 @@ function title(title: string, body = "") {
 }
 
 test("a key in the text fails", () => {
-  const result = keys("fix(loop): stop it\nIn PITCH-13, a restart did it.");
+  const result = keys("fix(runner): stop it\nIn PITCH-13, a restart did it.");
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("PITCH-13");
 });
 
 test("a key in a commit message fails", () => {
-  const result = keys("fix(loop): stop it\n", "fix(GAL-4): stop it");
+  const result = keys("fix(runner): stop it\n", "fix(GAL-4): stop it");
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("GAL-4");
 });
 
 test("text with no key passes", () => {
-  expect(keys("fix(loop): stop it\nA restart did it. See UTF-8 and ADR-0023.").status).toBe(0);
+  expect(keys("fix(runner): stop it\nA restart did it. See UTF-8 and ADR-0023.").status).toBe(0);
 });
 
 test("a title needs a type", () => {
-  expect(title("fix(loop): stop a stuck session").status).toBe(0);
+  expect(title("fix(runner): stop a stuck session").status).toBe(0);
   expect(title("ci: guard the title").status).toBe(0);
   expect(title("Stop a stuck session").status).toBe(1);
 });
 
 test("an em dash in the title or the body fails", () => {
-  expect(title(`fix(loop): stop it ${DASH} now`).status).toBe(1);
-  expect(title("fix(loop): stop it", `It stops ${DASH} now.`).status).toBe(1);
+  expect(title(`fix(runner): stop it ${DASH} now`).status).toBe(1);
+  expect(title("fix(runner): stop it", `It stops ${DASH} now.`).status).toBe(1);
 });

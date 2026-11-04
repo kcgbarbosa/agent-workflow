@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # setup-repo's gate step. Run it at the root of the repo that goes on the shared gate.
-#   gate.sh write    writes the caller workflow, a mise file when there is none, and the gate's loop.toml settings.
+#   gate.sh write    writes the caller workflow, a mise file when there is none, and the gate's gate.toml settings.
 #   gate.sh protect  sets squash-only auto-merge and the branch protection through gh api. It needs an admin token.
-# A second run of either step changes nothing. On a repo already on the gate, write moves `[review]` to `[fuzz]`, and
-# protect replaces the required checks.
+# A second run of either step changes nothing. On a repo already on the gate, protect replaces the
+# required checks.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -41,12 +41,9 @@ write() {
     cp "$templates/pull-request.yml" .github/workflows/pull-request.yml
   fi
   has_mise_file || write_mise_file
-  # The fuzz job replaced the review, and `[fuzz]` takes each `[review]` key, so the old table only changes its name.
-  if grep -qsE '^(# )?\[review\]' loop.toml && ! grep -qsE '^(# )?\[fuzz\]' loop.toml; then
-    sed -i -E 's|^(# )?\[review\]$|\1[fuzz]|; s|actions/review/action.yml in agent-workflow gives the \[review\] keys|actions/fuzz/action.yml in agent-workflow gives the [fuzz] keys|' loop.toml
-  elif ! grep -qsE '^(# )?\[fuzz\]' loop.toml; then
-    if [ -s loop.toml ]; then echo >> loop.toml; fi
-    cat "$templates/loop.toml" >> loop.toml
+  if ! grep -qsE '^(# )?\[fuzz\]' gate.toml; then
+    if [ -s gate.toml ]; then echo >> gate.toml; fi
+    cat "$templates/gate.toml" >> gate.toml
   fi
 }
 

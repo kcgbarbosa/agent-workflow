@@ -1,6 +1,6 @@
 # Testing
 
-How a ticket proves what the user sees. `to-spec`, `to-tickets`, `tdd`, `implement`, `code-review`, the UI review, and the loop read this file.
+How a ticket proves what the user sees. `to-spec`, `to-tickets`, `tdd`, `implement`, `code-review`, the UI review, and the runner read this file.
 
 ## Acceptance tests
 
