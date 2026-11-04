@@ -77,7 +77,7 @@ def test_write_puts_a_repo_on_the_shared_gate(python_repo: Path, env: dict[str, 
     assert len(caller.splitlines()) <= 19
     assert not (python_repo / ".github" / "workflows" / "hold.yml").exists()
     assert (python_repo / "mise.toml").read_text() == '[tools]\nnode = "22.4.0"\nuv = "0.9.1"\n'
-    assert "[fuzz]\nenabled = true\n" in (python_repo / "gate.toml").read_text()
+    assert "[fuzz]\nenabled = false\n" in (python_repo / "gate.toml").read_text()
 
 
 def test_write_keeps_a_mise_file_and_a_gate_toml(python_repo: Path, env: dict[str, str]) -> None:
@@ -89,15 +89,15 @@ def test_write_keeps_a_mise_file_and_a_gate_toml(python_repo: Path, env: dict[st
     assert not (python_repo / "mise.toml").exists()
     gate_toml = (python_repo / "gate.toml").read_text()
     assert gate_toml.startswith('name = "app"\n')
-    assert "[fuzz]\nenabled = true\n" in gate_toml
+    assert "[fuzz]\nenabled = false\n" in gate_toml
 
 
 def test_write_keeps_the_fuzz_answer_in_gate_toml(python_repo: Path, env: dict[str, str]) -> None:
-    (python_repo / "gate.toml").write_text('name = "app"\n\n[fuzz]\nenabled = false\n')
+    (python_repo / "gate.toml").write_text('name = "app"\n\n[fuzz]\nenabled = true\n')
 
     gate(python_repo, env, "write")
 
-    assert (python_repo / "gate.toml").read_text() == 'name = "app"\n\n[fuzz]\nenabled = false\n'
+    assert (python_repo / "gate.toml").read_text() == 'name = "app"\n\n[fuzz]\nenabled = true\n'
 
 
 def test_a_second_write_changes_nothing(python_repo: Path, env: dict[str, str]) -> None:

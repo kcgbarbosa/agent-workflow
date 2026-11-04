@@ -1,3 +1,4 @@
 # The shared gate's settings. actions/fuzz/action.yml in agent-workflow gives the [fuzz] keys.
+# Off: Pitchridge is the only repo with fuzz on.
 [fuzz]
-enabled = true
+enabled = false
