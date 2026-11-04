@@ -10,7 +10,7 @@ On t14: `cd ~/dev/agent-workflow && runner install` writes a user systemd timer,
 
 ### Starting a build
 
-A ticket starts when it is To Do, has the `agent-workflow` component, is not Flagged, and its blockers are Done. To start a build by chat or by voice, ask an agent to move the ticket to To Do. A thread started by hand for a ticket needs a title that starts with `<KEY>:`.
+A new ticket waits in Backlog, and the owner approves its build by moving it to To Do. A ticket starts when it is To Do, has the `agent-workflow` component, is not Flagged, and its blockers are Done. To start a build by chat or by voice, ask an agent to move the ticket to To Do. A ticket moved back to Backlog stops: the runner sends its thread nothing, and turns on no auto-merge. A thread started by hand for a ticket needs a title that starts with `<KEY>:`, and the ticket out of Backlog.
 
 ### Following a build
 

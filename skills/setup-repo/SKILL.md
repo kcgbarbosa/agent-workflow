@@ -46,7 +46,7 @@ Lead each section with the recommended answer so the user can accept it in a wor
 - The Jira project key. Recommend the key already in `docs/agents/issue-tracker.md` or in `.github/ticket-projects`, if either exists.
 - The key format. Recommend `<KEY>-<n>`, used as the commit scope and in the branch name.
 - The branch format. Recommend `<type>/<KEY>-<n>-<slug>`.
-- The fields the owner sets by hand on a ticket. Recommend priority and sprint. Status is always `To Do`, `In Progress`, `In Review`, `Done`.
+- The fields the owner sets by hand on a ticket. Recommend priority and sprint. Status is always `Backlog`, the initial status, then `To Do`, `In Progress`, `In Review`, `Done`.
 
 **Section B: The PRD.** Ask whether the repo has a PRD. Recommend no. A PRD is a one-page brief for an executive, which `/to-prd` writes into the Epic description. Without one, the Epic description is the link to the spec that `/to-spec` writes, and no skill needs a metrics file, a personas file or an owner name. On yes, ask for:
 

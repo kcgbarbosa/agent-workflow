@@ -28,6 +28,7 @@ export type Step = { key: string; reason: string } & (
 /** What a ticket does at this tick. `turn` starts an agent turn, so it needs a place against the limit, and comes after `steps`. A fix or a retry is a `message`, which takes its place before any new start. */
 type Plan = { steps: Step[]; turn?: (place: string) => Step[]; message?: boolean };
 
+const BACKLOG = "Backlog";
 const READY = "To Do";
 const IN_PROGRESS = "In Progress";
 const IN_REVIEW = "In Review";
@@ -103,6 +104,8 @@ function planOf(item: TicketState, config: Config, now: number): Plan {
   if (ticket.issueType === "Epic") return none([], "an Epic");
   if (pullRequests.some((pr) => pr.state === "MERGED")) return { steps: [{ kind: "status", key, status: DONE, reason: "the pull request merged" }] };
   if (ticket.flagged) return none([], "Flagged");
+  // Before the thread and the pull request, so a ticket moved back gets no status, no message and no auto-merge (ADR-0009).
+  if (ticket.status === BACKLOG) return none([], `status ${BACKLOG}`);
 
   const open = pullRequests.find((pr) => pr.state === "OPEN");
   const thread = threadOf(threads);
