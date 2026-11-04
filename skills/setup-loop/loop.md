@@ -56,6 +56,7 @@ The dispatcher, `loop dispatch` in [`dispatch.ts`](../../loop/src/dispatch.ts), 
 - **Skips.** A ticket whose unit is active, by name, is building, and is skipped, so a hand start and a dispatcher start never build one ticket twice.
 - **Slots.** The dispatcher owns the slots (The unit of work): before a start it reads `docker ps` and takes the first free slot whose ports no other Compose project holds, and a slot frees when its unit is no longer active.
 - **Handed back.** A ticket whose open pull request is a draft, carries the `hold` label, or has a `Hold until` time still ahead is not ready, so a handed-back ticket starts again when the owner marks it ready, removes the label, or the hold ends.
+- **Merged with no worker.** A ticket of the queue with no active unit whose pull request merged, as a merge by hand does, is not ready, and the dispatcher sets it `Done`.
 - **Holds.** The circuit breaker and a usage limit stop new starts (rule 8). The workers that run go on, and the dispatcher keeps reading the queue, checking the Epics, and reading how each worker ended.
 - **Correct.** With `[correct]` `enabled`, it starts `loop correct` once a day from `hour` on, when the queue leaves a slot free and no hold is on (Correct). The `correct` `started` line holds the day, so a restart does not start it twice.
 - **Stop.** A SIGTERM ends the dispatcher with a `stop` `stopped` line. It stops no worker: `loop stop` stops each one after it.
