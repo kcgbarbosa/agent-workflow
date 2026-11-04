@@ -1,14 +1,13 @@
 # The gate runs `make check` on each pull request, and `make check-docs` on one that changes only `*.md` files and `docs/`.
-.PHONY: check check-docs hooks root root-deps gate loop loop-deps switchboard switchboard-deps runner runner-deps
+.PHONY: check check-docs hooks root root-deps gate switchboard switchboard-deps runner runner-deps
 
-check: hooks root gate loop switchboard runner
+check: hooks root gate switchboard runner
 
-# The root tests check the docs and the skills. The loop docs test checks loop.md against the loop.toml keys.
+# The root tests check the docs and the skills.
 check-docs: hooks root
-	cd loop && npx vitest run tests/docs.test.ts
 
 # Every check of `lefthook.yml`, on all files. It fails when a check fails or when a formatter changed a file.
-hooks: root-deps loop-deps switchboard-deps runner-deps
+hooks: root-deps switchboard-deps runner-deps
 	lefthook run pre-commit --all-files --no-stage-fixed --no-auto-install
 	git diff --exit-code
 
@@ -23,13 +22,6 @@ root-deps:
 gate:
 	uv run --no-project --python 3.12 --with pytest --with pyyaml pytest tests
 
-# The TypeScript loop. `mise.toml` pins its Node.
-loop: loop-deps
-	cd loop && npx tsc && npx vitest run
-
-loop-deps:
-	cd loop && npm ci --prefer-offline --no-audit --no-fund --silent
-
 # The switchboard. `switchboard.service` in machines runs it from the main checkout.
 switchboard: switchboard-deps
 	cd $@ && npx tsc && npx vitest run
@@ -37,7 +29,7 @@ switchboard: switchboard-deps
 switchboard-deps:
 	cd switchboard && npm ci --prefer-offline --no-audit --no-fund --silent
 
-# The T3 runner, which replaces the loop at the switch-over.
+# The T3 runner. `mise.toml` pins its Node.
 runner: runner-deps
 	cd $@ && npx tsc && npx vitest run
 

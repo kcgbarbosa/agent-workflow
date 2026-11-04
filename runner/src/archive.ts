@@ -1,5 +1,4 @@
-// When every Epic that links a spec is Done, the spec leaves the default branch, and git keeps it, cut from the
-// loop's. Each Spec line that links it changes to link the head of that branch, and a pull request deletes the files,
+// When every Epic that links a spec is Done, the spec leaves the default branch, and git keeps it. Each Spec line that links it changes to link the head of that branch, and a pull request deletes the files,
 // with auto-merge on. It works in a fresh clone of the repo the Spec line links, which can be another repo than this
 // one. GitHub, Jira and git hold the state, so a second archive repeats no side effect.
 import { mkdtempSync, rmSync } from "node:fs";

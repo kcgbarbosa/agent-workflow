@@ -1,6 +1,6 @@
 // `runner install` and `runner uninstall`: the user systemd timer and the oneshot service of a repo's tick. Systemd
 // does not start a oneshot service that is still running, so two ticks of one repo cannot overlap. The service loads
-// the host's machine token and runs the tick under `bws run`, as the loop's units do.
+// the host's machine token and runs the tick under `bws run`.
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, join } from "node:path";

@@ -19,7 +19,7 @@ function setup() {
   mkdirSync(bin);
   const fake = (name: string, body: string) => writeFileSync(join(bin, name), `#!/bin/sh\n${body}`, { mode: 0o755 });
   fake("uv", `echo "$@" >> "${join(dir, "uv.log")}"\n`);
-  // Records its arguments, so the test can see the loop's packages would be installed.
+  // Records its arguments, so the test can see the runner's packages would be installed.
   fake("npm", `echo "$@" >> "${join(dir, "npm.log")}"\n`);
   // Records its arguments. `mcp get` finds only a server that an earlier `mcp add` added.
   fake("claude", `log="${join(dir, "claude.log")}"\n[ "$1 $2" = "mcp get" ] && exec grep -q "^mcp add .* $3 " "$log"\necho "$@" >> "$log"\n`);
@@ -48,14 +48,12 @@ function snapshot(root: string): Record<string, string> {
   return entries;
 }
 
-test("links every skill, tier, and CLAUDE.md, and installs the loop and the runner", () => {
+test("links every skill, tier, and CLAUDE.md, and installs the runner", () => {
   const { dir, home, claude, run } = setup();
   run();
   for (const skill of skills()) expect(linksTo(join(claude, "skills", skill), join(REPO, "skills", skill)), skill).toBe(true);
   for (const tier of tiers()) expect(linksTo(join(claude, "agents", tier), join(REPO, "agents", tier)), tier).toBe(true);
   expect(linksTo(join(claude, "CLAUDE.md"), join(REPO, "config", "CLAUDE.md"))).toBe(true);
-  expect(readFileSync(join(dir, "npm.log"), "utf8")).toContain(`ci --prefix ${REPO}/loop`);
-  expect(linksTo(join(home, ".local", "bin", "loop"), join(REPO, "loop", "bin", "loop"))).toBe(true);
   expect(readFileSync(join(dir, "npm.log"), "utf8")).toContain(`ci --prefix ${REPO}/runner`);
   expect(linksTo(join(home, ".local", "bin", "runner"), join(REPO, "runner", "bin", "runner"))).toBe(true);
 });

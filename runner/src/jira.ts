@@ -1,4 +1,4 @@
-// The Jira REST calls of the runner, cut from the loop's. A failed call fails the tick, and the next tick reads again.
+// The Jira REST calls of the runner. A failed call fails the tick, and the next tick reads again.
 export type Ticket = {
   key: string;
   summary: string;

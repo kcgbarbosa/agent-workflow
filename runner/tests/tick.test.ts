@@ -354,13 +354,3 @@ test("an unknown command prints the usage and fails", async () => {
   expect(done.stderr).toContain("runner tick");
 });
 
-test("no file of the runner imports from the loop", () => {
-  const root = join(import.meta.dirname, "..");
-  const sources = readdirSync(root, { recursive: true, encoding: "utf8" }).filter(
-    (path) => /\.(ts|mjs)$/.test(path) && !path.startsWith("node_modules"),
-  );
-  expect(sources.length).toBeGreaterThan(5);
-  for (const path of sources) {
-    expect(readFileSync(join(root, path), "utf8"), path).not.toMatch(/from "[^"]*\bloop\//);
-  }
-});

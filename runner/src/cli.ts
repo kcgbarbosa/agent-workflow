@@ -9,7 +9,7 @@ import { read } from "./read.ts";
 
 const USAGE = "usage: runner tick [--dry-run] | install | uninstall";
 
-/** A secret from the env, which `bws run` fills as it does for the loop. */
+/** A secret from the env, which `bws run` fills. */
 function secret(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`The runner has no value for ${name} in its env. Run it under \`bws run\`.`);

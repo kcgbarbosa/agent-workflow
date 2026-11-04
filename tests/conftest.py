@@ -1,4 +1,4 @@
-"""Shared helpers for the repo-level checks. They need git and nothing from the loop package."""
+"""Shared helpers for the repo-level checks. They need git and nothing from the runner."""
 
 from __future__ import annotations
 

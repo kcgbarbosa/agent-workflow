@@ -4,7 +4,7 @@ description: >-
   against the checkout and the stack, and fuzz.py keeps each finding whose reproduction fails again on the head, marks one
   that fails the same way on the base as pre-existing, writes them as one pull request review comment to
   `$RUNNER_TEMP/fuzz-review.json`, and fails on a new one or when an adversary did not finish. It reads no GitHub token: gate.yml's `fuzz report` job posts
-  the review. `loop.toml [fuzz]` of the base overrides each input: `enabled` (default true), `model`, `effort`, `adversaries`
+  the review. `gate.toml [fuzz]` of the base overrides each input: `enabled` (default true), `model`, `effort`, `adversaries`
   (default 3), `blocking` (default true), `setup`, a command that brings up and seeds the stack, and `skip`, path globs.
 inputs:
   claude_code_oauth_token:
@@ -17,13 +17,13 @@ inputs:
     description: Values the stack needs, one `NAME=value` per line, masked and exported as the check does.
     required: false
   model:
-    description: The model, unless loop.toml [fuzz] names one.
+    description: The model, unless gate.toml [fuzz] names one.
     required: true
   effort:
-    description: The effort, unless loop.toml [fuzz] names one.
+    description: The effort, unless gate.toml [fuzz] names one.
     required: true
   skip:
-    description: Path globs, split on whitespace, unless loop.toml [fuzz] names `skip`.
+    description: Path globs, split on whitespace, unless gate.toml [fuzz] names `skip`.
     required: true
 runs:
   using: composite

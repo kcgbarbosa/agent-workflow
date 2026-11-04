@@ -54,8 +54,8 @@ def result(*findings: dict, count: int = 3, finished: int | None = None, status:
     return "\n".join(json.dumps(event) for event in events)
 
 
-def fuzz_pr(tmp_path: Path, loop_toml: str | None = None) -> FakeGitHub:
-    fake = FakeGitHub(tmp_path, base={"loop.toml": loop_toml} if loop_toml is not None else None)
+def fuzz_pr(tmp_path: Path, gate_toml: str | None = None) -> FakeGitHub:
+    fake = FakeGitHub(tmp_path, base={"gate.toml": gate_toml} if gate_toml is not None else None)
     fake.commit({"a.py": "one\ntwo\nthree\n"})
     # The adversaries leave the reproduction of each verified finding in the checkout.
     for name, text in REPROS.items():
@@ -262,7 +262,7 @@ def test_a_finding_whose_clock_time_and_shares_differ_on_the_base_is_pre_existin
 
 
 def test_the_head_rerun_meets_a_fresh_stack_and_not_one_an_adversary_changed(tmp_path: Path) -> None:
-    pr = FakeGitHub(tmp_path, base={"loop.toml": '[fuzz]\nsetup = ["bash", "-c", "printf \'1\\\\n2\\\\n3\\\\n\' > app.db"]\n', ".gitignore": "app.db\n"})
+    pr = FakeGitHub(tmp_path, base={"gate.toml": '[fuzz]\nsetup = ["bash", "-c", "printf \'1\\\\n2\\\\n3\\\\n\' > app.db"]\n', ".gitignore": "app.db\n"})
     pr.commit({"other.py": "x = 1\n"})
     # One adversary deletes a row while it probes: the `claude` run does it.
     wrap = tmp_path / "wrap"
@@ -333,7 +333,7 @@ def test_a_reproduction_that_hangs_is_cut_off_with_its_output_as_text(tmp_path: 
 
 def test_the_pull_request_cannot_turn_off_its_own_fuzz(tmp_path: Path) -> None:
     pr = fuzz_pr(tmp_path)
-    pr.commit({"loop.toml": "[fuzz]\nenabled = false\n"})
+    pr.commit({"gate.toml": "[fuzz]\nenabled = false\n"})
     pr.reply(result())
 
     run = pr.run(FUZZ, **INPUTS)
@@ -430,17 +430,6 @@ def test_the_base_can_turn_it_off(tmp_path: Path) -> None:
     assert "gate / fuzz: off" in run.stdout
     assert pr.claude_calls == []
     assert not (pr.root / "fuzz-review.json").exists()
-
-
-def test_an_old_review_table_warns_and_is_ignored(tmp_path: Path) -> None:
-    pr = fuzz_pr(tmp_path, "[review]\nenabled = false\n")
-    pr.reply(result())
-
-    run = pr.run(FUZZ, **INPUTS)
-
-    assert run.returncode == 0, run.stderr
-    assert "::warning::loop.toml [review] is no longer read" in run.stdout
-    assert len(pr.claude_calls) == 1
 
 
 @pytest.mark.parametrize("env", [{"CLAUDE_CODE_OAUTH_TOKEN": ""}, {}], ids=["no token", "skip paths only"])

@@ -1,4 +1,4 @@
-// The pull request calls of the runner, cut from the loop's, all through `gh`.
+// The pull request calls of the runner, all through `gh`.
 import { output, run } from "./exec.ts";
 
 export type Check = { name: string; bucket: string };
