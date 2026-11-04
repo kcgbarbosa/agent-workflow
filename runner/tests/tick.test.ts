@@ -55,7 +55,7 @@ test("a ready ticket gets a thread in its own worktree from the head of main, an
   expect(start.worktree).toBe(head);
   expect(start.provider).toBe("claudeAgent");
   expect(start.model).toBe("claude-opus-5-5");
-  expect(start.project).toBe(".");
+  expect(start.project).toBe(world.repo);
   expect(start.args).not.toContain("--wait");
   expect(start.args.slice(0, 2)).toEqual(["--log-level", "error"]);
   expect(start.message).toContain("AW-1");
