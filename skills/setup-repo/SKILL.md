@@ -123,8 +123,8 @@ The shared merge gate is `.github/workflows/gate.yml` in agent-workflow. It runs
 
 Then, at the repo root:
 
-1. Ask whether the fuzz job is on. Recommend off for a small private repo, where a model run on each pull request costs more than it saves.
-2. Run `~/.claude/skills/setup-repo/gate.sh write`. Its header lists the files it writes: the call to the gate, a `mise.toml` when there is no mise file, and the gate's `gate.toml` settings with the fuzz job on. When the answer was off, set `enabled = false` in the `[fuzz]` table. Show the user the diff. A CI workflow that runs the same tests as `make check` can go once the gate runs. The gate reads `gate.toml` from the base branch, so on this first pull request `gate / fuzz` runs as if it were on. In a repo with no token, it prints a warning and passes.
+1. The fuzz job is on in Pitchridge only, and off in every other repo, since each run bills the owner's plan.
+2. Run `~/.claude/skills/setup-repo/gate.sh write`. Its header lists the files it writes: the call to the gate, a `mise.toml` when there is no mise file, and the gate's `gate.toml` settings with the fuzz job off. Show the user the diff. A CI workflow that runs the same tests as `make check` can go once the gate runs. The gate reads `gate.toml` from the base branch, so on this first pull request `gate / fuzz` runs as if it were on. In a repo with no token, it prints a warning and passes.
 3. Ask before you run `~/.claude/skills/setup-repo/gate.sh protect`. It changes the GitHub settings and needs an admin token: squash merges only with the pull request title, auto-merge on, delete branch on merge, and the default branch protected with required checks `gate / check` and `gate / fuzz` alone, no required approvals, and no force push. Run it after the pull request that adds the workflows merges, so no open pull request waits on a check it cannot run.
 
 Both steps are safe to run again. A second run of `protect` in a repo already on the gate replaces its required checks with these two, so `gate / review` goes. A pull request with auto-merge on merges itself when every required check is green. A draft pull request waits.
