@@ -53,4 +53,4 @@ Give the change one level, from the confirmed risks and the safety fact:
 
 Write it through `unslop`, cite real code, and strip anything private before it goes anywhere public.
 
-Carried from pstack, `pstack/skills/blast-radius` of `cursor/plugins` at `ae5650febf4320793844c12c4adaa937f417f8da`, under the MIT license in `licenses/pstack.LICENSE`. It drops the links to pstack's `how`, `why`, and `arena` skills, uses Claude Code's Agent tool for the wide case, adds the Level section for the loop's `blast` value, and is model-invocable so `implement` can run it.
+Carried from pstack, `pstack/skills/blast-radius` of `cursor/plugins` at `ae5650febf4320793844c12c4adaa937f417f8da`, under the MIT license in `licenses/pstack.LICENSE`. It drops the links to pstack's `how`, `why`, and `arena` skills, uses Claude Code's Agent tool for the wide case, adds the Level section, and is model-invocable so `implement` can run it.

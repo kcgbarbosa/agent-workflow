@@ -1,6 +1,6 @@
 # The runner
 
-The `runner` command turns each ready ticket of the queue into a T3 thread and a pull request. `docs/specs/t3-runner.md` gives what it does, and `docs/adr/` why. `runner.toml` holds the values it reads, and `runner/src/config.ts` gives the other keys and their defaults. This file holds the other settings of this repo.
+The `runner` command turns each ready ticket of the queue into a T3 thread and a pull request. `runner/src/decide.ts` gives what it does for each state of a ticket, and `docs/adr/` why. `runner.toml` holds the values it reads, and `runner/src/config.ts` gives the other keys and their defaults. This file holds the other settings of this repo.
 
 ## Settings
 

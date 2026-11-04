@@ -1,6 +1,6 @@
 # The runner
 
-`docs/specs/t3-runner.md` is the design this code follows. Nothing calls it until the switch-over ticket.
+`docs/adr/` holds the decisions this code follows. It runs on t14 as a timer, so a merged change reaches it at the next `git pull` in `~/dev/agent-workflow`.
 
 - A tick is `src/read.ts`, which writes nothing, the pure `src/decide.ts`, and `src/act.ts`. `--dry-run` stops before `act`.
 - `src/*.ts` is the runner and `bin/runner` its command. Node runs the `.ts` files as they are, so the code uses only syntax that Node can strip: no enums, no parameter properties.

@@ -33,4 +33,4 @@ Last, keep a table in the agent instruction file that pairs each rule with what 
 
 **Reply:** each class with its evidence, the level you picked, and why a higher level didn't work.
 
-Carried from pstack, `pstack/skills/correct` of `cursor/plugins` at `ae5650febf4320793844c12c4adaa937f417f8da`, under the MIT license in `licenses/pstack.LICENSE`. It fixes one class a run where pstack fixes the most frequent classes one commit each, reads the file the loop gives it, and leaves the push and the pull request to the loop.
+Carried from pstack, `pstack/skills/correct` of `cursor/plugins` at `ae5650febf4320793844c12c4adaa937f417f8da`, under the MIT license in `licenses/pstack.LICENSE`. It fixes one class a run where pstack fixes the most frequent classes one commit each.

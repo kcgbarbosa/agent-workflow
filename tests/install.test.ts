@@ -3,7 +3,7 @@
 // The real claude would write through the settings.json link into config/ in the checkout.
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { expect, test } from "vitest";
 import { REPO, tempDir } from "./repo.ts";
 
@@ -56,6 +56,19 @@ test("links every skill, tier, and CLAUDE.md, and installs the runner", () => {
   expect(linksTo(join(claude, "CLAUDE.md"), join(REPO, "config", "CLAUDE.md"))).toBe(true);
   expect(readFileSync(join(dir, "npm.log"), "utf8")).toContain(`ci --prefix ${REPO}/runner`);
   expect(linksTo(join(home, ".local", "bin", "runner"), join(REPO, "runner", "bin", "runner"))).toBe(true);
+});
+
+test("removes the old loop link, and keeps a loop link to somewhere else", () => {
+  const { dir, home, run } = setup();
+  const link = join(home, ".local", "bin", "loop");
+  mkdirSync(dirname(link), { recursive: true });
+  symlinkSync(join(REPO, "loop", "bin", "loop"), link);
+  run();
+  expect(lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
+  const mine = join(dir, "mine");
+  symlinkSync(mine, link);
+  run();
+  expect(readlinkSync(link)).toBe(mine);
 });
 
 test("adds each MCP server once", () => {

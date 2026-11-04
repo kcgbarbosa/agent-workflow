@@ -4,7 +4,7 @@ The skills, the subagent tiers, the runner, and the switchboard that every repo 
 KC's global instructions are `config/CLAUDE.md`, which `install.sh` links to `~/.claude/CLAUDE.md`, so they reach every repo. This file holds only what applies in this repo.
 
 - The gate runs `make check` on each pull request, so an agent runs the tests that cover its change, not the full `make check`. `docs/agents/testing.md` gives the commands.
-- `docs/specs/t3-runner.md` and `docs/adr/` are the design the runner follows. `runner/CLAUDE.md` gives the rules for a change to it.
+- `docs/adr/` holds the runner's decisions, and `runner/tests/` what it does. `runner/CLAUDE.md` gives the rules for a change to it.
 - `config/settings.json` is linked as `~/.claude/settings.json`. Never put a token in it, and check `git diff config/` before a commit.
 
 ## Agent skills
