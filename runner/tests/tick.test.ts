@@ -108,7 +108,7 @@ test.each([
 test("a thread with the key in its title stops a second thread, and a longer key does not", async () => {
   world.jira.add("AW-1", "Has a thread", { status: "In Progress" });
   world.jira.add("AW-4", "Is ready");
-  world.thread({ title: "Fix AW-1 by hand" });
+  world.thread({ title: "Fix AW-1 by hand", running: true });
   world.thread({ title: "AW-41: Another ticket" });
 
   const tick = await world.tick();
@@ -118,14 +118,14 @@ test("a thread with the key in its title stops a second thread, and a longer key
 });
 
 test.each([
-  ["open", "OPEN", "a pull request is open"],
-  ["merged", "MERGED", "a pull request merged"],
-] as const)("a pull request that is %s stops a second thread", async (_name, state, reason) => {
+  ["open", "OPEN", "AW-1 status In Review: a pull request is open"],
+  ["merged", "MERGED", "AW-1 status Done: the pull request merged"],
+] as const)("a pull request that is %s stops a second thread", async (_name, state, line) => {
   world.jira.add("AW-1", "Built by hand");
   world.pullRequest({ title: "feat(AW-1): by hand", headRefName: "feat/AW-1-by-hand", state });
   const tick = await world.tick();
   expect(world.starts()).toEqual([]);
-  expect(tick.lines).toEqual([`AW-1 skip: ${reason}`]);
+  expect(tick.lines[0]).toBe(line);
 });
 
 test("the pull request of a thread under another title is found by its branch", async () => {

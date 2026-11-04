@@ -19,10 +19,14 @@ export type Config = {
   model: string;
   /** A line this repo adds to the first message of each thread. */
   firstMessage: string;
+  /** The ntfy server of a notification. The topic is a secret. */
+  ntfyUrl: string;
+  /** The tailnet address of T3, for the link in a notification, since the links `t3` prints use 127.0.0.1. */
+  threadUrl: string;
 };
 
 const FILE = "runner.toml";
-const KEYS = ["component", "jira_url", "main_branch", "limit", "fix_attempts", "quiet_minutes", "provider", "model", "first_message"];
+const KEYS = ["component", "jira_url", "main_branch", "limit", "fix_attempts", "quiet_minutes", "provider", "model", "first_message", "ntfy_url", "thread_url"];
 
 export function load(repo: string): Config {
   const raw = parsed(join(repo, FILE));
@@ -48,6 +52,8 @@ export function load(repo: string): Config {
     provider: text("provider", "claudeAgent"),
     model: text("model", "claude-opus-5-5"),
     firstMessage: text("first_message", ""),
+    ntfyUrl: text("ntfy_url", "https://ntfy.sh"),
+    threadUrl: text("thread_url", "https://t14.tail4fca58.ts.net:7443"),
   };
 }
 

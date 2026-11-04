@@ -18,12 +18,13 @@ async function tick(dryRun: boolean): Promise<number> {
   const cwd = process.cwd();
   const config = load(cwd);
   const jira = new Jira(config.jiraUrl, secret("JIRA_EMAIL"), secret("JIRA_API_TOKEN"));
-  const steps = decide(await read(config, jira, cwd), config);
+  const topic = secret("NTFY_TOPIC");
+  const steps = decide(await read(config, jira, cwd), config, Date.now());
   if (dryRun) {
     for (const step of steps) console.log(`dry-run ${lineOf(step)}`);
     return 0;
   }
-  return (await act(steps, config, jira, cwd)) ? 0 : 1;
+  return (await act(steps, config, jira, topic, cwd)) ? 0 : 1;
 }
 
 async function main(args: string[]): Promise<number> {

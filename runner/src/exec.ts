@@ -12,3 +12,12 @@ export function run(command: string, args: string[], cwd: string): Promise<strin
     });
   });
 }
+
+/** Runs a command whose exit code carries a result, as `gh pr checks` does, and returns what it printed whatever the code. */
+export function output(command: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile(command, args, { cwd, timeout: LIMIT_MS, maxBuffer: MAX_OUTPUT }, (error, stdout, stderr) => {
+      resolve({ stdout, stderr: stderr || (error?.message ?? "") });
+    });
+  });
+}

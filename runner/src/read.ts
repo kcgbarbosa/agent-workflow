@@ -1,7 +1,7 @@
 // The first step of a tick: it gathers the state from Jira, GitHub and T3, and writes nothing. A failed read throws.
 import type { Config } from "./config.ts";
 import { branchOf, type State } from "./decide.ts";
-import { pullRequestsNaming } from "./github.ts";
+import { checksOf, pullRequestsNaming } from "./github.ts";
 import type { Jira } from "./jira.ts";
 import { listThreads, showThread } from "./t3.ts";
 
@@ -17,11 +17,12 @@ export async function read(config: Config, jira: Jira, cwd: string): Promise<Sta
   const state: State = [];
   for (const ticket of tickets) {
     const own = threads.filter((thread) => names(thread.title, ticket.key));
-    const pullRequests = await pullRequestsNaming(cwd, ticket.key, branchOf(ticket));
+    const pullRequests = (await pullRequestsNaming(cwd, ticket.key, branchOf(ticket))).filter((pr) => names(pr.headRefName, ticket.key));
     state.push({
       ticket,
+      comments: await jira.comments(ticket.key),
       threads: await Promise.all(own.map((thread) => showThread(cwd, thread.threadId))),
-      pullRequests: pullRequests.filter((pr) => names(pr.headRefName, ticket.key)),
+      pullRequests: await Promise.all(pullRequests.map(async (pr) => ({ ...pr, checks: pr.state === "OPEN" ? await checksOf(cwd, pr.url) : [] }))),
     });
   }
   return state;

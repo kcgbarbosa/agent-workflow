@@ -13,12 +13,18 @@ export type Issue = {
   flagged: boolean;
   /** The tickets that block this one, each with its status. */
   blockedBy: Record<string, string>;
+  comments: { text: string; created: string }[];
 };
 
 const FLAGGED = "customfield_10021";
 const PAGE = 2;
 const PRIORITIES = ["Lowest", "Low", "Medium", "High", "Highest"];
 const JQL = /^component = "([^"]+)" AND statusCategory != Done ORDER BY priority DESC, key ASC$/;
+
+/** A time as Jira writes it, with no colon in its offset. */
+export function jiraTime(ms: number): string {
+  return new Date(ms - 5 * 3_600_000).toISOString().replace("Z", "-0500");
+}
 
 function category(status: string) {
   return { key: status === "Done" ? "done" : status === "To Do" || status === "Backlog" ? "new" : "indeterminate" };
@@ -63,6 +69,7 @@ export class FakeJira {
       components: ["agent-workflow"],
       flagged: false,
       blockedBy: {},
+      comments: [],
       ...values,
     });
   }
@@ -73,6 +80,10 @@ export class FakeJira {
     const body = raw ? JSON.parse(raw) : null;
     if (pathname === "/rest/api/3/field") return [200, [{ id: FLAGGED, name: "Flagged" }]];
     if (method === "POST" && pathname === "/rest/api/3/search/jql") return this.search(body);
+    const commented = /^\/rest\/api\/3\/issue\/([^/]+)\/comment$/.exec(pathname);
+    if (commented) return this.comment(method, commented[1], url, body);
+    const edited = /^\/rest\/api\/3\/issue\/([^/]+)$/.exec(pathname);
+    if (edited && method === "PUT") return this.edit(edited[1], body);
     const transitions = /^\/rest\/api\/3\/issue\/([^/]+)\/transitions$/.exec(pathname);
     const issue = transitions ? this.issues.get(transitions[1]) : undefined;
     if (issue && method === "GET") {
@@ -84,6 +95,32 @@ export class FakeJira {
       return [204, null];
     }
     return [404, { errorMessages: [`no route for ${method} ${pathname}`] }];
+  }
+
+  private comment(method: string, key: string, url: string, body: any): [number, unknown] {
+    const issue = this.issues.get(key);
+    if (!issue) return [404, { errorMessages: [`no issue ${key}`] }];
+    if (method === "POST") {
+      const text = body.body.content.map((block: any) => block.content.map((node: any) => node.text).join("")).join("\n");
+      issue.comments.push({ text, created: jiraTime(Date.now()) });
+      this.writes.push(`comment ${key} ${text}`);
+      return [201, {}];
+    }
+    // A page of one, so a runner that reads one page misses comments.
+    const start = Number(new URL(url, "http://jira").searchParams.get("startAt") ?? 0);
+    const comments = issue.comments.slice(start, start + 1).map(({ text, created }) => ({
+      created,
+      body: { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text }] }] },
+    }));
+    return [200, { comments, total: issue.comments.length }];
+  }
+
+  private edit(key: string, body: any): [number, unknown] {
+    const issue = this.issues.get(key);
+    if (!issue || !body.fields?.[FLAGGED]) return [400, { errorMessages: [`bad edit of ${key}`] }];
+    issue.flagged = true;
+    this.writes.push(`flag ${key}`);
+    return [204, null];
   }
 
   private search(body: { jql: string; nextPageToken?: string }): [number, unknown] {

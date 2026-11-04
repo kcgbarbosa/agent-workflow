@@ -3,8 +3,10 @@
 import type { Config } from "./config.ts";
 import { lineOf, type Step } from "./decide.ts";
 import { run } from "./exec.ts";
+import { autoMerge, comment } from "./github.ts";
 import type { Jira } from "./jira.ts";
-import { startThread } from "./t3.ts";
+import { post } from "./notify.ts";
+import { sendMessage, startThread } from "./t3.ts";
 
 /** The head of the main branch on origin, since the checkout's own copy may be behind a blocker that just merged. */
 async function headOfMain(config: Config, cwd: string): Promise<string> {
@@ -13,7 +15,7 @@ async function headOfMain(config: Config, cwd: string): Promise<string> {
 }
 
 /** Returns whether every step went through. It throws, before any write, when it cannot find the head of main. */
-export async function act(steps: Step[], config: Config, jira: Jira, cwd: string): Promise<boolean> {
+export async function act(steps: Step[], config: Config, jira: Jira, topic: string, cwd: string): Promise<boolean> {
   const base = steps.some((step) => step.kind === "start") ? await headOfMain(config, cwd) : "";
   const failed = new Set<string>();
   for (const step of steps) {
@@ -23,6 +25,18 @@ export async function act(steps: Step[], config: Config, jira: Jira, cwd: string
         await startThread(cwd, { title: step.title, provider: config.provider, model: config.model, base, branch: step.branch, message: step.message });
       } else if (step.kind === "status") {
         await jira.transition(step.key, step.status);
+      } else if (step.kind === "send") {
+        await sendMessage(cwd, step.threadId, step.message);
+      } else if (step.kind === "comment") {
+        await jira.comment(step.key, step.text);
+      } else if (step.kind === "pr-comment") {
+        await comment(cwd, step.url, step.text);
+      } else if (step.kind === "auto-merge") {
+        await autoMerge(cwd, step.url);
+      } else if (step.kind === "flag") {
+        await jira.flag(step.key);
+      } else if (step.kind === "notify") {
+        await post(config.ntfyUrl, topic, step.text);
       }
       console.log(lineOf(step));
     } catch (error) {

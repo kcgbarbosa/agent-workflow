@@ -41,9 +41,18 @@ if (group === "thread" && verb === "list") {
     process.exit(1);
   }
   const threadId = `thread:${state.threads.length + 1}`;
-  state.threads.unshift({ threadId, title, status: "running", activeRunId: `run:${threadId}`, pendingRequestCount: 0, updatedAt: "2026-11-04T00:00:00.000Z" });
+  const link = `http://127.0.0.1:3773/env/${encodeURIComponent(threadId)}`;
+  state.threads.unshift({ threadId, title, link, status: "running", activeRunId: `run:${threadId}`, pendingRequestCount: 0, updatedAt: new Date().toISOString() });
   writeFileSync(file, JSON.stringify(state));
   console.log(threadId);
+} else if (group === "thread" && verb === "send") {
+  const thread = state.threads.find((item) => item.threadId === rest[2]);
+  if (!thread || state.failSend) {
+    console.error("could not send");
+    process.exit(1);
+  }
+  Object.assign(thread, { status: "running", activeRunId: `run:${thread.threadId}`, updatedAt: new Date().toISOString() });
+  writeFileSync(file, JSON.stringify(state));
 } else {
   console.error(`fake t3: unknown call ${rest.join(" ")}`);
   process.exit(1);

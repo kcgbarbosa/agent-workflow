@@ -24,15 +24,17 @@ test("the defaults load", () => {
     provider: "claudeAgent",
     model: "claude-opus-5-5",
     firstMessage: "",
+    ntfyUrl: "https://ntfy.sh",
+    threadUrl: "https://t14.tail4fca58.ts.net:7443",
   });
 });
 
 test("each value can change", () => {
   const config = loaded(
     REQUIRED +
-      'main_branch = "trunk"\nlimit = 0\nfix_attempts = 5\nquiet_minutes = 90\nprovider = "codex"\nmodel = "gpt-9"\nfirst_message = "Mind the stack."\n',
+      'main_branch = "trunk"\nlimit = 0\nfix_attempts = 5\nquiet_minutes = 90\nprovider = "codex"\nmodel = "gpt-9"\nfirst_message = "Mind the stack."\nntfy_url = "https://ntfy.example"\nthread_url = "https://t3.example"\n',
   );
-  expect(config).toMatchObject({ mainBranch: "trunk", limit: 0, fixAttempts: 5, quietMinutes: 90, provider: "codex", model: "gpt-9", firstMessage: "Mind the stack." });
+  expect(config).toMatchObject({ mainBranch: "trunk", limit: 0, fixAttempts: 5, quietMinutes: 90, provider: "codex", model: "gpt-9", firstMessage: "Mind the stack.", ntfyUrl: "https://ntfy.example", threadUrl: "https://t3.example" });
 });
 
 test.each([
