@@ -145,6 +145,19 @@ test("a ticket moved back to Backlog with a red pull request gets no fix and no 
   expect(world.jira.writes).toEqual([]);
 });
 
+test("a turn still running on a ticket moved back to Backlog holds its place, and gets no status", async () => {
+  world.config("limit = 1");
+  world.jira.add("AW-1", "Moved back", { status: "Backlog" });
+  world.thread({ title: "AW-1: Moved back", running: true });
+  world.jira.add("AW-2", "Next");
+
+  const tick = await world.tick();
+
+  expect(tick.lines).toEqual(["AW-1 skip: status Backlog", "AW-2 skip: wait, 1 of 1 places taken"]);
+  expect(world.starts()).toEqual([]);
+  expect(world.jira.writes).toEqual([]);
+});
+
 test("a ticket moved back to Backlog whose pull request merged moves to Done", async () => {
   world.jira.add("AW-1", "Moved back", { status: "Backlog" });
   world.pullRequest({ title: "feat(AW-1): moved back", headRefName: "feat/AW-1-moved-back", state: "MERGED" });
