@@ -36,6 +36,7 @@ Create a Jira issue of type Bug, with no parent. Priority stays at the default. 
 
 1. Set the component to the repo the bug is in, by an edit right after the create, since the create screen has none.
 2. Set the ticket Flagged, so nothing builds before the owner unflags it.
-3. Comment `Proposed by intake` with the link of the report.
+3. Move it from Backlog to To Do, after Flagged, so unflagging is the owner's one approval.
+4. Comment `Proposed by intake` with the link of the report.
 
-Done when the Bug has no parent, the Reproduce section holds the trace as text, the component is set, it is Flagged, and the comment names the report. Reply with the ticket's link.
+Done when the Bug has no parent, the Reproduce section holds the trace as text, the component is set, it is Flagged and To Do, and the comment names the report. Reply with the ticket's link.

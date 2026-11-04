@@ -8,3 +8,4 @@
 - [0006](0006-the-thread-title-links-a-ticket-to-its-thread.md) The thread title links a ticket to its thread
 - [0007](0007-t3-handles-usage-limits.md) T3 handles usage limits
 - [0008](0008-stuck-tickets-count-against-the-limit.md) Stuck tickets count against the limit
+- [0009](0009-the-queue-is-opt-in-through-a-status.md) The queue is opt-in through a status

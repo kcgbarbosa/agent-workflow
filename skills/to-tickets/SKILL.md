@@ -62,7 +62,7 @@ Iterate until the user approves the breakdown.
 
 ### 5. Publish the tickets to Jira
 
-Publish the approved tickets through the Atlassian connector, one Jira Task per ticket, with the Epic as its parent. Publish in dependency order (blockers first) so each ticket's blocking edges can reference real keys. Write each blocking edge as Jira's native "Blocks" link and nowhere else: no "Blocked by" line in the body. Set each Task's Jira component to the repo the ticket changes, because the dispatcher of each repo builds the tickets of its component. A step only a person can do gets no ticket. Leave priority at the Jira default and leave the other board fields empty, as `docs/agents/issue-tracker.md` says.
+Publish the approved tickets through the Atlassian connector, one Jira Task per ticket, with the Epic as its parent. Publish in dependency order (blockers first) so each ticket's blocking edges can reference real keys. Write each blocking edge as Jira's native "Blocks" link and nowhere else: no "Blocked by" line in the body. Set each Task's Jira component to the repo the ticket changes, because the dispatcher of each repo builds the tickets of its component. A step only a person can do gets no ticket. Leave priority at the Jira default and leave the other board fields empty, as `docs/agents/issue-tracker.md` says. Each ticket lands in Backlog, and nothing builds until the owner moves it to To Do.
 
 Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
 

@@ -93,6 +93,79 @@ test.each([
   expect(tick.lines).toEqual([`AW-1 skip: ${reason}`]);
 });
 
+test("a ticket moved from Backlog to To Do starts at a later tick", async () => {
+  world.jira.add("AW-1", "Waits for the owner", { status: "Backlog" });
+
+  await world.tick();
+  expect(world.starts()).toEqual([]);
+
+  world.jira.issues.get("AW-1")!.status = "To Do";
+  await world.tick();
+
+  expect(world.titles()).toEqual(["AW-1: Waits for the owner"]);
+  expect(world.jira.issues.get("AW-1")?.status).toBe("In Progress");
+});
+
+test("a To Do ticket blocked by a Backlog ticket waits", async () => {
+  world.jira.add("AW-1", "The blocker", { status: "Backlog" });
+  world.jira.add("AW-2", "Blocked", { blockedBy: { "AW-1": "Backlog" } });
+
+  const tick = await world.tick();
+
+  expect(world.starts()).toEqual([]);
+  expect(world.jira.writes).toEqual([]);
+  expect(tick.lines).toEqual(["AW-1 skip: status Backlog", "AW-2 skip: blocked by AW-1"]);
+});
+
+test.each([
+  ["a stopped thread", { title: "AW-1: Moved back" }],
+  ["a failed thread", { title: "AW-1: Moved back", failed: true }],
+])("a ticket moved back to Backlog with %s does not start again", async (_name, thread) => {
+  world.jira.add("AW-1", "Moved back", { status: "Backlog" });
+  world.thread(thread);
+
+  const tick = await world.tick();
+
+  expect(tick.lines).toEqual(["AW-1 skip: status Backlog"]);
+  expect(world.starts()).toEqual([]);
+  expect(world.sends()).toEqual([]);
+  expect(world.jira.writes).toEqual([]);
+});
+
+test("a ticket moved back to Backlog with a red pull request gets no fix and no auto-merge", async () => {
+  world.jira.add("AW-1", "Moved back", { status: "Backlog" });
+  world.thread({ title: "AW-1: Moved back" });
+  world.pullRequest({ title: "feat(AW-1): moved back", headRefName: "feat/AW-1-moved-back", checks: [{ name: "gate / check", bucket: "fail" }] });
+
+  const tick = await world.tick();
+
+  expect(tick.lines).toEqual(["AW-1 skip: status Backlog"]);
+  expect(world.sends()).toEqual([]);
+  expect(world.ghWrites()).toEqual([]);
+  expect(world.jira.writes).toEqual([]);
+});
+
+test("a ticket moved back to Backlog whose pull request merged moves to Done", async () => {
+  world.jira.add("AW-1", "Moved back", { status: "Backlog" });
+  world.pullRequest({ title: "feat(AW-1): moved back", headRefName: "feat/AW-1-moved-back", state: "MERGED" });
+
+  await world.tick();
+
+  expect(world.jira.issues.get("AW-1")?.status).toBe("Done");
+});
+
+test("a Flagged Bug waits until the owner unflags it, and then starts", async () => {
+  world.jira.add("AW-1", "Proposed", { issueType: "Bug", flagged: true });
+
+  const tick = await world.tick();
+  expect(tick.lines).toEqual(["AW-1 skip: Flagged"]);
+
+  world.jira.issues.get("AW-1")!.flagged = false;
+  await world.tick();
+
+  expect(world.titles()).toEqual(["AW-1: Proposed"]);
+});
+
 test.each([
   ["another component", ["machines"]],
   ["no component", []],
