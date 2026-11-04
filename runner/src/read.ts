@@ -6,9 +6,9 @@ import { checksOf, pullRequestsNaming } from "./github.ts";
 import type { Jira } from "./jira.ts";
 import { listThreads, showThread } from "./t3.ts";
 
-/** Whether the text names the key, and not a longer key that starts with it. */
-function names(text: string, key: string): boolean {
-  return new RegExp(`(?<![\\w-])${key}(?!\\w)`).test(text);
+/** Whether the branch names the key, and not a longer key that starts with it. */
+function names(branch: string, key: string): boolean {
+  return new RegExp(`(?<![\\w-])${key}(?!\\w)`).test(branch);
 }
 
 /** The open Epics with a child of this repo's component. Only an Epic whose children are all Done needs its linking Epics. */
@@ -28,8 +28,8 @@ export async function read(config: Config, jira: Jira, cwd: string): Promise<Sta
   const threads = await listThreads(cwd);
   const items: TicketState[] = [];
   for (const ticket of tickets) {
-    const own = threads.filter((thread) => names(thread.title, ticket.key));
-    const pullRequests = (await pullRequestsNaming(cwd, ticket.key, branchOf(ticket))).filter((pr) => names(pr.headRefName, ticket.key));
+    const own = threads.filter((thread) => thread.title.startsWith(`${ticket.key}:`));
+    const pullRequests = (await pullRequestsNaming(cwd, ticket.key, branchOf(ticket))).filter((pr) => names(pr.headRefName, ticket.key) || pr.title.includes(`(${ticket.key}):`));
     items.push({
       ticket,
       comments: await jira.comments(ticket.key),

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { World } from "./world.ts";
@@ -55,7 +55,7 @@ test("a ready ticket gets a thread in its own worktree from the head of main, an
   expect(start.worktree).toBe(head);
   expect(start.provider).toBe("claudeAgent");
   expect(start.model).toBe("claude-opus-5-5");
-  expect(start.project).toBe(".");
+  expect(start.project).toBe(world.repo);
   expect(start.args).not.toContain("--wait");
   expect(start.args.slice(0, 2)).toEqual(["--log-level", "error"]);
   expect(start.message).toContain("AW-1");
@@ -105,16 +105,38 @@ test.each([
   expect(tick.lines).toEqual([]);
 });
 
-test("a thread with the key in its title stops a second thread, and a longer key does not", async () => {
+test("a thread whose title starts with the key stops a second thread, and a longer key does not", async () => {
   world.jira.add("AW-1", "Has a thread", { status: "In Progress" });
   world.jira.add("AW-4", "Is ready");
-  world.thread({ title: "Fix AW-1 by hand", running: true });
+  world.thread({ title: "AW-1: Has a thread", running: true });
   world.thread({ title: "AW-41: Another ticket" });
 
   const tick = await world.tick();
 
   expect(world.titles()).toEqual(["AW-4: Is ready"]);
   expect(tick.stdout).toContain("AW-1 skip: has a thread");
+});
+
+test("a side thread that names a ticket does not count as its thread", async () => {
+  world.jira.add("AW-1", "Is ready");
+  world.thread({ title: "Sanity check AW-1 plan" });
+
+  await world.tick();
+
+  expect(world.titles()).toEqual(["AW-1: Is ready"]);
+  expect(world.sends()).toEqual([]);
+});
+
+test("a tick from a worktree of the repo finds the T3 project and starts the thread", async () => {
+  world.jira.add("AW-1", "Is ready");
+  const worktree = join(world.root, "a-worktree");
+  world.git(world.repo, "worktree", "add", "--quiet", worktree);
+  copyFileSync(join(world.repo, "runner.toml"), join(worktree, "runner.toml"));
+
+  const tick = await world.tick(worktree);
+
+  expect(tick.code).toBe(0);
+  expect(world.titles()).toEqual(["AW-1: Is ready"]);
 });
 
 test.each([
@@ -133,6 +155,14 @@ test("the pull request of a thread under another title is found by its branch", 
   world.pullRequest({ title: "A title with no key", headRefName: "feat/AW-1-add-login" });
   await world.tick();
   expect(world.starts()).toEqual([]);
+});
+
+test("a pull request with the key as its title's scope is found under a branch with no key", async () => {
+  world.jira.add("AW-1", "Built by hand");
+  world.pullRequest({ title: "feat(AW-1): by hand", headRefName: "by-hand", state: "MERGED" });
+  const tick = await world.tick();
+  expect(world.starts()).toEqual([]);
+  expect(tick.lines[0]).toBe("AW-1 status Done: the pull request merged");
 });
 
 test("a closed pull request or a neighbour's stops nothing", async () => {

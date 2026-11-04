@@ -38,7 +38,7 @@ export class World {
     await this.jira.start();
     await this.ntfy.start();
     execFileSync("mkdir", ["-p", this.fakes]);
-    writeFileSync(join(this.fakes, "t3.json"), JSON.stringify({ threads: [], failStart: [] }));
+    writeFileSync(join(this.fakes, "t3.json"), JSON.stringify({ project: this.repo, threads: [], failStart: [] }));
     writeFileSync(join(this.fakes, "github.json"), "[]");
     this.env = {
       PATH: [join(HERE, "fakes", "bin"), GIT, dirname(process.execPath), "/usr/bin", "/bin"].join(":"),
@@ -186,16 +186,20 @@ export class World {
 
   /** Runs `runner` in the repo with these arguments, to its end. */
   runner(...args: string[]): Promise<Tick> {
+    return this.runnerIn(this.repo, args);
+  }
+
+  private runnerIn(cwd: string, args: string[]): Promise<Tick> {
     return new Promise((resolve) => {
-      execFile(RUNNER, args, { cwd: this.repo, env: this.env, timeout: 30_000 }, (error, stdout, stderr) => {
+      execFile(RUNNER, args, { cwd, env: this.env, timeout: 30_000 }, (error, stdout, stderr) => {
         const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
         resolve({ code, stdout, stderr, lines: stdout.split("\n").filter(Boolean) });
       });
     });
   }
 
-  tick(): Promise<Tick> {
-    return this.runner("tick");
+  tick(cwd: string = this.repo): Promise<Tick> {
+    return this.runnerIn(cwd, ["tick"]);
   }
 
   dryRun(): Promise<Tick> {
