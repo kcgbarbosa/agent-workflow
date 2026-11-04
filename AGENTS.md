@@ -27,5 +27,5 @@ grill-with-docs → to-spec → to-tickets → the loop or a T3 Code thread → 
 
 ### Loop
 
-The loop builds an Epic of this repo. See `docs/agents/loop.md`.
+The loop builds each ready ticket with the `agent-workflow` component. See `docs/agents/loop.md`.
 When a run fails, a wrong value is fixed in `loop.toml` or `docs/agents/loop.md`. Anything else is a loop bug, fixed in `loop/` and `skills/setup-loop/loop.md` in one pull request.

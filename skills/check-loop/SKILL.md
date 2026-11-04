@@ -22,13 +22,13 @@ Done when you can say what each step and limit of this run should be.
 
 One watch page serves every project on the host, so each `/api/` path below but `/api/usage` takes `?project=<name>`, the `name` of the repo's `loop.toml`. Without it, the page answers for the repo that started it.
 
-The run's files are in `~/.local/state/<name>-loop/<run>/`, where the run is the key it started with, or `filter-<hash>`. The unit `loop-<name>-<run>` names the running run. With no unit, the run is the newest folder there.
+The dispatcher is the unit `loop-<name>-dispatch`, and its log is `decisions.jsonl` in `~/.local/state/<name>-loop/`. Each worker is the unit `loop-<name>-<KEY>`, and its files are in `tickets/<KEY>/` there.
 
-- `systemctl --user is-active loop-<name>-<run>`: is the run alive?
-- `curl -s 'localhost:8790/api/epic/<run>?project=<name>'`: the state, `stats`, `plan`, and each ticket's column, `step` with its `since`, its pull request and checks, and `recent` tool calls.
-- The last 30 lines of `decisions.jsonl`, and `journalctl --user -u loop-<name>-<run> -n 30`. The `frontier` line lists each ticket with its state. A ticket's `pr` line gives its pull request and whether auto-merge is on, and each `wait` line gives the result and the `checks` the loop saw.
+- `systemctl --user list-units 'loop-<name>-*'`: is the dispatcher alive, and which workers run?
+- `curl -s 'localhost:8790/api/epic/<KEY>?project=<name>'`, for each worker: the state, `stats`, `plan`, and each ticket's column, `step` with its `since`, its pull request and checks, and `recent` tool calls.
+- The last 30 lines of the dispatcher's log and of each worker's, and `journalctl --user -u loop-<name>-<KEY> -n 30`. The dispatcher's newest `queue` line lists each ticket with its state. A ticket's `pr` line gives its pull request and whether auto-merge is on, and each `wait` line gives the result and the `checks` the loop saw.
 - For each ticket whose last `pr` line has no `merge` line after it, the pull request on GitHub, from the repo: `gh pr view <url> --json state,baseRefName,autoMergeRequest,mergeStateStatus` and `gh pr checks <url>`. GitHub is the truth when it and the log disagree.
-- `loop report <run>`, run from the repo, when the cost looks off.
+- `loop report <KEY>`, run from the repo, when the cost looks off.
 
 When the watch page does not answer, read the same facts from `decisions.jsonl`.
 
@@ -38,11 +38,11 @@ Done when you know each ticket's state, its pull request's state, and what the r
 
 Check every item. Each one that holds is a flag.
 
-- **Dead**: the run's unit is gone, and `decisions.jsonl` ends without a `stop` or `finish` line.
+- **Dead**: a unit is gone, and its `decisions.jsonl` ends without a `stop` or `finish` line.
 - **Slow**: an agent past `agent_timeout_minutes`, a `wait` on checks past 120 minutes, or `recent` repeating the same tool call.
 - **Stuck**: a stuck ticket, a `blocked` agent, red `wait` lines near `fix_attempts`, or stuck tickets in a row near `circuit_breaker`.
-- **Gate**: a pull request whose checks are red with no fix running, that is green with auto-merge off, that GitHub reports conflicting or blocked, or that still targets a merged branch.
-- **Denied**: a tool call that auto mode denied. `/api/agent/<run>/<ticket key>/<n>?project=<name>` marks each one `"denied": true`. Check the newest agent log of the running ticket.
+- **Gate**: a pull request whose checks are red with no fix running, that is green with auto-merge off, or that GitHub reports conflicting or blocked.
+- **Denied**: a tool call that auto mode denied. `/api/agent/<KEY>/<KEY>/<n>?project=<name>` marks each one `"denied": true`. Check the newest agent log of the running ticket.
 - **Plan**: `five_hour.utilization` of `/api/usage`, the newest meter reading on the host, above 0.8, or `plan.fits.five_hour` at 0. The loop pauses at the limit and resumes at `resets_at` (rule 8).
 - **Paused**: a ticket's `step.paused` is true.
 - **Errors**: a stack trace in the unit's journal, a `fail` or `loop-error` line in `decisions.jsonl`, or an `agent-*.err` with content.
@@ -72,7 +72,7 @@ Done when every flag has its proper fix and a verdict.
 Plain words, local times, durations in minutes. A blank line between every line, so each one stands alone. No headings, tables, or preamble.
 
 ```
-🟡 TIDE-14 Tide alerts · running 49 min
+🟡 tidepool · running 49 min
 
 ✅ 2 merged · 🔄 1 running · ⏳ 2 waiting · 🛑 0 stuck
 
@@ -89,7 +89,7 @@ Plain words, local times, durations in minutes. A blank line between every line,
 👉 **No fix needed**: the loop pauses at the limit and resumes at 4:10 PM (rule 8)
 ```
 
-- The first line's dot: 🟢 running clean, 🟡 running with a flag, 🔴 stopped, dead, or stuck, ✅ finished, with the Epic's archive pull request link when it has one.
+- The first line's dot: 🟢 running clean, 🟡 running with a flag, 🔴 stopped, dead, or stuck, ✅ idle with an empty queue, with the link of an Epic's archive pull request while it is open.
 - Each flag, worst first: ⚠️ what is wrong and its cause, 🔧 the proper fix in one line, 👉 the verdict. A **No fix needed** flag skips the 🔧 line.
 - With **You're needed**, the 👉 line says what KC has to do or decide.
 - A clean run ends with `👉 Nothing needs a fix.`

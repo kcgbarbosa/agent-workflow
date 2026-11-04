@@ -1,12 +1,12 @@
 ---
 name: setup-loop
-description: Set up the deterministic loop in a repo, a script that turns each ticket of an Epic into a pull request that merges when the shared merge gate passes.
+description: Set up the deterministic loop in a repo, a script that turns each ready ticket of the queue into a pull request that merges when the shared merge gate passes.
 disable-model-invocation: true
 ---
 
 # Setup loop
 
-The **loop** is a script that builds one Epic unattended, one pull request per ticket. The script decides which ticket runs next, and the shared merge gate decides whether it passed. Agents only implement tickets.
+The **loop** is a dispatcher and one worker per ticket, unattended, with one pull request per ticket. The queue's order decides which ticket starts next, and the shared merge gate decides whether it passed. Agents only implement tickets.
 
 [loop.md](loop.md) holds the fixed design and names the settings each repo fills in. [values.md](values.md) says how to find and choose each value, with the check that shows it is wrong. This skill fills in the settings for the current repo and plans the build.
 
@@ -41,8 +41,8 @@ Done when every settings section holds a value, or "not used" with the reason, a
 
 Draft `loop.toml` at the repo root with every key a settings section names, then `docs/agents/loop.md`: a pointer to the fixed design at `~/.claude/skills/setup-loop/loop.md`, then each settings section. A value with a `loop.toml` key lives in `loop.toml` only. The repo doc links to the fixed design, to `loop.toml`, and to the machine README, and restates none of them. Draft these edits with them:
 
-- the issue tracker doc: the rule from the Human steps section, so `to-tickets` follows it
-- the workflow doc: the loop builds an Epic, and `implement` stays for a single ticket
+- the issue tracker doc: the rule from the Human steps section of values.md, and the What Jira holds section of `~/.claude/skills/setup-repo/issue-tracker.md`, so `to-tickets` follows both
+- the workflow doc: the loop builds each ready ticket of the queue, with no stacking, and `implement` stays for a single ticket
 - the go-live checklist, if the repo has one: an item to undo each development-only setting, such as the headless sign-in of the UI review and its test users
 - the `## Agent skills` block of the repo's `AGENTS.md`: one line pointing to `docs/agents/loop.md`, and one line routing a loop failure: a wrong value is fixed in this repo's `loop.toml` or `docs/agents/loop.md`; anything else is a loop bug, fixed in `~/dev/agent-workflow`, where `loop/` and `skills/setup-loop/loop.md` change in one pull request
 

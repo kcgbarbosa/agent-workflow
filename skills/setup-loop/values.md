@@ -30,8 +30,8 @@ A person can also ask a remote session on the host to run it. The dispatcher is 
 
 **Check.**
 
-- The children query returns the tickets of a real Epic and none of another. A ticket that the query misses is linked to the Epic by another field, and the loop never sees it.
-- A ticket with a blocker shows the link type "Blocks". A repo that uses another link name gets no edges, and the frontier starts blocked tickets at once.
+- The children query returns the tickets of a real Epic and none of another. A ticket that the query misses is linked to the Epic by another field, and the Epic check closes the Epic without it.
+- A ticket with a blocker shows the link type "Blocks". A repo that uses another link name gets no edges, and the dispatcher starts blocked tickets at once.
 - The site has a field named Flagged. If the field is missing, the loop cannot mark a stuck ticket, and the setup session adds it (step 4 of the skill).
 - Move one ticket by hand to `in_progress` and to `landed`. If the workflow refuses a move, change the workflow or the name.
 
@@ -45,13 +45,13 @@ A person can also ask a remote session on the host to run it. The dispatcher is 
 
 **Find.** Read the backlog for steps that need a person: creating accounts or test users in a third-party service, domain and DNS changes, production credentials, billing, roles and permissions in an identity or cloud provider, installs on a host.
 
-**Choose.** Setup is never a ticket. The setup skills do each setup step in their own session (step 4 of the skill), and ask the user in the conversation only for a step with no API, then check it. In an Epic, an agent does every step it can. A ticket is a human step only when an attempt failed on a blocker that needs a person, when the step is dangerous and the owner has not consented to it, or when it is a one-off live change the owner follows, such as a cutover. The reason is that a ticket marked human by habit sticks, and every ticket downstream of a stuck one waits (rule 7). Auto mode holds changes to sensitive admin controls until a person approves them, and an unattended agent stops there, so make such a change in the setup session, where the user approves it.
+**Choose.** Setup is never a ticket. The setup skills do each setup step in their own session (step 4 of the skill), and ask the user in the conversation only for a step with no API, then check it. An agent does every step it can, and a step only a person can do gets no ticket. Flag a ticket only when an agent tried it and a blocker needs a person, or when the step is dangerous and the owner has not consented to it. The reason is that no worker starts a Flagged ticket, and every ticket downstream of it waits (rule 7). Auto mode holds changes to sensitive admin controls until a person approves them, and an unattended agent stops there, so make such a change in the setup session, where the user approves it.
 
 Write the rule in the issue tracker doc, so `to-tickets` follows it:
 
-> Setup is never a ticket: the setup skills do it in their session. Mark a ticket as a human step only when an agent tried it and a blocker needs a person, when the step is dangerous and the owner has not consented, or when it is a one-off live change such as a cutover. An agent does every other step.
+> Setup is never a ticket: the setup skills do it in their session. Mark a ticket Flagged only when an agent tried it and a blocker needs a person, or when the step is dangerous and the owner has not consented. An agent does every other step.
 
-**Check.** Each human ticket in the Epic names its blocker, its danger, or its live change. No ticket in the Epic is a setup step.
+**Check.** Each Flagged ticket names its blocker or its danger. No ticket is a setup step or a step only a person can do.
 
 ## Branches and commits
 
@@ -160,7 +160,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 **Find.** `claude mcp list`, and the `.mcp.json` in the repo.
 
-**Choose.** Commit a `.mcp.json` that lists only the servers the Epic's tickets need, such as a browser for the UI review. A repo with no `.mcp.json` leaves each run the host's servers, and each one adds its tool names to every turn. A repo that needs none commits an empty file, `{"mcpServers": {}}`, which gives each run no server. The ticket file holds the ticket text, so a run needs no tracker connector.
+**Choose.** Commit a `.mcp.json` that lists only the servers the repo's tickets need, such as a browser for the UI review. A repo with no `.mcp.json` leaves each run the host's servers, and each one adds its tool names to every turn. A repo that needs none commits an empty file, `{"mcpServers": {}}`, which gives each run no server. The ticket file holds the ticket text, so a run needs no tracker connector.
 
 **Check.** In the first run, the agent log lists the connected servers. It lists the repo's and no others.
 
@@ -189,7 +189,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 ## Secrets
 
-**Find.** List every credential the loop and its agents use. The script needs `JIRA_EMAIL`, `JIRA_API_TOKEN`, and `NTFY_TOPIC`. The agents add what the app, the tests, and the UI review need: keys of a non-production identity provider, the test users' passwords, keys of a development cloud account, and the Claude token below.
+**Find.** List every credential the loop and its agents use. The script needs `JIRA_EMAIL`, `JIRA_API_TOKEN`, and the secret of the notify kind, `NTFY_TOPIC` or the name in `[notify] secret`. The agents add what the app, the tests, and the UI review need: keys of a non-production identity provider, the test users' passwords, keys of a development cloud account, and the Claude token below.
 
 **Choose.**
 
@@ -200,7 +200,7 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 **Make.** `/setup-loop` makes the store in its own session: the Secrets Manager organisation, the `loop` project, the host's machine account and its access token, the token file `~/.config/bws/token.env` that holds `BWS_ACCESS_TOKEN=<token>` with mode 600, `bws` on the host, and each secret through `bws secret create`. Ask KC in the conversation only for a step with no API, such as a machine account's access token, which Bitwarden shows once, in its web app. Check each step right after it.
 
-**Check.** `bws secret list` with the host's token lists each name. `loop start` checks the token file and the names, and refuses with the one that is missing. Run `loop start` on each host before the first Epic.
+**Check.** `bws secret list` with the host's token lists each name. `loop start` checks the token file and the names, and refuses with the one that is missing. Run `loop start` on each host before the first ticket.
 
 ## Hosts
 
@@ -208,11 +208,11 @@ Tidepool's example. The app signs in through a hosted page of an identity provid
 
 **Choose.** List in `tools` each command the agent calls that the script does not check itself, such as `make`, `uv`, or `npm`. The script already checks `git`, `claude`, `gh`, `systemd-inhibit`, and `docker` when `[stack]` is set. Each host runs Linux with systemd and Node 22.18 or later, and also needs the `loop` command from agent-workflow's `install.sh`, linger on for the user, `bws` and its token file (Secrets), `gh` signed in, Docker Engine running, and the browsers of the browser tests.
 
-**Check.** `loginctl show-user $USER -p Linger` prints `Linger=yes`. Run `loop start` on each host. A missing prerequisite ends the run at once, and `journalctl --user -u loop-<name>-<Epic key>` names every one.
+**Check.** `loginctl show-user $USER -p Linger` prints `Linger=yes`. Run `loop start` on each host. A missing prerequisite ends the run at once, and `journalctl --user -u loop-<name>-dispatch` or `loop-<name>-<KEY>` names every one.
 
 ## Limits
 
-**Choose.** Keep `parallel` at 1 for the first Epic, because each parallel ticket runs a full stack, adds to the plan meter, and adds merge conflicts. Raise it when the first-pass rate is high and the host has memory for the stacks. The other defaults suit most repos. `agent_timeout_minutes` should exceed the longest legitimate ticket. `fix_attempts` caps the rework of one ticket. `circuit_breaker` stops a run when tickets stick in a row, because that pattern means a shared cause, such as a red main or a broken gate, and more attempts only spend the plan.
+**Choose.** Keep `parallel` at 1 for the first tickets, because each parallel ticket runs a full stack, adds to the plan meter, and adds merge conflicts. Raise it when the first-pass rate is high and the host has memory for the stacks. The other defaults suit most repos. `agent_timeout_minutes` should exceed the longest legitimate ticket. `fix_attempts` caps the rework of one ticket. `circuit_breaker` stops new workers when tickets stick in a row, because that pattern means a shared cause, such as a red main or a broken gate, and more attempts only spend the plan.
 
 **Check.** After the first tickets, `loop report <KEY>` shows what each one used. Raise a limit only for a cause you understand.
 
@@ -228,14 +228,14 @@ Each host gets the `loop` command from `install.sh`, linger with `loginctl enabl
 
 ## When a value is wrong
 
-| Symptom                                          | Value to fix                                                    |
-| ------------------------------------------------ | --------------------------------------------------------------- |
-| The run's journal names missing commands         | `tools`, or the host                                            |
-| The config refuses the file with an unknown key  | A typo in `loop.toml`                                           |
-| The frontier starts a ticket before its blocker  | The link type of the edges, or the Epic children query          |
-| A ticket cannot move to a status                 | `tracker.in_progress`, `tracker.landed`, or the workflow        |
-| A build fails with "address already in use"      | `ports`, `port_step`, or a process left on a slot port          |
-| A check passes once and fails once               | The check itself. It is flaky, and a fix attempt cannot cure it |
-| A check fails for a missing key on the gate only | A secret the check needs. Use a development default             |
-| The watch page shows red tool calls              | An action that auto mode denies. Make it in a setup session     |
-| The run costs more than the plan allows          | `effort`, then `parallel`                                       |
+| Symptom                                           | Value to fix                                                    |
+| ------------------------------------------------- | --------------------------------------------------------------- |
+| The run's journal names missing commands          | `tools`, or the host                                            |
+| The config refuses the file with an unknown key   | A typo in `loop.toml`                                           |
+| The dispatcher starts a ticket before its blocker | The link type of the edges, or `[queue] filter`                 |
+| A ticket cannot move to a status                  | `tracker.in_progress`, `tracker.landed`, or the workflow        |
+| A build fails with "address already in use"       | `ports`, `port_step`, or a process left on a slot port          |
+| A check passes once and fails once                | The check itself. It is flaky, and a fix attempt cannot cure it |
+| A check fails for a missing key on the gate only  | A secret the check needs. Use a development default             |
+| The watch page shows red tool calls               | An action that auto mode denies. Make it in a setup session     |
+| The run costs more than the plan allows           | `effort`, then `parallel`                                       |

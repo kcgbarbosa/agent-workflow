@@ -15,7 +15,7 @@ Each skill holds its own steps. Where a skill publishes something, `docs/agents/
 | 6   | Gate          | None                                         | `gate / check` and `gate / fuzz`. All green: GitHub squashes the pull request to one commit on the default branch | The git host                             |
 | 7   | Acceptance    | None                                         | The deployed result checked against each ticket's "What the user sees"                                            | Jira                                     |
 
-The owner makes every decision in a grill, approves a PRD before `/to-prd` writes it, and approves the tickets before they are published. Nobody merges by hand: the gate decides, and auto-merge merges. A draft pull request waits until the owner marks it ready. `loop.toml` turns the review on or off.
+The owner makes every decision in a grill, approves a PRD before `/to-prd` writes it, and approves the tickets before they are published. Nobody merges by hand: the gate decides, and auto-merge merges. A draft pull request waits until the owner marks it ready. `[fuzz] enabled` in `loop.toml` turns the fuzz job on or off.
 A repo off the gate, such as machines, has no auto-merge, and the owner merges.
 
 Steps 1 to 3 share one context window. When it fills up, `/handoff` writes a summary and a new window continues from it.
@@ -24,11 +24,11 @@ A decision grill stops after step 1. Its only output is an ADR. A feature grill 
 
 ## Two ways to build
 
-| Way              | Scope                  | Pull requests                                      | Context                                                                                                |
-| ---------------- | ---------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| The loop         | All tickets of an Epic | One for each ticket, once its blockers have merged | A script starts a session for each ticket, and resumes it with the failing checks when the gate is red |
-| A T3 Code thread | One ticket             | One for the ticket                                 | The thread runs `implement` in its own worktree, then pushes and opens the pull request                |
+| Way              | Scope                          | Pull requests                                      | Context                                                                                                |
+| ---------------- | ------------------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| The loop         | Each ready ticket of the queue | One for each ticket, once its blockers have merged | A script starts a session for each ticket, and resumes it with the failing checks when the gate is red |
+| A T3 Code thread | One ticket                     | One for the ticket                                 | The thread runs `implement` in its own worktree, then pushes and opens the pull request                |
 
-The owner picks one for each Epic. `/setup-loop` writes `docs/agents/loop.md` for a repo that uses the loop.
+With the loop, the component decides: the dispatcher builds every ready ticket of the repo's component, so a thread takes only a ticket out of that queue. `/setup-loop` writes `docs/agents/loop.md` for a repo that uses the loop.
 
 With `[correct]` on in `loop.toml`, the loop runs the `correct` skill once a day, and it opens one pull request that makes the most frequent mistake class impossible. `/correct` does the same by hand.
