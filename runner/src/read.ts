@@ -1,7 +1,7 @@
 // The first step of a tick: it gathers the state from Jira, GitHub and T3, and writes nothing. A failed read throws.
 import { linkingEpics } from "./archive.ts";
 import type { Config } from "./config.ts";
-import { branchOf, type EpicState, type State, type TicketState } from "./decide.ts";
+import { branchOf, type EpicState, stuckAt, type State, type TicketState } from "./decide.ts";
 import { checksOf, pullRequestsNaming } from "./github.ts";
 import type { Jira } from "./jira.ts";
 import { listThreads, showThread } from "./t3.ts";
@@ -30,9 +30,12 @@ export async function read(config: Config, jira: Jira, cwd: string): Promise<Sta
   for (const ticket of tickets) {
     const own = threads.filter((thread) => thread.title.startsWith(`${ticket.key}:`));
     const pullRequests = (await pullRequestsNaming(cwd, ticket.key, branchOf(ticket))).filter((pr) => names(pr.headRefName, ticket.key) || pr.title.includes(`(${ticket.key}):`));
+    const comments = await jira.comments(ticket.key);
     items.push({
       ticket,
-      comments: await jira.comments(ticket.key),
+      comments,
+      // Only an unflagged ticket with a `Stuck:` comment needs it, so a tick reads no history for the rest.
+      flaggedAt: !ticket.flagged && stuckAt(comments) ? await jira.flaggedAt(ticket.key) : 0,
       threads: await Promise.all(own.map((thread) => showThread(cwd, thread.threadId))),
       pullRequests: await Promise.all(pullRequests.map(async (pr) => ({ ...pr, checks: pr.state === "OPEN" ? await checksOf(cwd, pr.url) : [] }))),
     });

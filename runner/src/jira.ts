@@ -66,6 +66,20 @@ export class Jira {
     await this.request("PUT", `/rest/api/3/issue/${key}`, { fields: { [field]: [{ value: "Impediment" }] } });
   }
 
+  /** When the Flagged field was last set, in ms, or 0 when it never was. A cleared field has no `to`. */
+  async flaggedAt(key: string): Promise<number> {
+    let latest = 0;
+    for (let start = 0; ; ) {
+      const page = await this.request("GET", `/rest/api/3/issue/${key}/changelog?startAt=${start}`);
+      const entries: Fields[] = page.values ?? [];
+      for (const entry of entries) {
+        if ((entry.items as Fields[]).some((item) => item.field === "Flagged" && item.to)) latest = Math.max(latest, Date.parse(entry.created));
+      }
+      start += entries.length;
+      if (!entries.length || start >= (page.total ?? 0)) return latest;
+    }
+  }
+
   /** Moves the ticket to the status of that name, through the transition that leads there. */
   async transition(key: string, status: string): Promise<void> {
     const path = `/rest/api/3/issue/${key}/transitions`;

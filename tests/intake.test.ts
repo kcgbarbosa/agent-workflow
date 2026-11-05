@@ -41,6 +41,22 @@ test("the Chief's prompt holds each rule of the spec", () => {
   }
 });
 
+test("the Chief's prompt reads the runner's post as a stuck notification and a stuck comment as the runner writes it", () => {
+  const chief = read("bots/chief.md");
+  for (const rule of ["`<KEY> stuck: <reason>`", "`Stuck: <stage>: <reason>.`", "the thread waits on a question", "| `machines`"]) expect(chief).toContain(rule);
+  expect(chief).not.toMatch(/\bdecisions\b/);
+  expect(chief).not.toMatch(/\bloop\b/);
+});
+
+test("the workflow doc and the runner docs say what the runner does", () => {
+  expect(read("docs/agents/workflow.md")).toContain("machines is on the gate and the runner");
+  expect(read("docs/agents/workflow.md")).not.toContain("such as machines");
+  for (const path of ["docs/agents/runner.md", "runner/CLAUDE.md"]) {
+    expect(read(path)).toContain("Slack");
+    expect(read(path)).not.toMatch(/ntfy/i);
+  }
+});
+
 test("to-bug writes a Flagged Bug with no parent, its trace as text, and the intake comment", () => {
   const skill = read("skills/to-bug/SKILL.md");
   for (const rule of ["with no parent", "**Reproduce.**", "pasted in as text", "states the correct behaviour", "Set the component", "Flagged", "Move it from Awaiting Approval to To Do", "`Proposed by intake`"]) {

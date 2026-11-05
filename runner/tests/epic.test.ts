@@ -101,7 +101,7 @@ test("every Epic that links the spec Done opens a pull request that deletes it, 
   expect(world.jira.writes.filter((write) => write.includes("AW-1"))).toEqual(["describe AW-1", "transition AW-1 Done"]);
   expect(tick.stdout).toContain(`AW-1 archive: the pull request ${pr.url} deletes ${SPEC}`);
   // A notification means the owner must act, and this needs nothing of them.
-  expect(world.ntfy.messages).toEqual([]);
+  expect(world.slack.posts).toEqual([]);
 });
 
 test("a dry run prints the archive and the Done, and writes nothing", async () => {

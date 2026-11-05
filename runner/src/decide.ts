@@ -7,7 +7,8 @@ import type { PullRequest } from "./github.ts";
 import type { Ticket, TicketComment } from "./jira.ts";
 import type { Thread } from "./t3.ts";
 
-export type TicketState = { ticket: Ticket; comments: TicketComment[]; threads: Thread[]; pullRequests: PullRequest[] };
+/** `flaggedAt` is when Flagged was last set. It is read only for an unflagged ticket with a `Stuck:` comment, and is 0 otherwise. */
+export type TicketState = { ticket: Ticket; comments: TicketComment[]; flaggedAt: number; threads: Thread[]; pullRequests: PullRequest[] };
 /** An open Epic with a child of this repo's component. `linking` holds the other Epics that link its spec, once its children are all Done. */
 export type EpicState = { epic: Ticket; children: Ticket[]; linking: Ticket[] };
 export type State = { tickets: TicketState[]; epics: EpicState[] };
@@ -34,6 +35,7 @@ const IN_PROGRESS = "In Progress";
 const IN_REVIEW = "In Review";
 const DONE = "Done";
 export const STUCK = "Stuck:";
+const STUCK_PREFIX = /^Stuck: (?:\w+: )?/;
 const CONTINUE = "Runner sent continue:";
 // A pull request comment of an attempt, which names the head SHA it was sent for (ADR-0003).
 const ATTEMPT = /^Runner fix attempt \d+ of \d+ at (\S+):/;
@@ -71,7 +73,7 @@ function firstMessage(ticket: Ticket, branch: string, config: Config): string {
 }
 
 /** The time of the latest `Stuck:` comment. Attempts and continues count only after it, so unflagging gives a fresh count. */
-function stuckAt(comments: TicketComment[]): number {
+export function stuckAt(comments: TicketComment[]): number {
   return Math.max(0, ...comments.filter((comment) => comment.text.startsWith(STUCK)).map((comment) => Date.parse(comment.created)));
 }
 
@@ -84,16 +86,32 @@ function attemptsOf(pr: PullRequest, since: number): { head: string; at: number 
   });
 }
 
-/** The comment, Flagged, and the notification, in that order, once: a Flagged ticket takes no further action. */
-function stuckSteps({ ticket, threads, pullRequests }: TicketState, stage: string, reason: string, config: Config): Step[] {
+/**
+ * The reason of a `Stuck:` comment whose stop has not reached Flagged, since its post failed. A comment followed by a
+ * flag is a stop the owner has since unflagged, which gives a fresh count.
+ */
+function unposted({ comments, flaggedAt }: TicketState): string | undefined {
+  const since = stuckAt(comments);
+  if (!since || flaggedAt >= since) return undefined;
+  const latest = comments.filter((comment) => comment.text.startsWith(STUCK)).at(-1) as TicketComment;
+  return latest.text.replace(STUCK_PREFIX, "").replace(/\.$/, "");
+}
+
+/** The post, then Flagged. A failed post drops the flag, so the next tick repeats both from the comment (`unposted`). */
+function postSteps({ ticket, threads, pullRequests }: TicketState, reason: string, config: Config): Step[] {
   const { key } = ticket;
   const thread = threadOf(threads);
   const link = thread ? config.threadUrl.replace(/\/$/, "") + new URL(thread.link).pathname : (pullRequests.find((pr) => pr.state === "OPEN")?.url ?? "");
+  const jira = `${config.jiraUrl.replace(/\/$/, "")}/browse/${key}`;
   return [
-    { kind: "comment", key, reason, text: `${STUCK} ${stage}: ${reason}.` },
+    { kind: "notify", key, reason, text: `${key} stuck: ${reason}\n${jira}\n${link}` },
     { kind: "flag", key, reason },
-    { kind: "notify", key, reason, text: `${key} stuck: ${reason}\n${link}` },
   ];
+}
+
+/** The comment, the post, and Flagged, in that order, once: a Flagged ticket takes no further action. */
+function stuckSteps(item: TicketState, stage: string, reason: string, config: Config): Step[] {
+  return [{ kind: "comment", key: item.ticket.key, reason, text: `${STUCK} ${stage}: ${reason}.` }, ...postSteps(item, reason, config)];
 }
 
 function planOf(item: TicketState, config: Config, now: number): Plan {
@@ -114,6 +132,8 @@ function planOf(item: TicketState, config: Config, now: number): Plan {
   if (!open && thread && ticket.status !== IN_PROGRESS) status.push({ kind: "status", key, status: IN_PROGRESS, reason: "it has a thread and no pull request" });
   const stuck = (reason: string): Plan => ({ steps: [...status, ...stuckSteps(item, open ? "gate" : "build", reason, config)] });
 
+  const reason = unposted(item);
+  if (reason) return { steps: [...status, ...postSteps(item, reason, config)] };
   if (open?.isDraft) return none(status, "a draft pull request");
   if (thread && thread.pendingRequestCount > 0) return stuck("the thread waits on a question");
   if (thread && active(thread) && quiet(Date.parse(thread.updatedAt))) return stuck(`the thread shows an active turn with no update for longer than ${config.quietMinutes} minutes`);

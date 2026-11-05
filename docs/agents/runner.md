@@ -14,7 +14,7 @@ A new ticket starts as Awaiting Approval, and the owner approves its build by mo
 
 ### Following a build
 
-Each ticket is a T3 thread titled `<KEY>: <summary>`. A stuck ticket is Flagged in Jira, with a `Stuck:` comment and one ntfy notification. To go on, answer in the thread and unflag the ticket.
+Each ticket is a T3 thread titled `<KEY>: <summary>`. A stuck ticket is Flagged in Jira, with a `Stuck:` comment and one post in `#agent-workflow`. When Slack refuses the post, the next tick posts it again, and only then flags the ticket. To go on, answer in the thread and unflag the ticket.
 
 ### Today file
 
@@ -30,7 +30,7 @@ Each tick ends by writing `~/.local/state/runner/<component>/today.json`, or und
 
 ### Secrets
 
-The Jira email and API token and the ntfy topic. Each lives in the `loop` project of Bitwarden Secrets Manager under its env var name, a name that predates the runner. The timer reads them through `~/.config/bws/token.env`. The agent's Claude account is T3's.
+The Jira email and API token, and the Slack webhook of `#agent-workflow`, `SLACK_WEBHOOK_KC_WORKFLOW`. `slack_webhook_env` in `runner.toml` changes the name of the last. Each lives in the `loop` project of Bitwarden Secrets Manager under its env var name, a name that predates the runner. The timer reads them through `~/.config/bws/token.env`. The agent's Claude account is T3's.
 
 ### Gate
 

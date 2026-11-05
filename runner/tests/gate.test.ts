@@ -1,6 +1,8 @@
 // The gate, stopped threads, being told, stepping in, and Jira status, each driven through the `runner` command.
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "vitest";
-import { type PullRequest, World } from "./world.ts";
+import { type PullRequest, WEBHOOK, World } from "./world.ts";
 
 let world: World;
 
@@ -28,7 +30,7 @@ function inReview(values: Partial<PullRequest> = {}, thread = true): void {
 
 /** What a second tick on the same state must leave alone. */
 function writes(): unknown {
-  return { jira: [...world.jira.writes], gh: world.ghWrites(), sends: world.sends(), starts: world.starts(), ntfy: [...world.ntfy.messages] };
+  return { jira: [...world.jira.writes], gh: world.ghWrites(), sends: world.sends(), starts: world.starts(), slack: [...world.slack.posts] };
 }
 
 function status(key = "AW-1"): string | undefined {
@@ -91,7 +93,7 @@ test("a red required check is sent to the thread with its name, and a comment gi
   expect(comment.body).toContain("attempt 1 of 3");
   expect(comment.body).toContain("abc123");
   expect(world.ghWrites()[0].slice(0, 3)).toEqual(["pr", "comment", "https://github.com/o/r/pull/1"]);
-  expect(world.ntfy.messages).toEqual([]);
+  expect(world.slack.posts).toEqual([]);
 });
 
 test("a merge conflict is sent to the thread, with no auto-merge", async () => {
@@ -158,7 +160,7 @@ test("at the cap of attempts the ticket is Flagged, with no fourth message", asy
   expect(flagged()).toBe(true);
   expect(comments()[0]).toMatch(/^Stuck: /);
   expect(comments()[0]).toContain("3 fix attempts");
-  expect(world.ntfy.messages.length).toBe(1);
+  expect(world.slack.posts.length).toBe(1);
 });
 
 test("the cap comes from the config", async () => {
@@ -274,7 +276,7 @@ test("a pull request with no thread is Flagged when it needs a fix, and starts n
   expect(world.starts()).toEqual([]);
   expect(flagged()).toBe(true);
   expect(comments()[0]).toContain("no thread");
-  expect(world.ntfy.messages[0].body).toContain("https://github.com/o/r/pull/1");
+  expect(world.slack.posts[0].text).toContain("https://github.com/o/r/pull/1");
 });
 
 test("a pull request with no thread that is green gets auto-merge and no flag", async () => {
@@ -288,25 +290,49 @@ test("a pull request with no thread that is green gets auto-merge and no flag", 
 
 // Being told.
 
-test("a flag writes the Stuck comment and sends one notification, in that order and once", async () => {
+test("a flag writes the Stuck comment, posts to Slack with the four parts, then flags, in that order and once", async () => {
   world.jira.add("AW-1", "Build", { status: "In Progress" });
   world.thread({ title: "AW-1: Build", waiting: true });
 
   const tick = await world.tick();
 
   expect(world.jira.writes.map((write) => write.split(" ")[0])).toEqual(["comment", "flag"]);
-  expect(tick.lines.map((line) => line.split(/[ :]/)[1])).toEqual(["comment", "flag", "notify"]);
-  const [message, ...others] = world.ntfy.messages;
+  expect(tick.lines.map((line) => line.split(/[ :]/)[1])).toEqual(["comment", "notify", "flag"]);
+  const [post, ...others] = world.slack.posts;
   expect(others).toEqual([]);
-  expect(message.topic).toBe("the-topic");
-  expect(message.body).toContain("AW-1");
-  expect(message.body).toContain("question");
-  expect(message.body).toContain("https://t14.tail4fca58.ts.net:7443/env/seeded%3A1");
-  expect(message.body).not.toContain("127.0.0.1");
+  expect(post.path).toBe(WEBHOOK);
+  expect(post.text.split("\n")).toEqual([
+    "AW-1 stuck: the thread waits on a question",
+    `${world.jira.url}/browse/AW-1`,
+    "https://t14.tail4fca58.ts.net:7443/env/seeded%3A1",
+  ]);
 
   const before = writes();
   await world.tick();
   expect(writes()).toEqual(before);
+});
+
+test.each([
+  ["machines", "SLACK_WEBHOOK_KC_WORKFLOW", WEBHOOK],
+  ["pitchridge", "SLACK_WEBHOOK_PITCHRIDGE", "/services/pitchridge"],
+])("a stuck %s ticket posts to the webhook in %s", async (component, env, path) => {
+  world.config("", component);
+  world.setEnv(env, `${world.slack.url}${path}`);
+  world.jira.add("AW-1", "Build", { status: "In Progress", components: [component] });
+  world.thread({ title: "AW-1: Build", waiting: true });
+
+  await world.tick();
+
+  expect(world.slack.posts.map((post) => post.path)).toEqual([path]);
+});
+
+test("the post escapes what Slack reads as markup", async () => {
+  inReview({ checks: [{ name: "a <b> & c", bucket: "fail" }] }, false);
+
+  await world.tick();
+
+  expect(world.slack.posts[0].text).toContain("a &lt;b&gt; &amp; c failed");
+  expect(comments()[0]).toContain("a <b> & c failed");
 });
 
 test("the address of the notification's link comes from the config", async () => {
@@ -316,7 +342,7 @@ test("the address of the notification's link comes from the config", async () =>
 
   await world.tick();
 
-  expect(world.ntfy.messages[0].body).toContain("https://other.example:8443/env/seeded%3A1");
+  expect(world.slack.posts[0].text).toContain("https://other.example:8443/env/seeded%3A1");
 });
 
 test("a start, a fix, an auto-merge and a merge notify nothing", async () => {
@@ -334,31 +360,114 @@ test("a start, a fix, an auto-merge and a merge notify nothing", async () => {
   expect(tick.code).toBe(0);
   expect(world.starts().length).toBe(1);
   expect(world.sends().length).toBe(1);
-  expect(world.ntfy.messages).toEqual([]);
+  expect(world.slack.posts).toEqual([]);
 });
 
-test("a notification that fails fails the tick, and the next tick repeats nothing", async () => {
-  world.ntfy.down = 500;
+test.each([
+  ["a question", () => {
+    world.jira.add("AW-1", "Build", { status: "In Progress" });
+    world.thread({ title: "AW-1: Build", waiting: true });
+  }, "question"],
+  ["a thread that stopped again", () => {
+    world.jira.add("AW-1", "Build", { status: "In Progress" });
+    world.thread({ title: "AW-1: Build" });
+    world.ticketComment("AW-1", "Runner sent continue: the thread stopped with no pull request.", 10);
+  }, "stopped again"],
+  ["the cap of attempts", () => {
+    inReview({ checks: RED, headRefOid: "bbb222" });
+    world.config("fix_attempts = 1");
+    world.prComment("Runner fix attempt 1 of 1 at aaa111: gate / check failed.", 10);
+  }, "1 fix attempts"],
+  ["a fix turn that pushed nothing", () => {
+    inReview({ checks: RED, headRefOid: "aaa111" });
+    world.prComment("Runner fix attempt 1 of 3 at aaa111: gate / check failed.", LONG_AGO);
+  }, "pushed nothing"],
+])("after %s, a refused post fails the tick before the flag, and the next tick posts and flags with no second comment", async (_name, seed, reason) => {
+  seed();
+  world.slack.down = 500;
+
+  const refused = await world.tick();
+
+  expect(refused.code).not.toBe(0);
+  expect(refused.stderr).toContain("AW-1 failed");
+  expect(refused.stderr).toContain("Slack: HTTP 500");
+  expect(refused.stderr).not.toContain(WEBHOOK);
+  expect(flagged()).toBe(false);
+  const stuck = comments().filter((text) => text.startsWith("Stuck:"));
+  expect(stuck.length).toBe(1);
+  const pullRequestComments = world.pullRequests().flatMap((pr) => pr.comments);
+
+  // Slack still refuses it, and nothing else moves.
+  expect((await world.tick()).code).not.toBe(0);
+  expect(flagged()).toBe(false);
+
+  world.slack.down = null;
+  const retry = await world.tick();
+
+  expect(retry.code).toBe(0);
+  expect(flagged()).toBe(true);
+  expect(comments().filter((text) => text.startsWith("Stuck:"))).toEqual(stuck);
+  expect(world.sends()).toEqual([]);
+  expect(world.pullRequests().flatMap((pr) => pr.comments)).toEqual(pullRequestComments);
+  const [post, ...others] = world.slack.posts;
+  expect(others).toEqual([]);
+  expect(post.text).toContain(reason);
+  expect(post.text.split("\n")[1]).toBe(`${world.jira.url}/browse/AW-1`);
+
+  await world.tick();
+  expect(world.slack.posts.length).toBe(1);
+});
+
+test("a refused post after an earlier stop was unflagged is still posted, with one new comment", async () => {
+  world.jira.add("AW-1", "Build", { status: "In Progress" });
+  world.thread({ title: "AW-1: Build" });
+  world.ticketComment("AW-1", "Stuck: build: the thread stopped again with no pull request.", 40);
+  world.ticketUnflagged("AW-1", 39, 30);
+  world.ticketComment("AW-1", "Runner sent continue: the thread stopped with no pull request.", 20);
+  world.slack.down = 500;
+
+  await world.tick();
+  world.slack.down = null;
+  await world.tick();
+
+  expect(flagged()).toBe(true);
+  expect(comments().filter((text) => text.startsWith("Stuck:")).length).toBe(2);
+  expect(world.sends()).toEqual([]);
+  expect(world.slack.posts.length).toBe(1);
+});
+
+test("a webhook value that cannot be read fails the tick, and no error names it", async () => {
+  world.setEnv("SLACK_WEBHOOK_KC_WORKFLOW", "not-a-secret-url");
   world.jira.add("AW-1", "Build", { status: "In Progress" });
   world.thread({ title: "AW-1: Build", waiting: true });
 
   const tick = await world.tick();
 
   expect(tick.code).not.toBe(0);
-  expect(tick.stderr).toContain("AW-1 failed");
-  expect(tick.stderr).not.toContain("the-topic");
-  expect(flagged()).toBe(true);
-  expect((await world.tick()).code).toBe(0);
-  expect(comments().length).toBe(1);
+  expect(tick.stderr).not.toContain("not-a-secret-url");
+  expect(flagged()).toBe(false);
 });
 
-test("a tick with no ntfy topic exits non-zero before it reads", async () => {
+test("a stuck ticket needs no ntfy topic, and no runner code names ntfy", async () => {
+  world.jira.add("AW-1", "Build", { status: "In Progress" });
+  world.thread({ title: "AW-1: Build", waiting: true });
+
+  const tick = await world.tick();
+
+  expect(tick.code).toBe(0);
+  expect(world.slack.posts.length).toBe(1);
+  const source = join(import.meta.dirname, "..", "src");
+  for (const file of readdirSync(source)) expect(readFileSync(join(source, file), "utf8")).not.toMatch(/ntfy/i);
+});
+
+test("a tick with no webhook value exits non-zero before it reads", async () => {
   world.jira.add("AW-1", "Ready");
-  world.unset("NTFY_TOPIC");
+  world.unset("SLACK_WEBHOOK_KC_WORKFLOW");
   const tick = await world.tick();
   expect(tick.code).not.toBe(0);
-  expect(tick.stderr).toContain("NTFY_TOPIC");
+  expect(tick.stderr).toContain("SLACK_WEBHOOK_KC_WORKFLOW");
   expect(world.starts()).toEqual([]);
+  expect(world.t3Calls()).toEqual([]);
 });
 
 // After I step in.
@@ -376,7 +485,7 @@ test.each([
   expect(world.jira.writes).toEqual([]);
   expect(world.ghWrites()).toEqual([]);
   expect(world.sends()).toEqual([]);
-  expect(world.ntfy.messages).toEqual([]);
+  expect(world.slack.posts).toEqual([]);
 });
 
 test("unflagging at the cap gives a fresh count, and it is not flagged again at once", async () => {
@@ -401,6 +510,7 @@ test("unflagging a fix turn that pushed nothing sends that head again", async ()
   inReview({ checks: RED, headRefOid: "aaa111" });
   world.prComment("Runner fix attempt 1 of 3 at aaa111: gate / check failed.", LONG_AGO);
   world.ticketComment("AW-1", "Stuck: gate: the fix turn pushed nothing.", 10);
+  world.ticketUnflagged("AW-1", 9);
 
   await world.tick();
 
@@ -413,6 +523,7 @@ test("unflagging a stopped thread gives it one more continue", async () => {
   world.thread({ title: "AW-1: Build" });
   world.ticketComment("AW-1", "Runner sent continue: the thread stopped with no pull request.", 30);
   world.ticketComment("AW-1", "Stuck: build: the thread stopped again with no pull request.", 20);
+  world.ticketUnflagged("AW-1", 19, 15);
 
   await world.tick();
 
@@ -425,6 +536,7 @@ test("a continue before the latest Stuck does not count, and one after it does",
   world.thread({ title: "AW-1: Build" });
   world.ticketComment("AW-1", "Runner sent continue: the thread stopped with no pull request.", 30);
   world.ticketComment("AW-1", "Stuck: build: the thread stopped again with no pull request.", 20);
+  world.ticketUnflagged("AW-1", 19, 15);
   world.ticketComment("AW-1", "Runner sent continue: the thread stopped with no pull request.", 10);
 
   await world.tick();
@@ -536,7 +648,7 @@ test.each([
 
   expect(status()).toBe("Done");
   expect(tick.lines).toEqual(["AW-1 status Done: the pull request merged"]);
-  expect(world.ntfy.messages).toEqual([]);
+  expect(world.slack.posts).toEqual([]);
   const before = writes();
   await world.tick();
   expect(writes()).toEqual(before);
@@ -564,10 +676,10 @@ test("a dry run plans each new step and writes nothing", async () => {
 
   expect(tick.code).toBe(0);
   expect(tick.lines.every((line) => line.startsWith("dry-run "))).toBe(true);
-  for (const part of ["AW-1 send", "AW-1 pr-comment", "AW-2 flag", "AW-2 notify", "AW-3 auto-merge"]) expect(tick.stdout).toContain(part);
+  for (const part of ["AW-1 send", "AW-1 pr-comment", "AW-2 notify", "AW-2 flag", "AW-3 auto-merge"]) expect(tick.stdout).toContain(part);
   expect(world.jira.writes).toEqual([]);
   expect(world.ghWrites()).toEqual([]);
   expect(world.sends()).toEqual([]);
-  expect(world.ntfy.messages).toEqual([]);
+  expect(world.slack.posts).toEqual([]);
   expect((await world.dryRun()).stdout).toBe(tick.stdout);
 });
