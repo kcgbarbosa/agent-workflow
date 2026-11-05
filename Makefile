@@ -12,7 +12,8 @@ hooks: root-deps switchboard-deps runner-deps
 	git diff --exit-code
 
 # The repo checks: the docs, the skills, the install script, and the pull request scripts.
-root: root-deps
+# One of them runs the runner's command, so it needs the runner's packages.
+root: root-deps runner-deps
 	npx vitest run
 
 root-deps:
