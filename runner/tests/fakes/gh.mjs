@@ -91,6 +91,7 @@ function create() {
     autoMergeRequest: null,
     comments: [],
     checks: [],
+    author: { login: "kcgbarbosa" },
   });
   save();
   console.log(url);

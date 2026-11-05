@@ -36,8 +36,8 @@ export async function pullRequestsNaming(cwd: string, key: string, branch: strin
 }
 
 /** The open pull requests of the repo, with or without a ticket. */
-export async function openPullRequests(cwd: string): Promise<Pick<PullRequest, "number" | "title" | "url" | "isDraft">[]> {
-  return JSON.parse((await run("gh", ["pr", "list", "--state", "open", "--limit", "100", "--json", "number,title,url,isDraft"], cwd)) || "[]");
+export async function openPullRequests(cwd: string): Promise<(Pick<PullRequest, "number" | "title" | "url" | "isDraft"> & { author: { login: string } })[]> {
+  return JSON.parse((await run("gh", ["pr", "list", "--state", "open", "--limit", "100", "--json", "number,title,url,isDraft,author"], cwd)) || "[]");
 }
 
 /**

@@ -68,8 +68,17 @@ test("the file holds what waits on the owner", async () => {
       { key: "AW-5", reason: "Flagged" },
     ],
     drafts: [{ number: 1, title: "feat(AW-6): a draft" }],
-    red: [{ number: 2, checks: ["gate", "review"] }],
+    red: [{ number: 2, title: "no ticket: two red checks", author: "kcgbarbosa", checks: ["gate", "review"] }],
   });
+});
+
+// The page tells a red build from a red dependency bump by these, and shows the title.
+test("a red pull request names its title and author", async () => {
+  world.pullRequest({ title: "chore(deps): bump a group", headRefName: "dependabot/npm/a", author: "app/dependabot", checks: [{ name: "gate", bucket: "fail" }] });
+
+  await world.tick();
+
+  expect(today().red).toEqual([{ number: 1, title: "chore(deps): bump a group", author: "app/dependabot", checks: ["gate"] }]);
 });
 
 test("the next tick overwrites the file", async () => {

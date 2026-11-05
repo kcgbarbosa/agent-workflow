@@ -26,13 +26,13 @@ Each ticket is a T3 thread titled `<KEY>: <summary>`. A stuck ticket is Flagged 
 
 Each tick ends by writing `~/.local/state/runner/<component>/today.json`, or under `$XDG_STATE_HOME` when that is set, so a page can show what waits on the owner with no secret of its own. A dry run writes it too. A tick whose read fails writes nothing, so the file's age shows the timer's health. The runner never reads the file.
 
-| Field              | Holds                                                                                                    |
-| ------------------ | -------------------------------------------------------------------------------------------------------- |
-| `at`               | The time of the tick, in ISO 8601                                                                        |
-| `awaitingApproval` | The count of Awaiting Approval tickets, with no Epic                                                     |
-| `stuck`            | Each Flagged ticket as `{ key, reason }`: its latest `Stuck:` comment, or `Flagged` when it has none     |
-| `drafts`           | Each open draft pull request of the repo as `{ number, title }`                                          |
-| `red`              | Each open pull request of the repo with a red required check as `{ number, checks }`, the checks by name |
+| Field              | Holds                                                                                                                                           |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `at`               | The time of the tick, in ISO 8601                                                                                                               |
+| `awaitingApproval` | The count of Awaiting Approval tickets, with no Epic                                                                                            |
+| `stuck`            | Each Flagged ticket as `{ key, reason }`: its latest `Stuck:` comment, or `Flagged` when it has none                                            |
+| `drafts`           | Each open draft pull request of the repo as `{ number, title }`                                                                                 |
+| `red`              | Each open pull request of the repo with a red required check as `{ number, title, author, checks }`, the author by login and the checks by name |
 
 ### Daily tasks
 

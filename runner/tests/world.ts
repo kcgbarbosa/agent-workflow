@@ -22,6 +22,7 @@ export type PullRequest = {
   mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   checks?: Check[];
   autoMergeRequest?: unknown;
+  author?: string;
 };
 
 const MINUTE = 60_000;
@@ -143,11 +144,11 @@ export class World {
     writeFileSync(file, JSON.stringify(state));
   }
 
-  pullRequest({ title, headRefName, state = "OPEN", isDraft = false, headRefOid = "aaa111", mergeable = "MERGEABLE", checks = [] }: PullRequest): void {
+  pullRequest({ title, headRefName, state = "OPEN", isDraft = false, headRefOid = "aaa111", mergeable = "MERGEABLE", checks = [], author = "kcgbarbosa" }: PullRequest): void {
     const pullRequests = this.pullRequests();
     const number = pullRequests.length + 1;
     const url = `https://github.com/o/r/pull/${number}`;
-    pullRequests.push({ number, url, title, headRefName, state, isDraft, headRefOid, mergeable, autoMergeRequest: null, comments: [], checks });
+    pullRequests.push({ number, url, title, headRefName, state, isDraft, headRefOid, mergeable, autoMergeRequest: null, comments: [], checks, author: { login: author } });
     this.savePullRequests(pullRequests);
   }
 
