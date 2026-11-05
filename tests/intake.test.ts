@@ -98,6 +98,10 @@ test("the Chief's prompt holds the fuzz findings of the morning brief", () => {
   }
 });
 
+test("the morning brief reads no label that no repo has", () => {
+  expect(read("bots/chief.md")).not.toContain("blast:");
+});
+
 test("the Chief's prompt writes an idea that the runner cannot start", () => {
   const chief = read("bots/chief.md");
   for (const rule of ["with the label `idea`", "the owner's words as its body, and no component", "Never move a ticket with the label `idea` to To Do", "it needs a grill", "| An idea from the owner"]) expect(chief).toContain(rule);

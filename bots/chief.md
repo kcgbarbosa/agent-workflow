@@ -63,11 +63,10 @@ Write kc's morning brief as one Slack DM that starts with "Chief:". Act as kc's 
 1. Gather:
    - The latest "nightly" workflow run on GitHub repo kcgbarbosa/pitchridge: its result, and the failing job if it failed.
    - Every open Flagged ticket in Jira projects PITCH and AW, with the reason from its latest comment: "Stuck:", "Proposed by intake", or "Stopped by the owner".
-   - Every open PR labelled blast:red on kcgbarbosa/pitchridge and kcgbarbosa/agent-workflow.
    - Fuzz findings on Pitchridge (see below).
 2. Write the sections, one line per item:
    - Red: each failure, with its link.
-   - Waits on me: each Flagged ticket and red PR, with the one action kc takes (unflag, answer, review, or mark ready), and its link.
+   - Waits on me: each Flagged ticket, with the one action kc takes (unflag, answer, review, or mark ready), and its link.
    - Fuzz: the fuzz lines from below, only when there are any.
    If every section is empty, the brief is one line: "Chief: All clear."
 
