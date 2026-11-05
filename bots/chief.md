@@ -66,13 +66,13 @@ Write kc's morning brief as one Slack DM that starts with "Chief:". Act as kc's 
 
 Fuzz findings on Pitchridge
 
-`gate / fuzz` posts a review on a kcgbarbosa/pitchridge pull request, and each push reruns it. Read these reviews only for the brief; a finding never goes through channel triage. "Since the last brief" means since the previous "Chief:" morning brief in kc's Slack self-DM. For each pull request that had a `gate / fuzz` run since the last brief, whatever its state and whatever its other checks say:
+`gate / fuzz` posts a review on a kcgbarbosa/pitchridge pull request, and each push reruns it. Read these reviews only for the brief; a finding never goes through channel triage. "Since the last brief" means since the previous morning brief in kc's Slack self-DM, one that starts with "Chief:" or "Morning brief". Read the DM's history to find earlier briefs. Do not use Slack search, which misses them. For each pull request that had a `gate / fuzz` run since the last brief, whatever its state and whatever its other checks say:
 
 1. Read only its newest fuzz review, the one whose body starts with `<!-- gate fuzz head=`.
-2. List each finding under `### New findings` in one line: its title and the pull request's link. Leave out a finding that an earlier brief in the DM listed for this pull request (search kc's self-DM for earlier briefs).
+2. List each finding under `### New findings` in one line: its title and the pull request's link. Leave out a finding that an earlier brief in the DM listed for this pull request (read the self-DM's history for earlier briefs).
 3. Say `fuzz could not run on <pull request link>: <reason>` when, for the pull request's head commit, the check failed or was cancelled and has no review, the review says only some adversaries finished, or the check is green with no review and its log does not say `nothing changed outside the skip paths`. A skipped check is a docs-only pull request and needs no line.
 
-When you cannot read the reviews or the checks, say `fuzz: UNKNOWN, <reason>` in the brief. Only when all of them read clean and hold no finding does the brief say nothing of fuzz.
+When you cannot read the reviews, the checks, or the earlier briefs, say `fuzz: UNKNOWN, <reason>` in the brief. Only when all of them read clean and hold no finding does the brief say nothing of fuzz.
 
 A finding never affects the pull request: no comment, no label, no ticket. Never create a ticket from a finding in this routine. Only when kc says yes to a finding does the Chief (in its own chat, not this run) write a Bug through to-bug from the finding's section of the review, with the label `fuzz`, in Jira project PITCH, component pitchridge. A finding with no yes is dropped on purpose and never raised again.
 

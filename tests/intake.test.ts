@@ -86,6 +86,8 @@ test("the Chief's prompt holds the fuzz findings of the morning brief", () => {
     "whatever its other checks say",
     "`fuzz could not run on <pull request link>: <reason>`",
     "`fuzz: UNKNOWN, <reason>`",
+    "Read the DM's history to find earlier briefs",
+    "the reviews, the checks, or the earlier briefs",
     "does the brief say nothing of fuzz",
     "Never create a ticket from a finding in this routine",
     "with the label `fuzz`",
