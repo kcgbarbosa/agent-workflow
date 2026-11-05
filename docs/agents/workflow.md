@@ -5,17 +5,17 @@ Each skill holds its own steps. Where a skill publishes something, `docs/agents/
 
 ## One cycle
 
-| #   | Step          | Skill                                          | Output                                                                                                            | Where it lives                           |
-| --- | ------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| 1   | Feature grill | `grill-with-docs`                              | ADRs and glossary terms                                                                                           | `docs/adr/`, `GLOSSARY.md`               |
-| 2   | Spec          | `to-spec`, then `to-prd` with a PRD            | The spec and the Epic, then the PRD in the Epic description                                                       | `docs/specs/<feature>.md`, the Jira Epic |
-| 3   | Tickets       | `to-tickets`                                   | Tasks with blocking links                                                                                         | Jira, under the Epic                     |
-| 4   | Planning      | None                                           | The hand-set fields on each ticket, and its move from Awaiting Approval to To Do, which approves its build        | Jira                                     |
-| 5   | Build         | The runner, or `implement` in a T3 Code thread | A branch and a pull request for each ticket, with an acceptance test for each line, and auto-merge on             | Git, the git host                        |
-| 6   | Gate          | None                                           | `gate / check` and `gate / fuzz`. All green: GitHub squashes the pull request to one commit on the default branch | The git host                             |
-| 7   | Acceptance    | None                                           | The deployed result checked against each ticket's "What the user sees"                                            | Jira                                     |
+| #   | Step          | Skill                                          | Output                                                                                                      | Where it lives                           |
+| --- | ------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| 1   | Feature grill | `grill-with-docs`                              | ADRs and glossary terms                                                                                     | `docs/adr/`, `GLOSSARY.md`               |
+| 2   | Spec          | `to-spec`, then `to-prd` with a PRD            | The spec and the Epic, then the PRD in the Epic description                                                 | `docs/specs/<feature>.md`, the Jira Epic |
+| 3   | Tickets       | `to-tickets`                                   | Tasks with blocking links                                                                                   | Jira, under the Epic                     |
+| 4   | Planning      | None                                           | The hand-set fields on each ticket, and its move from Awaiting Approval to To Do, which approves its build  | Jira                                     |
+| 5   | Build         | The runner, or `implement` in a T3 Code thread | A branch and a pull request for each ticket, with an acceptance test for each line, and auto-merge on       | Git, the git host                        |
+| 6   | Gate          | None                                           | The repo's required checks. All green: GitHub squashes the pull request to one commit on the default branch | The git host                             |
+| 7   | Acceptance    | None                                           | The deployed result checked against each ticket's "What the user sees"                                      | Jira                                     |
 
-The owner makes every decision in a grill, approves a PRD before `/to-prd` writes it, and approves the tickets before they are published. Nobody merges by hand: the gate decides, and auto-merge merges. A draft pull request waits until the owner marks it ready. `[fuzz] enabled` in `gate.toml` turns the fuzz job on or off.
+The owner makes every decision in a grill, approves a PRD before `/to-prd` writes it, and approves the tickets before they are published. Nobody merges by hand: the gate decides, and auto-merge merges. A draft pull request waits until the owner marks it ready. `[fuzz] enabled` in `gate.toml` turns the fuzz job on or off. The repo's branch protection lists its required checks. `gate.sh protect` of `/setup-repo` requires `gate / check` and `gate / fuzz`, and a fuzz job that is off passes without running. Pitchridge requires only `gate / check`, and its fuzz findings reach the owner through `bots/chief.md`.
 machines is on the gate and the runner too, so nobody merges there by hand. A repo off the gate has no auto-merge, and the owner merges.
 
 Steps 1 to 3 share one context window. When it fills up, `/handoff` writes a summary and a new window continues from it.

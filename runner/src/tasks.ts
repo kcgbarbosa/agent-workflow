@@ -45,9 +45,15 @@ async function register(project: string, config: string, file: string, timeOfDay
   }
 }
 
+/** Each repo's correct gets its own half hour, after the nightly suite and in time for the triage at 06:00 to read its pull request. */
+function correctTime(slot: number): string {
+  const minutes = 3 * 60 + 30 + slot * 30;
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
 /** Whether every task registered. One at a time, so a failure's output stays apart from the next thread's. */
 export async function registerTasks(): Promise<boolean> {
   let done = await register(await projectOf(CHECKOUT), CHECKOUT, "daily-triage.md", "06:00");
-  for (const repo of installedRepos()) done = (await register(repo, repo, "daily-correct.md", "06:30")) && done;
+  for (const [slot, repo] of installedRepos().entries()) done = (await register(repo, repo, "daily-correct.md", correctTime(slot))) && done;
   return done;
 }

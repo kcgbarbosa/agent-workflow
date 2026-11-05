@@ -36,7 +36,7 @@ Each tick ends by writing `~/.local/state/runner/<component>/today.json`, or und
 
 ### Daily tasks
 
-`tasks/` holds the prompts of two T3 scheduled tasks, `Daily triage` at 06:00 in this repo, and `Daily correct` at 06:30 in each repo with an installed runner. The times are the host's clock, which is America/Toronto. Run `runner tasks` on t14 after a change to a file there, since T3 keeps its own copy of each prompt. It starts one thread for each task, which updates the task of the same title, prints each reply, and exits non-zero when a thread fails. Running it again is safe.
+`tasks/` holds the prompts of two T3 scheduled tasks, `Daily triage` at 06:00 in this repo, and `Daily correct` in each repo with an installed runner, from 03:30, a half hour apart in the order of the repos' names: 03:30 agent-workflow, 04:00 machines, 04:30 pitchridge. So each correct is after the nightly suite, which starts at 06:17 UTC, and its pull request is there for the triage. The times are the host's clock, which is America/Toronto. Run `runner tasks` on t14 after a change to a file there, since T3 keeps its own copy of each prompt. It starts one thread for each task, which updates the task of the same title, prints each reply, and exits non-zero when a thread fails. Running it again is safe.
 
 ### Secrets
 

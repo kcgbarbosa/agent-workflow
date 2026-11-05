@@ -6,7 +6,7 @@ A ticket moved back to Awaiting Approval stops: the runner gives it no status an
 
 A ticket that leaves Awaiting Approval gets a draft with that comment marked ready and auto-merge on, and the comment `Runner hold released`. The latest of the two comments is how the runner knows its own draft, so a draft the agent or the owner made stays a draft (ADR-0004).
 
-A Bug that `/to-bug` writes starts unflagged and moves to To Do, so it builds at the next tick. The Chief DMs the owner the key, and `stop <KEY>` in that DM moves the ticket to Awaiting Approval. The Bug the Chief files for a repeated stuck fingerprint is the exception: it is created Flagged, since it changes the runner itself.
+A Bug that `/to-bug` writes starts unflagged and moves to To Do, so it builds at the next tick. The Chief DMs the owner the key, and `stop <KEY>` in the Chief's chat in Grokbot moves the ticket to Awaiting Approval. The Bug the Chief files for a repeated stuck fingerprint is the exception: it is created Flagged, since it changes the runner itself.
 
 ## Considered Options
 
@@ -15,5 +15,6 @@ A Bug that `/to-bug` writes starts unflagged and moves to To Do, so it builds at
 
 ## Amendments
 
+- `stop <KEY>` came in the DM. Changed because Slack became the place for notifications and the Chief's chat the place for asks, and a message in the DM does not reach the Chief.
 - A Bug that `/to-bug` wrote was Flagged, so unflagging was the owner's one approval, and a stop only withheld auto-merge. Changed because every fix waited on an unflag, and because auto-merge already on could still merge a stopped build.
 - The status was named `Backlog`. Renamed because Jira's own backlog is a separate thing, so the name meant two things on one board.

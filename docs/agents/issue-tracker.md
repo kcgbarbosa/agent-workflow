@@ -62,7 +62,12 @@ A pull request here names no key of another project, such as `PITCH`, because a 
 
 ## Labels
 
-Tickets carry no readiness labels. Apply none.
+Tickets carry no readiness labels. Apply none. A label that says where a ticket came from is the skill's to apply, such as `fuzz` in `/to-bug`.
+
+`idea` marks a ticket the Chief wrote from the owner's words, with no component, so the runner cannot see it. A grill takes it out. For a small change, rewrite the ticket with the full body and a component, and take the label off. For a feature, `/to-spec` and `/to-tickets` write the tickets, and the idea moves to Done with the label `wont-do` and a comment that links them.
+
+- Ideas: `labels = idea AND statusCategory != Done`
+- Ready to approve: `status = "Awaiting Approval" AND issuetype != Epic AND (labels != idea OR labels is EMPTY)`
 
 ## When a skill says "publish to the issue tracker"
 

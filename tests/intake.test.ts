@@ -9,7 +9,7 @@ test("the Chief's prompt holds each rule of the spec", () => {
   for (const rule of [
     "Tickets, not code",
     "Never merge",
-    "The owner's asks come in the DM",
+    "The owner's asks come in your chat in Grokbot",
     "the runner's messages come in the repo's channel",
     "Find a duplicate in Jira first",
     "Never post a root message",
@@ -52,11 +52,11 @@ test("the workflow doc and the runner docs say what the runner does", () => {
   }
 });
 
-test("the Chief's prompt tells the owner of each Bug and takes a stop in the DM", () => {
+test("the Chief's prompt tells the owner of each Bug and takes a stop in its chat", () => {
   const chief = read("bots/chief.md");
   for (const rule of [
     "DM the owner the key and the summary right after the create",
-    "`stop <KEY>` in the DM",
+    "`stop <KEY>` in your chat",
     "move the ticket to Awaiting Approval",
     "reply with what the build had reached",
     "The Bug for a repeated fingerprint is created Flagged",
@@ -71,6 +71,64 @@ test("the Chief's prompt takes a Sentry alert as a root message of the channel, 
   expect(chief).not.toMatch(/hourly/i);
   expect(chief).not.toMatch(/gmail/i);
   expect(chief).not.toContain("exception");
+});
+
+test("the Chief's prompt holds the fuzz findings of the morning brief", () => {
+  const chief = read("bots/chief.md");
+  for (const rule of [
+    "at 6 AM ET, once a day",
+    "one Slack DM that starts with \"Chief:\"",
+    "A `gate / fuzz` review is Status too",
+    "in its own chat, not this run",
+    "newest fuzz review",
+    "`<!-- gate fuzz head=`",
+    "`### New findings`",
+    "whatever its other checks say",
+    "`fuzz could not run on <pull request link>: <reason>`",
+    "`fuzz: UNKNOWN, <reason>`",
+    "Read the DM's history to find earlier briefs",
+    "the reviews, the checks, or the earlier briefs",
+    "does the brief say nothing of fuzz",
+    "Never create a ticket from a finding in this routine",
+    "with the label `fuzz`",
+    "never raised again",
+    "| An approved fuzz finding     | PITCH   | `pitchridge`     |",
+  ]) {
+    expect(chief).toContain(rule);
+  }
+});
+
+test("the morning brief reads no label that no repo has", () => {
+  expect(read("bots/chief.md")).not.toContain("blast:");
+});
+
+test("the Chief's prompt writes an idea that the runner cannot start", () => {
+  const chief = read("bots/chief.md");
+  for (const rule of ["with the label `idea`", "the owner's words as its body, and no component", "Never move a ticket with the label `idea` to To Do", "it needs a grill", "| An idea from the owner"]) expect(chief).toContain(rule);
+  expect(read("runner/src/read.ts")).toContain("component = ${JSON.stringify(config.component)}");
+  for (const path of ["docs/agents/issue-tracker.md", "skills/setup-repo/issue-tracker.md"]) expect(read(path)).toContain("`idea` marks a ticket");
+});
+
+test("the Chief's checks name what they test, and the worst a check does is one test ticket", () => {
+  const checks = read("bots/chief-checks.md");
+  for (const text of ["`<!-- gate fuzz head=`", "0f9bd3b", "`stop <KEY>`", "`idea`", "Create nothing", "`wont-do`"]) expect(checks).toContain(text);
+});
+
+test("the fuzz review carries what the Chief reads", () => {
+  const fuzz = read("actions/fuzz/fuzz.py");
+  for (const text of ["<!-- gate fuzz head=", "### New findings", "adversaries finished", "nothing changed outside the skip paths"]) expect(fuzz).toContain(text);
+});
+
+test("to-bug takes a fuzz finding only on the owner's yes, with its label", () => {
+  const skill = read("skills/to-bug/SKILL.md");
+  for (const rule of ["a fuzz finding the owner approved", "A fuzz finding with no yes from the owner is no report", "the label `fuzz`"]) expect(skill).toContain(rule);
+});
+
+test("the workflow docs do not say every repo needs a green fuzz job", () => {
+  for (const path of ["docs/agents/workflow.md", "skills/setup-repo/workflow.md"]) {
+    expect(read(path)).not.toContain("`gate / check` and `gate / fuzz`. All green");
+    expect(read(path)).toContain("a fuzz job that is off passes without running");
+  }
 });
 
 test("to-bug writes a To Do Bug that is not Flagged, with no parent, its trace as text, and the intake comment", () => {
