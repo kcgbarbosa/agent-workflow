@@ -76,7 +76,10 @@ test("the Chief's prompt takes a Sentry alert as a root message of the channel, 
 test("the Chief's prompt holds the fuzz findings of the morning brief", () => {
   const chief = read("bots/chief.md");
   for (const rule of [
-    "at 6 AM ET, once a day, in the DM",
+    "at 6 AM ET, once a day",
+    "one Slack DM that starts with \"Chief:\"",
+    "A `gate / fuzz` review is Status too",
+    "in its own chat, not this run",
     "newest fuzz review",
     "`<!-- gate fuzz head=`",
     "`### New findings`",
@@ -84,9 +87,9 @@ test("the Chief's prompt holds the fuzz findings of the morning brief", () => {
     "`fuzz could not run on <pull request link>: <reason>`",
     "`fuzz: UNKNOWN, <reason>`",
     "does the brief say nothing of fuzz",
-    "no ticket by yourself",
+    "Never create a ticket from a finding in this routine",
     "with the label `fuzz`",
-    "you never raise it again",
+    "never raised again",
     "| An approved fuzz finding     | PITCH   | `pitchridge`     |",
   ]) {
     expect(chief).toContain(rule);
@@ -100,7 +103,7 @@ test("the fuzz review carries what the Chief reads", () => {
 
 test("to-bug takes a fuzz finding only on the owner's yes, with its label", () => {
   const skill = read("skills/to-bug/SKILL.md");
-  for (const rule of ["a fuzz finding the owner approved in the DM", "A fuzz finding with no yes from the owner is no report", "the label `fuzz`"]) expect(skill).toContain(rule);
+  for (const rule of ["a fuzz finding the owner approved", "A fuzz finding with no yes from the owner is no report", "the label `fuzz`"]) expect(skill).toContain(rule);
 });
 
 test("the workflow docs do not say every repo needs a green fuzz job", () => {

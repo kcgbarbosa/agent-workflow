@@ -1,6 +1,6 @@
 ---
 name: to-bug
-description: Write a Jira Bug from a report, such as a Sentry issue, a Slack message, a red nightly run, or a fuzz finding the owner approved in the DM, with a Reproduce section and the correct behaviour as "What the user sees" lines, To Do so the runner starts it on its next tick. Use for /to-bug.
+description: Write a Jira Bug from a report, such as a Sentry issue, a Slack message, a red nightly run, or a fuzz finding the owner approved, with a Reproduce section and the correct behaviour as "What the user sees" lines, To Do so the runner starts it on its next tick. Use for /to-bug.
 ---
 
 # To Bug
@@ -13,7 +13,7 @@ Read `docs/agents/issue-tracker.md` for the project, the fields, and the ticket 
 
 ### 1. Read the report
 
-The report is a Sentry issue, a Slack message, a red nightly run, or a fuzz finding the owner approved in the DM. A fuzz finding with no yes from the owner is no report. Read all of it: for Sentry, the stack trace, the breadcrumbs, the environment, the release, and the user's role; for Slack, the whole thread; for a nightly run, the failed job's log; for a fuzz finding, its section of the review: the command, the output, and the reproduction.
+The report is a Sentry issue, a Slack message, a red nightly run, or a fuzz finding the owner approved. A fuzz finding with no yes from the owner is no report. Read all of it: for Sentry, the stack trace, the breadcrumbs, the environment, the release, and the user's role; for Slack, the whole thread; for a nightly run, the failed job's log; for a fuzz finding, its section of the review: the command, the output, and the reproduction.
 
 ### 2. Find a duplicate
 
