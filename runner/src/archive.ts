@@ -1,9 +1,10 @@
-// When every Epic that links a spec is Done, the spec leaves the default branch, and git keeps it. Each Spec line that links it changes to link the head of that branch, and a pull request deletes the files,
-// with auto-merge on. It works in a fresh clone of the repo the Spec line links, which can be another repo than this
+// When every Epic that links a spec is Done and nothing else uses the spec, the spec leaves the default branch, and git keeps it. A pull request deletes the files,
+// with auto-merge on, and each Spec line that links them changes to link a commit that holds them. That link is what marks a
+// Done Epic as finished, so it moves last. It works in a fresh clone of the repo the Spec line links, which can be another repo than this
 // one. GitHub, Jira and git hold the state, so a second archive repeats no side effect.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { run } from "./exec.ts";
 import { autoMerge, create, openFrom } from "./github.ts";
 import type { Jira, Ticket } from "./jira.ts";
@@ -17,6 +18,11 @@ const SPEC_LINE = /^\s*\**spec\**[.:]/i;
 export type Link = { url: string; prefix: string; ref: string; path: string };
 /** A link to change, and the Epic whose description holds it. */
 export type Pin = { key: string; link: Link };
+
+/** Whether the Spec line still links a file by a branch, which marks an Epic whose archive has not finished. */
+export function unarchived(description: string): boolean {
+  return specLinks(description).some((link) => !SHA.test(link.ref));
+}
 
 /** The links of the Spec line, each once, all in the repo of its first link. */
 export function specLinks(description: string): Link[] {
@@ -43,32 +49,68 @@ export async function linkingEpics(jira: Jira, epic: Ticket): Promise<Ticket[]> 
   return [...found.values()];
 }
 
+/**
+ * What still uses the Spec line's files on the default branch: each tracked file and each open ticket that names one,
+ * by its file name, because a file can build the path in pieces. A wrong match only keeps a spec, and the log names it.
+ */
+export async function usersOf(jira: Jira, epic: Ticket, cwd: string): Promise<string[]> {
+  const links = specLinks(epic.text);
+  if (!links.length) return [];
+  const folder = mkdtempSync(join(tmpdir(), "runner-uses-"));
+  try {
+    await run("gh", ["repo", "clone", links[0].prefix, folder, "--", "--quiet", "--depth", "1"], cwd);
+    const paths = [...new Set(links.map((link) => link.path))];
+    const left = (await run("git", ["ls-tree", "--name-only", "HEAD", "--", ...paths], folder)).split("\n").filter(Boolean);
+    const users = new Set<string>();
+    for (const name of new Set(left.map((path) => basename(path)))) {
+      // grep exits 1 when it finds nothing, and higher when it fails.
+      const named = await run("sh", ["-c", 'git grep -lF -e "$1"; [ $? -le 1 ]', "sh", name], folder);
+      for (const file of named.split("\n").filter(Boolean)) if (!left.includes(file)) users.add(file);
+      for (const ticket of await jira.search(`issuetype != Epic AND statusCategory != Done AND description ~ "\\"${name}\\"" ORDER BY key ASC`)) users.add(ticket.key);
+    }
+    return [...users].sort();
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
+}
+
 /** Each link to change: this Epic's Spec line, and the lines of the other Epics that link the same files. */
 export function pinsOf(epic: Ticket, linking: Ticket[]): Pin[] {
   const own = specLinks(epic.text);
   return [epic, ...linking].flatMap(({ key, text }) => specLinks(text).filter((link) => own.some((each) => sameFile(link, each))).map((link) => ({ key, link })));
 }
 
-/** Pins the links at the head of the default branch, and opens the pull request. Returns what it did, to log. */
+/** Opens the pull request, and pins the links. Returns what it did, to log. */
 export async function archive(key: string, summary: string, pins: Pin[], jira: Jira, cwd: string): Promise<string> {
   const folder = mkdtempSync(join(tmpdir(), "runner-archive-"));
   try {
     await run("gh", ["repo", "clone", pins[0].link.prefix, folder, "--", "--quiet"], cwd);
-    const commit = (await run("git", ["rev-parse", "HEAD"], folder)).trim();
-    const at = (link: Link) => (SHA.test(link.ref) ? link.url : `${link.prefix}/blob/${commit}/${link.path}`);
-    for (const { key: owner, link } of pins) if (!SHA.test(link.ref)) await jira.replaceInDescription(owner, link.url, at(link));
-
     const paths = [...new Set(pins.map(({ link }) => link.path))].sort();
     const left = (await run("git", ["ls-tree", "--name-only", "HEAD", "--", ...paths], folder)).split("\n").filter(Boolean);
-    if (!left.length) return "the spec is not on the default branch";
-    const branch = `docs/${key}-archive-spec`;
-    const title = `docs(${key}): archive the spec of ${summary.slice(0, 1).toLowerCase()}${summary.slice(1)}`;
-    const url = (await openFrom(folder, branch)) ?? (await openPullRequest(folder, branch, left, title, [...new Set(pins.map(({ link }) => at(link)))].sort()));
-    await autoMerge(folder, url);
-    return `the pull request ${url} deletes ${left.join(", ")}`;
+    const holders = new Map<string, string>();
+    for (const path of paths) holders.set(path, await lastHolder(folder, path, left.includes(path)));
+    const at = (link: Link) => (SHA.test(link.ref) || !holders.get(link.path) ? link.url : `${link.prefix}/blob/${holders.get(link.path)}/${link.path}`);
+
+    let done = "the spec is not on the default branch";
+    if (left.length) {
+      const branch = `docs/${key}-archive-spec`;
+      const title = `docs(${key}): archive the spec of ${summary.slice(0, 1).toLowerCase()}${summary.slice(1)}`;
+      const url = (await openFrom(folder, branch)) ?? (await openPullRequest(folder, branch, left, title, [...new Set(pins.map(({ link }) => at(link)))].sort()));
+      await autoMerge(folder, url);
+      done = `the pull request ${url} deletes ${left.join(", ")}`;
+    }
+    for (const { key: owner, link } of pins) if (at(link) !== link.url) await jira.replaceInDescription(owner, link.url, at(link));
+    return done;
   } finally {
     rmSync(folder, { recursive: true, force: true });
   }
+}
+
+/** The newest commit that holds the file: the head, or the parent of the commit that deleted it. Nothing when it never was on the branch. */
+async function lastHolder(folder: string, path: string, onHead: boolean): Promise<string> {
+  if (onHead) return (await run("git", ["rev-parse", "HEAD"], folder)).trim();
+  const deleted = (await run("git", ["rev-list", "-1", "HEAD", "--", path], folder)).trim();
+  return deleted ? (await run("git", ["rev-parse", `${deleted}^`], folder)).trim() : "";
 }
 
 async function openPullRequest(folder: string, branch: string, paths: string[], title: string, pins: string[]): Promise<string> {

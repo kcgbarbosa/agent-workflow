@@ -1,8 +1,8 @@
 // The first step of a tick: it gathers the state from Jira, GitHub and T3, and writes nothing. A failed read throws.
-import { linkingEpics } from "./archive.ts";
+import { linkingEpics, specLinks, unarchived, usersOf } from "./archive.ts";
 import type { Config } from "./config.ts";
 import { branchOf, type EpicState, stuckAt, type State, type TicketState } from "./decide.ts";
-import { checksOf, pullRequestsNaming } from "./github.ts";
+import { checksOf, pullRequestsNaming, repoUrl } from "./github.ts";
 import type { Jira } from "./jira.ts";
 import { listThreads, showThread } from "./t3.ts";
 
@@ -11,13 +11,22 @@ function names(branch: string, key: string): boolean {
   return new RegExp(`(?<![\\w-])${key}(?!\\w)`).test(branch);
 }
 
-/** The open Epics with a child of this repo's component. Only an Epic whose children are all Done needs its linking Epics. */
-async function readEpics(config: Config, jira: Jira): Promise<EpicState[]> {
+/**
+ * The open Epics with a child of this repo's component, and the Done Epics whose archive has not finished. A Done Epic is
+ * also this runner's when its Spec line links this repo, because its children can predate the component. Only an Epic
+ * that is Done, or whose children are all Done, needs its linking Epics and what uses its spec.
+ */
+async function readEpics(config: Config, jira: Jira, cwd: string): Promise<EpicState[]> {
   const epics: EpicState[] = [];
-  for (const epic of await jira.search("issuetype = Epic AND statusCategory != Done ORDER BY key ASC")) {
+  const repo = await repoUrl(cwd);
+  const open = await jira.search("issuetype = Epic AND statusCategory != Done ORDER BY key ASC");
+  const done = (await jira.search("issuetype = Epic AND statusCategory = Done ORDER BY key ASC")).filter((epic) => unarchived(epic.text));
+  for (const epic of [...open, ...done]) {
     const children = await jira.search(`parent = ${epic.key} ORDER BY key ASC`);
-    if (!children.some((child) => child.components.includes(config.component))) continue;
-    epics.push({ epic, children, linking: children.every((child) => child.done) ? await linkingEpics(jira, epic) : [] });
+    const linksHere = epic.done && specLinks(epic.text).some((link) => link.prefix === repo);
+    if (!linksHere && !children.some((child) => child.components.includes(config.component))) continue;
+    const closing = epic.done || children.every((child) => child.done);
+    epics.push({ epic, children, linking: closing ? await linkingEpics(jira, epic) : [], users: closing ? await usersOf(jira, epic, cwd) : [] });
   }
   return epics;
 }
@@ -40,5 +49,5 @@ export async function read(config: Config, jira: Jira, cwd: string): Promise<Sta
       pullRequests: await Promise.all(pullRequests.map(async (pr) => ({ ...pr, checks: pr.state === "OPEN" ? await checksOf(cwd, pr.url) : [] }))),
     });
   }
-  return { tickets: items, epics: await readEpics(config, jira) };
+  return { tickets: items, epics: await readEpics(config, jira, cwd) };
 }

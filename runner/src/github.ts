@@ -82,3 +82,10 @@ export async function openFrom(cwd: string, branch: string): Promise<string | nu
 export async function create(cwd: string, head: string, title: string, body: string): Promise<string> {
   return (await run("gh", ["pr", "create", "--head", head, "--title", title, "--body", body], cwd)).trim().split("\n").at(-1) as string;
 }
+
+/** The GitHub URL of the repo at cwd, as a Spec line links it, or nothing when origin is not on GitHub. */
+export async function repoUrl(cwd: string): Promise<string> {
+  const { stdout } = await output("git", ["remote", "get-url", "origin"], cwd);
+  const name = /github\.com[:/](.+?)(?:\.git)?\s*$/.exec(stdout)?.[1];
+  return name ? `https://github.com/${name}` : "";
+}

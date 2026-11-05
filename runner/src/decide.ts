@@ -10,7 +10,7 @@ import type { Thread } from "./t3.ts";
 /** `flaggedAt` is when Flagged was last set. It is read only for an unflagged ticket with a `Stuck:` comment, and is 0 otherwise. */
 export type TicketState = { ticket: Ticket; comments: TicketComment[]; flaggedAt: number; threads: Thread[]; pullRequests: PullRequest[] };
 /** An open Epic with a child of this repo's component. `linking` holds the other Epics that link its spec, once its children are all Done. */
-export type EpicState = { epic: Ticket; children: Ticket[]; linking: Ticket[] };
+export type EpicState = { epic: Ticket; children: Ticket[]; linking: Ticket[]; users: string[] };
 export type State = { tickets: TicketState[]; epics: EpicState[] };
 
 export type Step = { key: string; reason: string } & (
@@ -227,28 +227,32 @@ function planOf(item: TicketState, config: Config, now: number): Plan {
 }
 
 /**
- * What an open Epic does, after the tickets. A failed archive drops the Done that follows it, so the next tick tries
- * again. Two Epics that link one spec can close on one tick, and then the first by key archives it, so the spec gets
- * one pull request.
+ * What an Epic does, after the tickets. An Epic already Done has only its archive left. A failed archive drops the Done
+ * that follows it, so the next tick tries again. Two Epics that link one spec can close on one tick, and then the first
+ * by key archives it, so the spec gets one pull request. A spec that something uses stays, and the Epic closes: its
+ * link stays on the branch, so a later tick archives the spec when the last use goes.
  */
 function epicSteps(epics: EpicState[]): Step[] {
-  const allDone = (item: EpicState): boolean => item.children.every((child) => child.done);
+  const allDone = (item: EpicState): boolean => item.epic.done || item.children.every((child) => child.done);
   const closing = new Set(epics.filter(allDone).map((item) => item.epic.key));
   return epics.flatMap((item): Step[] => {
-    const { epic, children, linking } = item;
+    const { epic, children, linking, users } = item;
     const { key } = epic;
     if (!allDone(item)) {
       const open = children.filter((child) => !child.done).map((child) => child.key);
       return [{ kind: "skip", key, reason: `${open.join(", ")} ${open.length === 1 ? "is" : "are"} not Done` }];
     }
-    const done: Step = { kind: "status", key, status: DONE, reason: "its last child is Done" };
-    if (!specLinks(epic.text).length) return [{ kind: "skip", key, reason: "its description has no Spec line that links a spec" }, done];
+    const done: Step[] = epic.done ? [] : [{ kind: "status", key, status: DONE, reason: "its last child is Done" }];
+    if (!specLinks(epic.text).length) return [{ kind: "skip", key, reason: "its description has no Spec line that links a spec" }, ...done];
     const waiting = linking.filter((other) => !other.done && !(closing.has(other.key) && key < other.key)).map((other) => other.key);
     if (waiting.length) {
       const verbs = waiting.length === 1 ? "links it and is" : "link it and are";
-      return [{ kind: "skip", key, reason: `the spec stays, since ${waiting.join(", ")} ${verbs} not Done` }, done];
+      return [{ kind: "skip", key, reason: `the spec stays, since ${waiting.join(", ")} ${verbs} not Done` }, ...done];
     }
-    return [{ kind: "archive", key, summary: epic.summary, pins: pinsOf(epic, linking), reason: "every Epic that links the spec is Done" }, done];
+    const first = linking.find((other) => other.done && closing.has(other.key) && other.key < key);
+    if (first) return [{ kind: "skip", key, reason: `${first.key} archives the spec` }, ...done];
+    if (users.length) return [{ kind: "skip", key, reason: `the spec stays, since ${users.join(", ")} ${users.length === 1 ? "uses" : "use"} it` }, ...done];
+    return [{ kind: "archive", key, summary: epic.summary, pins: pinsOf(epic, linking), reason: "every Epic that links the spec is Done" }, ...done];
   });
 }
 

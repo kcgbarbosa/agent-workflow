@@ -26,6 +26,8 @@ const PAGE = 2;
 const PRIORITIES = ["Lowest", "Low", "Medium", "High", "Highest"];
 const JQL = /^component = "([^"]+)" AND statusCategory != Done ORDER BY priority DESC, key ASC$/;
 const OPEN_EPICS = "issuetype = Epic AND statusCategory != Done ORDER BY key ASC";
+const DONE_EPICS = "issuetype = Epic AND statusCategory = Done ORDER BY key ASC";
+const OPEN_TICKETS_NAMING = /^issuetype != Epic AND statusCategory != Done AND description ~ "\\"(.+)\\"" ORDER BY key ASC$/;
 const CHILDREN = /^parent = ([A-Z]+-\d+) ORDER BY key ASC$/;
 const NAMING = /^issuetype = Epic AND description ~ "\\"(.+)\\"" ORDER BY key ASC$/;
 
@@ -182,6 +184,9 @@ export class FakeJira {
         .sort((a, b) => PRIORITIES.indexOf(b.priority) - PRIORITIES.indexOf(a.priority) || byKey(a, b));
     }
     if (jql === OPEN_EPICS) return all.filter((issue) => issue.issueType === "Epic" && issue.status !== "Done").sort(byKey);
+    if (jql === DONE_EPICS) return all.filter((issue) => issue.issueType === "Epic" && issue.status === "Done").sort(byKey);
+    const ticketsNaming = OPEN_TICKETS_NAMING.exec(jql);
+    if (ticketsNaming) return all.filter((issue) => issue.issueType !== "Epic" && issue.status !== "Done" && JSON.stringify(issue.description).includes(ticketsNaming[1])).sort(byKey);
     const children = CHILDREN.exec(jql);
     if (children) return all.filter((issue) => issue.parent === children[1]).sort(byKey);
     const naming = NAMING.exec(jql);

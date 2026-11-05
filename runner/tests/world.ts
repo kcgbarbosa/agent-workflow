@@ -108,6 +108,22 @@ export class World {
     this.git(origin, "update-ref", "refs/heads/main", this.git(origin, "commit-tree", tree, "-p", parent, "-m", message));
   }
 
+  /** Commits to the main of a repo on the fake GitHub: writes each file, and removes each path. */
+  githubRepoChange(name: string, write: Record<string, string>, remove: string[] = []): void {
+    const origin = join(this.fakes, "repos", `${name}.git`);
+    const work = join(this.root, `${name}-change`);
+    this.git(this.root, "clone", "--quiet", origin, work);
+    for (const [path, text] of Object.entries(write)) {
+      mkdirSync(dirname(join(work, path)), { recursive: true });
+      writeFileSync(join(work, path), text);
+    }
+    for (const path of remove) this.git(work, "rm", "--quiet", path);
+    this.git(work, "add", ".");
+    this.git(work, "commit", "--quiet", "-m", "change");
+    this.git(work, "push", "--quiet", "origin", "main");
+    rmSync(work, { recursive: true });
+  }
+
   /** Writes `runner.toml`, with the keys every repo must set before these. */
   config(extra = "", component = "agent-workflow"): void {
     writeFileSync(join(this.repo, "runner.toml"), `component = "${component}"\njira_url = "${this.jira.url}"\n${extra}\n`);
