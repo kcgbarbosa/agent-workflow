@@ -28,9 +28,13 @@ Each tick ends by writing `~/.local/state/runner/<component>/today.json`, or und
 | `drafts`           | Each open draft pull request of the repo as `{ number, title }`                                          |
 | `red`              | Each open pull request of the repo with a red required check as `{ number, checks }`, the checks by name |
 
+### Daily tasks
+
+`tasks/` holds the prompts of two T3 scheduled tasks, `Daily triage` at 06:00 in this repo, and `Daily correct` at 06:30 in each repo with an installed runner. The times are the host's clock, which is America/Toronto. Run `runner tasks` on t14 after a change to a file there, since T3 keeps its own copy of each prompt. It starts one thread for each task, which updates the task of the same title, prints each reply, and exits non-zero when a thread fails. Running it again is safe.
+
 ### Secrets
 
-The Jira email and API token, and the Slack webhook of `#agent-workflow`, `SLACK_WEBHOOK_KC_WORKFLOW`. `slack_webhook_env` in `runner.toml` changes the name of the last. Each lives in the `loop` project of Bitwarden Secrets Manager under its env var name, a name that predates the runner. The timer reads them through `~/.config/bws/token.env`. The agent's Claude account is T3's.
+The Jira email and API token, and the Slack webhook of `#agent-workflow`, `SLACK_WEBHOOK_KC_WORKFLOW`. `slack_webhook_env` in `runner.toml` changes the name of the last. The daily triage reads `SLACK_WEBHOOK_DM`, the webhook of the owner's DM. Each lives in the `loop` project of Bitwarden Secrets Manager under its env var name, a name that predates the runner. The timer reads them through `~/.config/bws/token.env`. The agent's Claude account is T3's.
 
 ### Gate
 

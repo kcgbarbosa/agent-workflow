@@ -1,7 +1,7 @@
 // `runner install` and `runner uninstall`: the user systemd timer and the oneshot service of a repo's tick. Systemd
 // does not start a oneshot service that is still running, so two ticks of one repo cannot overlap. The service loads
 // the host's machine token and runs the tick under `bws run`.
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, join } from "node:path";
 import { load } from "./config.ts";
@@ -58,6 +58,16 @@ WantedBy=timers.target
 
 async function systemctl(cwd: string, ...args: string[]): Promise<void> {
   await run("systemctl", ["--user", ...args], cwd);
+}
+
+/** The folder of each repo with a runner on this host, from the services `install` wrote. */
+export function installedRepos(): string[] {
+  if (!existsSync(folder())) return [];
+  return readdirSync(folder())
+    .filter((file) => file.startsWith("runner-") && file.endsWith(".service"))
+    .sort()
+    .map((file) => /^WorkingDirectory=(.+)$/m.exec(readFileSync(join(folder(), file), "utf8"))?.[1])
+    .filter((repo) => repo !== undefined);
 }
 
 export async function install(cwd: string): Promise<string> {

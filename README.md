@@ -7,6 +7,7 @@ skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
 bots/chief.md    the Chief's prompt, which the owner pastes into Grokbot
 agents/<name>.md a subagent tier on a cheaper model
 runner/          the runner command, a stateless tick that starts a T3 thread for each ready ticket. docs/agents/runner.md gives how it runs here
+tasks/           the prompts of the daily T3 scheduled tasks, which runner tasks registers
 switchboard/     a phone line to the Claude Code sessions on the T14, for the car. Its README is the setup
 config/          the shared Claude Code files settings.json, statusline.sh, keybindings.json, notify.sh and format-markdown.ts, the hook that runs Prettier on each Markdown file an agent edits. install.sh links them into ~/.claude
 docs/            project-skills.md, the registry of skills that live in project repos

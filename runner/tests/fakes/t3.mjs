@@ -25,7 +25,7 @@ function flag(name) {
 
 /** Like the real one, a path names a project only from inside its workspace root, and a T3 worktree is outside it. */
 function refuseUnregistered(project) {
-  if (resolve(project) === state.project || resolve(project).startsWith(`${state.project}/`)) return;
+  for (const root of [state.project, ...(state.projects ?? [])]) if (resolve(project) === root || resolve(project).startsWith(`${root}/`)) return;
   console.error(`No T3 Code project matches '${project}'`);
   process.exit(1);
 }

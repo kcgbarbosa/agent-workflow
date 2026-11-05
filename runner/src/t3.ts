@@ -26,12 +26,15 @@ export type NewThread = {
   message: string;
 };
 
-function t3(args: string[], cwd: string): Promise<string> {
-  return run("t3", ["--log-level", "error", "thread", ...args], cwd);
+/** A thread's whole turn, which takes longer than a call that only reads or starts. */
+const TURN_LIMIT_MS = 10 * 60_000;
+
+function t3(args: string[], cwd: string, limit?: number): Promise<string> {
+  return run("t3", ["--log-level", "error", "thread", ...args], cwd, limit);
 }
 
 /** The main checkout, which is T3's project even from a worktree, since a T3 worktree sits outside the project. */
-async function projectOf(cwd: string): Promise<string> {
+export async function projectOf(cwd: string): Promise<string> {
   return dirname((await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd)).trim());
 }
 
@@ -47,6 +50,12 @@ export async function showThread(cwd: string, id: string): Promise<Thread> {
 export async function startThread(cwd: string, thread: NewThread): Promise<void> {
   const { title, provider, model, base, branch, message } = thread;
   await t3(["start", "--title", title, "--provider", provider, "--model", model, "--worktree", base, "--branch", branch, await projectOf(cwd), message], cwd);
+}
+
+/** Starts a thread in the project's folder and returns its reply. `t3` exits non-zero when the run fails or waits on an answer, so either rejects. */
+export async function askThread(project: string, thread: Pick<NewThread, "title" | "provider" | "model" | "message">): Promise<string> {
+  const { title, provider, model, message } = thread;
+  return (await t3(["start", "--title", title, "--provider", provider, "--model", model, "--wait", project, message], project, TURN_LIMIT_MS)).trim();
 }
 
 /** Sends a message to the thread and returns, with no `--wait`. A busy thread gets it as its next turn. */

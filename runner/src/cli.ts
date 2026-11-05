@@ -1,15 +1,16 @@
 // The `runner` command. A tick reads the state, decides the steps, acts on them, and writes the Today file. `--dry-run`
 // skips the act.
-// `install` and `uninstall` turn the timer of the current repo on and off.
+// `install` and `uninstall` turn the timer of the current repo on and off. `tasks` registers the daily tasks.
 import { act } from "./act.ts";
 import { load } from "./config.ts";
 import { decide, lineOf } from "./decide.ts";
 import { install, uninstall } from "./install.ts";
 import { Jira } from "./jira.ts";
 import { read } from "./read.ts";
+import { registerTasks } from "./tasks.ts";
 import { writeToday } from "./today.ts";
 
-const USAGE = "usage: runner tick [--dry-run] | install | uninstall";
+const USAGE = "usage: runner tick [--dry-run] | install | uninstall | tasks";
 
 /** A secret from the env, which `bws run` fills. */
 function secret(name: string): string {
@@ -38,6 +39,7 @@ async function main(args: string[]): Promise<number> {
     console.log(await (args[0] === "install" ? install : uninstall)(process.cwd()));
     return 0;
   }
+  if (args[0] === "tasks" && args.length === 1) return (await registerTasks()) ? 0 : 1;
   console.error(USAGE);
   return 2;
 }
