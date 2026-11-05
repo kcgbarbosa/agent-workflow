@@ -14,7 +14,7 @@ Tickets live in Jira, project `AW`. They are not files in this repo.
 
 The spec is the source of truth for the build, the tests and the tickets. A ticket names the spec by its repo path, as text with no link, and cites story IDs. It does not copy the spec. Only the Epic links the spec.
 
-When the Epic merges, a pull request deletes the spec, and the Spec line of the Epic changes to link the spec at the head of the default branch at that point, a commit git keeps. With the runner, it does both once every Epic whose Spec line links it is Done. Without the runner, the owner does both by hand. The Spec line is the one line of the Epic that changes after it is written, and no ticket changes.
+When the Epic merges, a pull request deletes the spec, and the Spec line of the Epic changes to link the spec at the head of the default branch at that point, a commit git keeps. With the runner, it does both once every Epic whose Spec line links it is Done, also for an Epic that was Done before the runner ran. A spec that a tracked file or an open ticket names by its file name stays, and the Epic closes. The runner logs what uses it, and archives the spec on the tick after the last use goes. Without the runner, the owner does both by hand. The Spec line is the one line of the Epic that changes after it is written, and no ticket changes.
 
 ## What Jira holds
 
