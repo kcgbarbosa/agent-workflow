@@ -12,7 +12,7 @@ export type Today = {
   awaitingApproval: number;
   stuck: { key: string; reason: string }[];
   drafts: { number: number; title: string }[];
-  red: { number: number; checks: string[] }[];
+  red: { number: number; title: string; author: string; checks: string[] }[];
 };
 
 /** The latest `Stuck:` comment, with no prefix. A ticket can be Flagged with no such comment, by the owner or the Chief. */
@@ -24,7 +24,7 @@ function reasonOf({ comments }: TicketState): string {
 /** Every open pull request of the repo counts, with or without a ticket, so it reads them itself and not from the state. */
 async function readToday({ tickets }: State, cwd: string): Promise<Today> {
   const open = await openPullRequests(cwd);
-  const checked = await Promise.all(open.map(async (pr) => ({ number: pr.number, checks: (await checksOf(cwd, pr.url)).filter((check) => RED_BUCKETS.has(check.bucket)).map((check) => check.name) })));
+  const checked = await Promise.all(open.map(async (pr) => ({ number: pr.number, title: pr.title, author: pr.author.login, checks: (await checksOf(cwd, pr.url)).filter((check) => RED_BUCKETS.has(check.bucket)).map((check) => check.name) })));
   return {
     at: new Date().toISOString(),
     awaitingApproval: tickets.filter(({ ticket }) => ticket.status === AWAITING_APPROVAL && ticket.issueType !== "Epic").length,
