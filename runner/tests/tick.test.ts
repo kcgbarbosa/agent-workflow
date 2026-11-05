@@ -67,7 +67,7 @@ test("a ready ticket gets a thread in its own worktree from the head of main, an
   expect(world.jira.issues.get("AW-1")?.status).toBe("In Progress");
 });
 
-test("a Bug's branch is a fix branch", async () => {
+test("a To Do, unflagged Bug, as `to-bug` writes it, starts on the next tick on a fix branch", async () => {
   world.jira.add("AW-1", "Login fails", { issueType: "Bug" });
   await world.tick();
   expect(world.starts()[0].branch).toBe("fix/AW-1-login-fails");
@@ -132,17 +132,176 @@ test.each([
   expect(world.jira.writes).toEqual([]);
 });
 
-test("a ticket moved back to Awaiting Approval with a red pull request gets no fix and no auto-merge", async () => {
+const HOLD = "Runner hold: Awaiting Approval";
+const PR_URL = "https://github.com/o/r/pull/1";
+
+test("a ticket moved back to Awaiting Approval with a red pull request gets no fix, no auto-merge and no status", async () => {
   world.jira.add("AW-1", "Moved back", { status: "Awaiting Approval" });
   world.thread({ title: "AW-1: Moved back" });
   world.pullRequest({ title: "feat(AW-1): moved back", headRefName: "feat/AW-1-moved-back", checks: [{ name: "gate / check", bucket: "fail" }] });
 
+  await world.tick();
+
+  expect(world.sends()).toEqual([]);
+  expect(world.ghWrites().filter(([, verb]) => verb === "merge")).toEqual([]);
+  expect(world.jira.writes).toEqual([]);
+});
+
+test("a stop with an open pull request turns auto-merge off and makes a draft, once", async () => {
+  world.jira.add("AW-1", "Stopped", { status: "Awaiting Approval" });
+  world.pullRequest({ title: "feat(AW-1): stopped", headRefName: "feat/AW-1-stopped" });
+  world.updatePullRequest({ autoMergeRequest: { enabledAt: "now" } });
+
+  await world.tick();
+
+  expect(world.ghWrites()).toEqual([
+    ["pr", "merge", PR_URL, "--disable-auto"],
+    ["pr", "comment", PR_URL, "--body", HOLD],
+    ["pr", "ready", PR_URL, "--undo"],
+  ]);
+  const [pr] = world.pullRequests();
+  expect(pr.autoMergeRequest).toBeNull();
+  expect(pr.isDraft).toBe(true);
+  expect(pr.comments.map((comment: { body: string }) => comment.body)).toEqual([HOLD]);
+  expect(world.jira.writes).toEqual([]);
+
+  const writes = world.ghWrites();
+  const again = await world.tick();
+
+  expect(world.ghWrites()).toEqual(writes);
+  expect(again.lines).toEqual(["AW-1 skip: status Awaiting Approval"]);
+});
+
+test("a stop on a Flagged ticket still turns auto-merge off and makes a draft", async () => {
+  world.jira.add("AW-1", "Stuck and stopped", { status: "Awaiting Approval", flagged: true });
+  world.pullRequest({ title: "feat(AW-1): stopped", headRefName: "feat/AW-1-stuck-and-stopped" });
+  world.updatePullRequest({ autoMergeRequest: { enabledAt: "now" } });
+
+  await world.tick();
+
+  const [pr] = world.pullRequests();
+  expect(pr.autoMergeRequest).toBeNull();
+  expect(pr.isDraft).toBe(true);
+});
+
+test("a stop whose draft failed makes the draft on the next tick, with no second hold comment", async () => {
+  world.jira.add("AW-1", "Stopped", { status: "Awaiting Approval" });
+  world.pullRequest({ title: "feat(AW-1): stopped", headRefName: "feat/AW-1-stopped" });
+  world.prComment(HOLD);
+
+  await world.tick();
+
+  const [pr] = world.pullRequests();
+  expect(pr.isDraft).toBe(true);
+  expect(pr.comments).toHaveLength(1);
+});
+
+test("a stop with a running turn sends no message, and the turn holds its place", async () => {
+  world.config("limit = 1");
+  world.jira.add("AW-1", "Stopped", { status: "Awaiting Approval" });
+  world.thread({ title: "AW-1: Stopped", running: true });
+  world.pullRequest({ title: "feat(AW-1): stopped", headRefName: "feat/AW-1-stopped", checks: [{ name: "gate / check", bucket: "fail" }] });
+  world.jira.add("AW-2", "Next");
+
   const tick = await world.tick();
 
-  expect(tick.lines).toEqual(["AW-1 skip: status Awaiting Approval"]);
+  expect(world.pullRequests()[0].isDraft).toBe(true);
   expect(world.sends()).toEqual([]);
+  expect(world.starts()).toEqual([]);
+  expect(tick.lines).toContain("AW-2 skip: wait, 1 of 1 places taken");
+});
+
+test("a stop on a draft the runner did not make writes no hold comment, and the draft stays after a resume", async () => {
+  world.jira.add("AW-1", "Stopped", { status: "Awaiting Approval" });
+  world.pullRequest({ title: "feat(AW-1): stopped", headRefName: "feat/AW-1-stopped", isDraft: true });
+
+  await world.tick();
   expect(world.ghWrites()).toEqual([]);
-  expect(world.jira.writes).toEqual([]);
+
+  world.jira.issues.get("AW-1")!.status = "To Do";
+  await world.tick();
+
+  expect(world.pullRequests()[0].isDraft).toBe(true);
+  expect(world.ghWrites()).toEqual([]);
+});
+
+test("a ticket back in To Do whose draft carries the hold comment gets ready and auto-merge on, once", async () => {
+  world.jira.add("AW-1", "Resumed");
+  world.thread({ title: "AW-1: Resumed" });
+  world.pullRequest({ title: "feat(AW-1): resumed", headRefName: "feat/AW-1-resumed", isDraft: true });
+  world.prComment(HOLD, 5);
+
+  await world.tick();
+
+  expect(world.ghWrites()).toEqual([
+    ["pr", "ready", PR_URL],
+    ["pr", "comment", PR_URL, "--body", "Runner hold released"],
+    ["pr", "merge", PR_URL, "--auto", "--squash"],
+  ]);
+  const [pr] = world.pullRequests();
+  expect(pr.isDraft).toBe(false);
+  expect(pr.autoMergeRequest).not.toBeNull();
+  expect(world.jira.issues.get("AW-1")?.status).toBe("In Review");
+
+  const writes = world.ghWrites();
+  await world.tick();
+  expect(world.ghWrites()).toEqual(writes);
+});
+
+test("a ticket in To Do whose draft carries no hold comment stays a draft", async () => {
+  world.jira.add("AW-1", "Agent's draft");
+  world.pullRequest({ title: "feat(AW-1): draft", headRefName: "feat/AW-1-agents-draft", isDraft: true });
+
+  await world.tick();
+
+  expect(world.pullRequests()[0].isDraft).toBe(true);
+  expect(world.ghWrites()).toEqual([]);
+});
+
+test("a draft made after a resume stays a draft", async () => {
+  world.jira.add("AW-1", "Drafted again", { status: "In Review" });
+  world.pullRequest({ title: "feat(AW-1): again", headRefName: "feat/AW-1-drafted-again", isDraft: true });
+  world.prComment(HOLD, 10);
+  world.prComment("Runner hold released", 5);
+
+  await world.tick();
+
+  expect(world.pullRequests()[0].isDraft).toBe(true);
+  expect(world.ghWrites()).toEqual([]);
+});
+
+test("a resume whose release comment failed writes it on the next tick, so a later draft is not taken for the hold", async () => {
+  world.jira.add("AW-1", "Resumed", { status: "In Review" });
+  world.pullRequest({ title: "feat(AW-1): resumed", headRefName: "feat/AW-1-resumed" });
+  world.prComment(HOLD, 5);
+
+  await world.tick();
+
+  expect(world.pullRequests()[0].comments.at(-1).body).toBe("Runner hold released");
+  expect(world.pullRequests()[0].autoMergeRequest).not.toBeNull();
+});
+
+test("a second stop after a resume writes a second hold comment", async () => {
+  world.jira.add("AW-1", "Stopped twice", { status: "Awaiting Approval" });
+  world.pullRequest({ title: "feat(AW-1): twice", headRefName: "feat/AW-1-stopped-twice" });
+  world.prComment(HOLD, 10);
+  world.prComment("Runner hold released", 5);
+
+  await world.tick();
+
+  expect(world.pullRequests()[0].isDraft).toBe(true);
+  expect(world.pullRequests()[0].comments.at(-1).body).toBe(HOLD);
+});
+
+test("a Flagged ticket keeps its held draft until the owner unflags it", async () => {
+  world.jira.add("AW-1", "Flagged in To Do", { flagged: true });
+  world.pullRequest({ title: "feat(AW-1): held", headRefName: "feat/AW-1-flagged-in-to-do", isDraft: true });
+  world.prComment(HOLD, 5);
+
+  await world.tick();
+
+  expect(world.pullRequests()[0].isDraft).toBe(true);
+  expect(world.ghWrites()).toEqual([]);
 });
 
 test("a turn still running on a ticket moved back to Awaiting Approval holds its place, and gets no status", async () => {
@@ -304,10 +463,10 @@ test("a thread waiting on a question, and an active fix on an open pull request,
   expect(world.starts()).toEqual([]);
 });
 
-test("a proposed Bug and a pull request that waits on the gate take no place", async () => {
+test("a Flagged Bug with no thread and a pull request that waits on the gate take no place", async () => {
   world.config("limit = 1");
   world.jira.add("AW-1", "Ready");
-  world.jira.add("AW-2", "Proposed", { issueType: "Bug", flagged: true });
+  world.jira.add("AW-2", "Waits on the owner", { issueType: "Bug", flagged: true });
   world.jira.add("AW-3", "Waits on the gate", { status: "In Review" });
   world.thread({ title: "AW-3: Waits on the gate" });
   world.pullRequest({ title: "feat(AW-3): done", headRefName: "feat/AW-3-waits" });

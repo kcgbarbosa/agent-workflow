@@ -45,8 +45,15 @@ else if (args[1] === "comment") {
   byUrl().comments.push({ body: flag("--body") ?? refuse("comment"), createdAt: new Date().toISOString() });
   save();
 } else if (args[1] === "merge") {
-  if (!args.includes("--auto") || !args.includes("--squash")) refuse("merge");
-  byUrl().autoMergeRequest = { enabledAt: new Date().toISOString() };
+  if (args.includes("--disable-auto")) byUrl().autoMergeRequest = null;
+  else if (args.includes("--auto") && args.includes("--squash")) {
+    // Like the real one, it refuses a draft.
+    if (byUrl().isDraft) refuse("merge of a draft");
+    byUrl().autoMergeRequest = { enabledAt: new Date().toISOString() };
+  } else refuse("merge");
+  save();
+} else if (args[1] === "ready") {
+  byUrl().isDraft = args.includes("--undo");
   save();
 } else refuse("call");
 

@@ -1,6 +1,6 @@
 ---
 name: to-bug
-description: Write a Jira Bug from a report, such as a Sentry issue, a Slack message, or a red nightly run, with a Reproduce section and the correct behaviour as "What the user sees" lines, Flagged until the owner unflags it. Use for /to-bug.
+description: Write a Jira Bug from a report, such as a Sentry issue, a Slack message, or a red nightly run, with a Reproduce section and the correct behaviour as "What the user sees" lines, To Do so the runner starts it on its next tick. Use for /to-bug.
 ---
 
 # To Bug
@@ -34,8 +34,7 @@ Its body is the ticket body of the issue tracker doc, with a **Reproduce** secti
 Create a Jira issue of type Bug, with no parent. Priority stays at the default. Then, in this order:
 
 1. Set the component to the repo the bug is in, by an edit right after the create, since the create screen has none.
-2. Set the ticket Flagged, so nothing builds before the owner unflags it.
-3. Move it from Awaiting Approval to To Do, after Flagged, so unflagging is the owner's one approval.
-4. Comment `Proposed by intake` with the link of the report.
+2. Move it from Awaiting Approval to To Do, after the component, so the runner of that repo starts it on its next tick.
+3. Comment `Proposed by intake` with the link of the report.
 
-Done when the Bug has no parent, the Reproduce section holds the trace as text, the component is set, it is Flagged and To Do, and the comment names the report. Reply with the ticket's link.
+Done when the Bug has no parent, the Reproduce section holds the trace as text, the component is set, it is To Do and not Flagged, and the comment names the report. Reply with the ticket's link.
