@@ -61,6 +61,6 @@ test("no skill an agent is told to run is user-only", () => {
 });
 
 test("the skills no agent starts on its own stay user-only", () => {
-  const skills = ["grill-with-docs", "grill-me", "to-spec", "to-prd", "to-tickets", "handoff", "teach", "setup-repo", "setup-runner", "interrogate"];
+  const skills = ["grill-with-docs", "grill-me", "to-spec", "to-prd", "to-tickets", "handoff", "teach", "setup-repo", "setup-runner", "interrogate", "map-this"];
   expect(skills.filter((name) => !userOnly(name))).toEqual([]);
 });
