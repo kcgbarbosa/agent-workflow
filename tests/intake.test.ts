@@ -9,7 +9,7 @@ test("the Chief's prompt holds each rule of the spec", () => {
   for (const rule of [
     "Tickets, not code",
     "Never merge",
-    "The owner's asks come in the DM",
+    "The owner's asks come in your chat in Grokbot",
     "the runner's messages come in the repo's channel",
     "Find a duplicate in Jira first",
     "Never post a root message",
@@ -52,11 +52,11 @@ test("the workflow doc and the runner docs say what the runner does", () => {
   }
 });
 
-test("the Chief's prompt tells the owner of each Bug and takes a stop in the DM", () => {
+test("the Chief's prompt tells the owner of each Bug and takes a stop in its chat", () => {
   const chief = read("bots/chief.md");
   for (const rule of [
     "DM the owner the key and the summary right after the create",
-    "`stop <KEY>` in the DM",
+    "`stop <KEY>` in your chat",
     "move the ticket to Awaiting Approval",
     "reply with what the build had reached",
     "The Bug for a repeated fingerprint is created Flagged",
@@ -96,6 +96,18 @@ test("the Chief's prompt holds the fuzz findings of the morning brief", () => {
   ]) {
     expect(chief).toContain(rule);
   }
+});
+
+test("the Chief's prompt writes an idea that the runner cannot start", () => {
+  const chief = read("bots/chief.md");
+  for (const rule of ["with the label `idea`", "the owner's words as its body, and no component", "Never move a ticket with the label `idea` to To Do", "it needs a grill", "| An idea from the owner"]) expect(chief).toContain(rule);
+  expect(read("runner/src/read.ts")).toContain("component = ${JSON.stringify(config.component)}");
+  for (const path of ["docs/agents/issue-tracker.md", "skills/setup-repo/issue-tracker.md"]) expect(read(path)).toContain("`idea` marks a ticket");
+});
+
+test("the Chief's checks name what they test, and the worst a check does is one test ticket", () => {
+  const checks = read("bots/chief-checks.md");
+  for (const text of ["`<!-- gate fuzz head=`", "0f9bd3b", "`stop <KEY>`", "`idea`", "Create nothing", "`wont-do`"]) expect(checks).toContain(text);
 });
 
 test("the fuzz review carries what the Chief reads", () => {

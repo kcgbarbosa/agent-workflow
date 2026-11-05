@@ -5,6 +5,7 @@ Skills, the runner, and KC's global instructions. `~/.claude` links into a clone
 ```
 skills/<name>/   a skill (SKILL.md) or a mod (.claude-plugin/plugin.json)
 bots/chief.md    the Chief's prompt, which the owner pastes into Grokbot
+bots/chief-checks.md  what the owner sends the Chief to test what it can do
 agents/<name>.md a subagent tier on a cheaper model
 runner/          the runner command, a stateless tick that starts a T3 thread for each ready ticket. docs/agents/runner.md gives how it runs here
 tasks/           the prompts of the daily T3 scheduled tasks, which runner tasks registers
