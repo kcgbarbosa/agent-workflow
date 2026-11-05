@@ -35,6 +35,11 @@ export async function pullRequestsNaming(cwd: string, key: string, branch: strin
   return [...found.values()];
 }
 
+/** The open pull requests of the repo, with or without a ticket. */
+export async function openPullRequests(cwd: string): Promise<Pick<PullRequest, "number" | "title" | "url" | "isDraft">[]> {
+  return JSON.parse((await run("gh", ["pr", "list", "--state", "open", "--limit", "100", "--json", "number,title,url,isDraft"], cwd)) || "[]");
+}
+
 /**
  * The required check runs, so a failing check that branch protection does not require never reads as red.
  * `gh pr checks` exits 8 while one is pending and 1 when one failed or none exist yet.

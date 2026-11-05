@@ -55,9 +55,9 @@ function list() {
   if ((state !== "all" && state !== "open") || !flag("--json")) refuse("list");
   const head = flag("--head");
   const term = /^"(.+)" in:title$/.exec(flag("--search") ?? "")?.[1];
-  if (!head && !term) refuse("search");
+  if (!head && !term && state !== "open") refuse("search");
   const fields = flag("--json").split(",");
-  const found = pullRequests.filter((pr) => (head ? pr.headRefName === head : pr.title.includes(term)) && (state === "all" || pr.state === "OPEN"));
+  const found = pullRequests.filter((pr) => (head ? pr.headRefName === head : !term || pr.title.includes(term)) && (state === "all" || pr.state === "OPEN"));
   console.log(JSON.stringify(found.map((pr) => Object.fromEntries(fields.map((field) => [field, pr[field]])))));
 }
 

@@ -14,7 +14,7 @@ afterEach(async () => {
   await world.stop();
 });
 
-test("a dry run prints what it would do and writes nothing", async () => {
+test("a dry run prints what it would do and writes nothing to Jira, T3 or git", async () => {
   world.jira.add("AW-1", "Add login");
   world.jira.add("AW-2", "Crashed before its status");
   world.thread({ title: "AW-2: Crashed before its status", running: true });
