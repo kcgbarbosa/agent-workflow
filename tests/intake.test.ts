@@ -73,6 +73,43 @@ test("the Chief's prompt takes a Sentry alert as a root message of the channel, 
   expect(chief).not.toContain("exception");
 });
 
+test("the Chief's prompt holds the fuzz findings of the morning brief", () => {
+  const chief = read("bots/chief.md");
+  for (const rule of [
+    "at 6 AM ET, once a day, in the DM",
+    "newest fuzz review",
+    "`<!-- gate fuzz head=`",
+    "`### New findings`",
+    "whatever its other checks say",
+    "`fuzz could not run on <pull request link>: <reason>`",
+    "`fuzz: UNKNOWN, <reason>`",
+    "does the brief say nothing of fuzz",
+    "no ticket by yourself",
+    "with the label `fuzz`",
+    "you never raise it again",
+    "| An approved fuzz finding     | PITCH   | `pitchridge`     |",
+  ]) {
+    expect(chief).toContain(rule);
+  }
+});
+
+test("the fuzz review carries what the Chief reads", () => {
+  const fuzz = read("actions/fuzz/fuzz.py");
+  for (const text of ["<!-- gate fuzz head=", "### New findings", "adversaries finished", "nothing changed outside the skip paths"]) expect(fuzz).toContain(text);
+});
+
+test("to-bug takes a fuzz finding only on the owner's yes, with its label", () => {
+  const skill = read("skills/to-bug/SKILL.md");
+  for (const rule of ["a fuzz finding the owner approved in the DM", "A fuzz finding with no yes from the owner is no report", "the label `fuzz`"]) expect(skill).toContain(rule);
+});
+
+test("the workflow docs do not say every repo needs a green fuzz job", () => {
+  for (const path of ["docs/agents/workflow.md", "skills/setup-repo/workflow.md"]) {
+    expect(read(path)).not.toContain("`gate / check` and `gate / fuzz`. All green");
+    expect(read(path)).toContain("a fuzz job that is off passes without running");
+  }
+});
+
 test("to-bug writes a To Do Bug that is not Flagged, with no parent, its trace as text, and the intake comment", () => {
   const skill = read("skills/to-bug/SKILL.md");
   for (const rule of ["with no parent", "**Reproduce.**", "pasted in as text", "states the correct behaviour", "`Proposed by intake`", "not Flagged"]) {

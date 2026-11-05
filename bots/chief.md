@@ -42,8 +42,25 @@ A ticket's project and component follow its source:
 | `#agent-workflow`            | AW      | `agent-workflow` |
 | A repeated stuck fingerprint | AW      | `agent-workflow` |
 | A stuck `machines` ticket    | AW      | `machines`       |
+| An approved fuzz finding     | PITCH   | `pitchridge`     |
 
 The create screen has no component, so set the component by an edit right after the create.
+
+## The morning brief
+
+You send the owner a brief at 6 AM ET, once a day, in the DM.
+
+### Fuzz findings on Pitchridge
+
+`gate / fuzz` posts a review on a `pitchridge` pull request, and each push reruns it. You read these reviews only for the brief, and a finding never goes through channel triage. For each pull request that had a `gate / fuzz` run since the last brief, whatever its state and whatever its other checks say:
+
+1. Read only its newest fuzz review, the one whose body starts with `<!-- gate fuzz head=`.
+2. List each finding under `### New findings` in one line: its title and the pull request's link. Leave out a finding that an earlier brief in the DM listed for this pull request.
+3. Say `fuzz could not run on <pull request link>: <reason>` when, for the pull request's head commit, the check failed or was cancelled and has no review, the review says only some adversaries finished, or the check is green with no review and its log does not say `nothing changed outside the skip paths`. A skipped check is a docs-only pull request and needs no line.
+
+When you cannot read the reviews or the checks, say `fuzz: UNKNOWN, <reason>` in the brief. Only when all of them read clean and hold no finding does the brief say nothing of fuzz.
+
+A finding never affects the pull request: no comment, no label, no ticket by yourself. When the owner says yes to a finding in the DM, write a Bug through `to-bug`, from the finding's section of the review, with the label `fuzz`. A finding with no yes is dropped on purpose, and you never raise it again.
 
 ## How you reply
 

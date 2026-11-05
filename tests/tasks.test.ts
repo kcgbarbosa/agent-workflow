@@ -104,8 +104,19 @@ test("runner tasks starts one triage thread, and one correct thread for each rep
   expect(started[0].message).toContain(TRIAGE);
   expect(started[0].message).toContain('"timeOfDay":"06:00"');
   expect(started[1].message).toContain(CORRECT);
-  expect(started[1].message).toContain('"timeOfDay":"06:30"');
+  expect(started[1].message).toContain('"timeOfDay":"03:30"');
+  expect(started[2].message).toContain('"timeOfDay":"04:00"');
   expect(done.stdout).toContain("Daily correct in pitchridge:");
+});
+
+test("each repo's correct has its own half hour, and all run before the triage", () => {
+  const repos = ["agent-workflow", "machines", "pitchridge"].map(repoWithRunner);
+  fakeT3(repos);
+
+  expect(tasks().status).toBe(0);
+
+  const times = starts().map(({ message }) => /"timeOfDay":"(\d\d:\d\d)"/.exec(message)![1]);
+  expect(times).toEqual(["06:00", "03:30", "04:00", "04:30"]);
 });
 
 test("each message tells the thread to update a task of the same title, and leave the task on no thread", () => {

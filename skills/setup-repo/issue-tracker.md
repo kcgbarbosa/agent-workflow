@@ -72,7 +72,7 @@ Every branch, commit and pull request for a ticket carries its key. Jira does no
 
 ## Labels
 
-Tickets carry no readiness labels. Apply none.
+Tickets carry no readiness labels. Apply none. A label that says where a ticket came from is the skill's to apply, such as `fuzz` in `/to-bug`.
 
 ## When a skill says "publish to the issue tracker"
 
