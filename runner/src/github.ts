@@ -60,6 +60,18 @@ export async function autoMerge(cwd: string, url: string): Promise<void> {
   await run("gh", ["pr", "merge", url, "--auto", "--squash"], cwd);
 }
 
+export async function autoMergeOff(cwd: string, url: string): Promise<void> {
+  await run("gh", ["pr", "merge", url, "--disable-auto"], cwd);
+}
+
+export async function draft(cwd: string, url: string): Promise<void> {
+  await run("gh", ["pr", "ready", url, "--undo"], cwd);
+}
+
+export async function ready(cwd: string, url: string): Promise<void> {
+  await run("gh", ["pr", "ready", url], cwd);
+}
+
 /** The url of the open pull request from the branch, if any. */
 export async function openFrom(cwd: string, branch: string): Promise<string | null> {
   const [open] = JSON.parse((await run("gh", ["pr", "list", "--head", branch, "--state", "open", "--json", "url"], cwd)) || "[]");

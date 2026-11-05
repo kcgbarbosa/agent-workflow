@@ -21,6 +21,7 @@ export type PullRequest = {
   headRefOid?: string;
   mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
   checks?: Check[];
+  autoMergeRequest?: unknown;
 };
 
 const MINUTE = 60_000;
@@ -247,7 +248,7 @@ export class World {
     const file = join(this.fakes, "gh.jsonl");
     if (!existsSync(file)) return [];
     const calls: string[][] = readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
-    return calls.filter(([, verb]) => verb === "comment" || verb === "merge" || verb === "create");
+    return calls.filter(([, verb]) => verb === "comment" || verb === "merge" || verb === "create" || verb === "ready");
   }
 
   /** Each message sent to a thread, as its thread's id and its text. */

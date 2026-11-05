@@ -21,6 +21,9 @@ export type Step = { key: string; reason: string } & (
   | { kind: "comment"; text: string }
   | { kind: "pr-comment"; url: string; text: string }
   | { kind: "auto-merge"; url: string }
+  | { kind: "auto-merge-off"; url: string }
+  | { kind: "draft"; url: string }
+  | { kind: "ready"; url: string }
   | { kind: "flag" }
   | { kind: "notify"; text: string }
   | { kind: "archive"; summary: string; pins: Pin[] }
@@ -39,6 +42,9 @@ const STUCK_PREFIX = /^Stuck: (?:\w+: )?/;
 const CONTINUE = "Runner sent continue:";
 // A pull request comment of an attempt, which names the head SHA it was sent for (ADR-0003).
 const ATTEMPT = /^Runner fix attempt \d+ of \d+ at (\S+):/;
+// The pull request comments of a stop and of its resume. The latest of the two tells the runner's draft from any other (ADR-0009).
+const HOLD = "Runner hold: Awaiting Approval";
+const RELEASED = "Runner hold released";
 export const RED_BUCKETS = new Set(["fail", "cancel"]);
 const MINUTE_MS = 60_000;
 
@@ -52,7 +58,7 @@ function active(thread: Thread): boolean {
   return thread.activeRunId !== null || thread.pendingRequestCount > 0;
 }
 
-/** Active turns and stuck tickets hold a place (ADR-0008). A pull request that waits on the gate and a proposed Bug do not. */
+/** Active turns and stuck tickets hold a place (ADR-0008). A pull request that waits on the gate and a Flagged ticket with no thread do not. */
 function holdsPlace({ ticket, threads }: TicketState): boolean {
   return threads.some(active) || (ticket.flagged && threads.length > 0);
 }
@@ -114,6 +120,21 @@ function stuckSteps(item: TicketState, stage: string, reason: string, config: Co
   return [{ kind: "comment", key: item.ticket.key, reason, text: `${STUCK} ${stage}: ${reason}.` }, ...postSteps(item, reason, config)];
 }
 
+/** Whether the runner's hold is still on the pull request. */
+function held(pr: PullRequest): boolean {
+  return pr.comments.filter((comment) => comment.body === HOLD || comment.body === RELEASED).at(-1)?.body === HOLD;
+}
+
+/** The stop of an open pull request: auto-merge off, then a draft. A draft that is not the runner's gets no hold comment, so it stays a draft after a resume. */
+function holdSteps(key: string, open: PullRequest | undefined): Step[] {
+  if (!open) return [];
+  const reason = `status ${AWAITING_APPROVAL}`;
+  const off: Step[] = open.autoMergeRequest ? [{ kind: "auto-merge-off", key, url: open.url, reason }] : [];
+  if (open.isDraft) return off;
+  const hold: Step[] = held(open) ? [] : [{ kind: "pr-comment", key, url: open.url, reason, text: HOLD }];
+  return [...off, ...hold, { kind: "draft", key, url: open.url, reason }];
+}
+
 function planOf(item: TicketState, config: Config, now: number): Plan {
   const { ticket, comments, threads, pullRequests } = item;
   const { key } = ticket;
@@ -121,11 +142,11 @@ function planOf(item: TicketState, config: Config, now: number): Plan {
   const quiet = (since: number): boolean => now - since > config.quietMinutes * MINUTE_MS;
   if (ticket.issueType === "Epic") return none([], "an Epic");
   if (pullRequests.some((pr) => pr.state === "MERGED")) return { steps: [{ kind: "status", key, status: DONE, reason: "the pull request merged" }] };
-  if (ticket.flagged) return none([], "Flagged");
-  // Before the thread and the pull request, so a ticket moved back gets no status, no message and no auto-merge (ADR-0009).
-  if (ticket.status === AWAITING_APPROVAL) return none([], `status ${AWAITING_APPROVAL}`);
-
   const open = pullRequests.find((pr) => pr.state === "OPEN");
+  // Before Flagged, so a stuck ticket that is stopped cannot merge, and before the thread, so it gets no status and no message (ADR-0009).
+  if (ticket.status === AWAITING_APPROVAL) return none(holdSteps(key, open), `status ${AWAITING_APPROVAL}`);
+  if (ticket.flagged) return none([], "Flagged");
+
   const thread = threadOf(threads);
   const status: Step[] = [];
   if (open && ticket.status !== IN_REVIEW) status.push({ kind: "status", key, status: IN_REVIEW, reason: "a pull request is open" });
@@ -134,6 +155,13 @@ function planOf(item: TicketState, config: Config, now: number): Plan {
 
   const reason = unposted(item);
   if (reason) return { steps: [...status, ...postSteps(item, reason, config)] };
+  if (open && held(open)) {
+    const why = "the ticket left Awaiting Approval";
+    const ready: Step[] = open.isDraft ? [{ kind: "ready", key, url: open.url, reason: why }] : [];
+    // As at the gate: not while in conflict, and a later tick turns it on once the conflict is gone.
+    const merge: Step[] = open.autoMergeRequest || open.mergeable === "CONFLICTING" ? [] : [{ kind: "auto-merge", key, url: open.url, reason: why }];
+    return none([...status, ...ready, { kind: "pr-comment", key, url: open.url, reason: why, text: RELEASED }, ...merge], why);
+  }
   if (open?.isDraft) return none(status, "a draft pull request");
   if (thread && thread.pendingRequestCount > 0) return stuck("the thread waits on a question");
   if (thread && active(thread) && quiet(Date.parse(thread.updatedAt))) return stuck(`the thread shows an active turn with no update for longer than ${config.quietMinutes} minutes`);
@@ -245,6 +273,6 @@ export function lineOf(step: Step): string {
   if (step.kind === "status") return `${step.key} status ${step.status}: ${step.reason}`;
   if (step.kind === "start") return `${step.key} start "${step.title}" on ${step.branch}: ${step.reason}`;
   if (step.kind === "send") return `${step.key} send to ${step.threadId}: ${step.reason}`;
-  if (step.kind === "pr-comment" || step.kind === "auto-merge") return `${step.key} ${step.kind} on ${step.url}: ${step.reason}`;
+  if ("url" in step) return `${step.key} ${step.kind} on ${step.url}: ${step.reason}`;
   return `${step.key} ${step.kind}: ${step.reason}`;
 }

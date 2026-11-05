@@ -32,9 +32,9 @@ Issues carry these fields.
 | Sprint    | The board's sprints                                    | The owner                  |
 | Component | The repo the ticket changes                            | `/to-tickets`              |
 
-A new issue starts as Awaiting Approval. The owner moves a ticket to To Do to approve its build, and the runner sets every later status. A ticket moved back to Awaiting Approval stops.
+A new issue starts as Awaiting Approval. The owner moves a ticket to To Do to approve its build, and the runner sets every later status. A ticket moved back to Awaiting Approval stops. A Bug that `/to-bug` writes needs no approval: the skill moves it to To Do.
 A ticket is a Task under an Epic or a Bug with no parent, which `/to-bug` writes from a report.
-Flagged means the ticket waits on the owner, whether it is stuck, proposed, or dangerous.
+Flagged means the ticket waits on the owner, whether it is stuck, a Bug for a repeated stuck fingerprint, or dangerous.
 
 The owner sets priority and the other hand-set fields. A skill that creates an issue leaves them at the Jira default or empty.
 

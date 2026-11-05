@@ -1,5 +1,5 @@
 // The prompt and the skills of intake, which no test can run: each holds the rules the spec gives.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -30,12 +30,9 @@ test("the Chief's prompt holds each rule of the spec", () => {
     "by an edit right after the create",
     "starts with `Chief:`",
     "pull request, merge, deploy, and runner status messages",
-    "7 AM to 11 PM ET",
-    "the label `agents` and without the label `triaged`",
-    "one root message",
     "a step only the owner can do",
     "the label `wont-do`",
-    "Slack, Gmail, Jira, and GitHub",
+    "Slack, Jira, and GitHub",
   ]) {
     expect(chief).toContain(rule);
   }
@@ -57,10 +54,45 @@ test("the workflow doc and the runner docs say what the runner does", () => {
   }
 });
 
-test("to-bug writes a Flagged Bug with no parent, its trace as text, and the intake comment", () => {
+test("the Chief's prompt tells the owner of each Bug and takes a stop in the DM", () => {
+  const chief = read("bots/chief.md");
+  for (const rule of [
+    "DM the owner the key and the summary right after the create",
+    "`stop <KEY>` in the DM",
+    "move the ticket to Awaiting Approval",
+    "reply with what the build had reached",
+    "The Bug for a repeated fingerprint is created Flagged",
+  ]) {
+    expect(chief).toContain(rule);
+  }
+});
+
+test("the Chief's prompt takes a Sentry alert as a root message of the channel, with no hourly check and no Gmail", () => {
+  const chief = read("bots/chief.md");
+  expect(chief).toContain("A Sentry alert is a root message in the repo's channel, and channel triage takes it");
+  expect(chief).not.toMatch(/hourly/i);
+  expect(chief).not.toMatch(/gmail/i);
+  expect(chief).not.toContain("exception");
+});
+
+test("to-bug writes a To Do Bug that is not Flagged, with no parent, its trace as text, and the intake comment", () => {
   const skill = read("skills/to-bug/SKILL.md");
-  for (const rule of ["with no parent", "**Reproduce.**", "pasted in as text", "states the correct behaviour", "Set the component", "Flagged", "Move it from Awaiting Approval to To Do", "`Proposed by intake`"]) {
+  for (const rule of ["with no parent", "**Reproduce.**", "pasted in as text", "states the correct behaviour", "`Proposed by intake`", "not Flagged"]) {
     expect(skill).toContain(rule);
+  }
+  expect(skill).not.toContain("Flagged until the owner unflags it");
+  expect(skill).not.toContain("Set the ticket Flagged");
+  const steps = ["Set the component", "Move it from Awaiting Approval to To Do", "Comment `Proposed by intake`"].map((step) => skill.indexOf(step));
+  expect(steps.every((at) => at >= 0)).toBe(true);
+  expect(steps).toEqual([...steps].sort((a, b) => a - b));
+});
+
+test("ADR-0009 holds the amendment, and no ADR or runner comment says proposed Bug", () => {
+  const adr = read("docs/adr/0009-the-queue-is-opt-in-through-a-status.md");
+  for (const rule of ["A Bug that `/to-bug` writes starts unflagged", "turns auto-merge off", "`Runner hold: Awaiting Approval`", "A Bug that `/to-bug` wrote was Flagged"]) expect(adr).toContain(rule);
+  for (const folder of ["docs/adr", "runner/src", "runner/tests"]) {
+    const files = readdirSync(new URL(`../${folder}`, import.meta.url), { withFileTypes: true }).filter((entry) => entry.isFile());
+    for (const file of files) expect(read(`${folder}/${file.name}`), file.name).not.toMatch(/proposed bug/i);
   }
 });
 

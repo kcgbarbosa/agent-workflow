@@ -16,7 +16,7 @@ A failed pull changes nothing and notifies no one. `journalctl --user -u runner-
 
 ### Starting a build
 
-A new ticket starts as Awaiting Approval, and the owner approves its build by moving it to To Do. A ticket starts when it is To Do, has the `agent-workflow` component, is not Flagged, and its blockers are Done. To start a build by chat or by voice, ask an agent to move the ticket to To Do. A ticket moved back to Awaiting Approval stops: the runner sends its thread nothing, and turns on no auto-merge. A thread started by hand for a ticket needs a title that starts with `<KEY>:`, and the ticket out of Awaiting Approval.
+A new ticket starts as Awaiting Approval, and the owner approves its build by moving it to To Do. A ticket starts when it is To Do, has the `agent-workflow` component, is not Flagged, and its blockers are Done. To start a build by chat or by voice, ask an agent to move the ticket to To Do. A ticket moved back to Awaiting Approval stops: the runner sends its thread nothing, turns auto-merge off, and makes an open pull request a draft. Moved back to To Do, that draft is marked ready with auto-merge on. ADR-0009 gives the rule. A thread started by hand for a ticket needs a title that starts with `<KEY>:`, and the ticket out of Awaiting Approval.
 
 ### Following a build
 

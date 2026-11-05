@@ -4,7 +4,7 @@ import { archive } from "./archive.ts";
 import type { Config } from "./config.ts";
 import { lineOf, type Step } from "./decide.ts";
 import { run } from "./exec.ts";
-import { autoMerge, comment } from "./github.ts";
+import { autoMerge, autoMergeOff, comment, draft, ready } from "./github.ts";
 import type { Jira } from "./jira.ts";
 import { post } from "./notify.ts";
 import { sendMessage, startThread } from "./t3.ts";
@@ -34,6 +34,12 @@ export async function act(steps: Step[], config: Config, jira: Jira, webhook: st
         await comment(cwd, step.url, step.text);
       } else if (step.kind === "auto-merge") {
         await autoMerge(cwd, step.url);
+      } else if (step.kind === "auto-merge-off") {
+        await autoMergeOff(cwd, step.url);
+      } else if (step.kind === "draft") {
+        await draft(cwd, step.url);
+      } else if (step.kind === "ready") {
+        await ready(cwd, step.url);
       } else if (step.kind === "flag") {
         await jira.flag(step.key);
       } else if (step.kind === "archive") {
