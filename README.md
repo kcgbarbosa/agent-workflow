@@ -35,7 +35,7 @@ Clone to `~/dev/agent-workflow`, run `./install.sh`. On a machine that `chezmoi`
 - Linux needs `notify-send` (package `libnotify-bin`) for notifications. Without it, the hook does nothing.
 - `config/settings.json` is public, and `~/.claude/settings.json` is a link to it. Never put a token in it. Claude Code can write to it through the link, for example when you choose "always allow", so check `git diff config/` before you commit.
 - Project repos use `AGENTS.md`. Never create `CLAUDE.md` or `CLAUDE.local.md` in one, because either hides `AGENTS.md`.
-- Change the runner: edit `runner/`. `runner/CLAUDE.md` gives the rules. Run `git pull` in the clone that runs the timer, since a merged change reaches a host only then.
+- Change the runner: edit `runner/`. `runner/CLAUDE.md` gives the rules, and `docs/agents/runner.md` how a merged change reaches the host.
 - After a rename or move of a linked file, run `./install.sh` again on every computer.
 
 ## Cloud environment setup script

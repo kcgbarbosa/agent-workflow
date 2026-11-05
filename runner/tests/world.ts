@@ -202,7 +202,7 @@ export class World {
     return this.runnerIn(this.repo, args);
   }
 
-  private runnerIn(cwd: string, args: string[]): Promise<Tick> {
+  runnerIn(cwd: string, args: string[]): Promise<Tick> {
     return new Promise((resolve) => {
       execFile(RUNNER, args, { cwd, env: this.env, timeout: 30_000 }, (error, stdout, stderr) => {
         const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;

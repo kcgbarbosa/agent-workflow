@@ -8,6 +8,12 @@ The `runner` command turns each ready ticket of the queue into a T3 thread and a
 
 On t14: `cd ~/dev/agent-workflow && runner install` writes a user systemd timer, `runner-agent-workflow`, that runs one tick every 2 minutes. `runner uninstall` stops and removes it. `runner tick --dry-run` prints what a tick would do, and writes only the Today file. It needs its secrets, so run it under `bws run`.
 
+### Merged changes
+
+`runner install` also writes `runner-update`, a user timer and oneshot service that every repo shares. On the odd minutes it runs `git pull --ff-only origin main` in the checkout that holds the runner, so a merge to `main` reaches the runner and the skills on the host within two minutes. A thread's worktree does not move with it. `runner uninstall` removes the pair with the last repo's timer.
+
+A failed pull changes nothing and notifies no one. `journalctl --user -u runner-update` gives why: the checkout is on another branch, a local change or commit stops the fast-forward, or the fetch failed. A local change that the merge does not touch stops nothing, and it stays in the checkout.
+
 ### Starting a build
 
 A new ticket starts as Awaiting Approval, and the owner approves its build by moving it to To Do. A ticket starts when it is To Do, has the `agent-workflow` component, is not Flagged, and its blockers are Done. To start a build by chat or by voice, ask an agent to move the ticket to To Do. A ticket moved back to Awaiting Approval stops: the runner sends its thread nothing, and turns on no auto-merge. A thread started by hand for a ticket needs a title that starts with `<KEY>:`, and the ticket out of Awaiting Approval.
