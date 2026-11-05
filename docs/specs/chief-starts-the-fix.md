@@ -4,7 +4,7 @@ Epic: https://kcgbarbosa.atlassian.net/browse/AW-49. Key persona: the owner. ADR
 
 ## Problem Statement
 
-The owner has the runner, the Chief in Slack, and a start page, and the three do not meet. The Chief files a Bug and nothing builds it until the owner unflags it. The runner tells the owner about a stuck ticket by ntfy, so the Chief never sees it, and the stuck routine in its prompt never runs. A thread the runner starts is told to run `/implement` and is refused, because the skill is user-only, so the method of each build is the agent's own choice. The start page shows which services are up and nothing about what waits on the owner. The daily triage is a prompt in T3's database that still reads the retired loop and reports by ntfy. Nothing runs `/correct`. The docs of Pitchridge and machines still describe the loop, or do not mention the Chief, so an agent that trusts them makes a wrong change.
+The owner has the runner, the Chief in Slack, and a start page, and the three do not meet. The Chief files a Bug and nothing builds it until the owner unflags it. The runner tells the owner about a stuck ticket by ntfy, so the Chief never sees it, and the stuck routine in its prompt never runs. A thread the runner starts is told to run `/implement` and is refused, because the skill is user-only, so the method of each build is the agent's own choice. The start page shows which services are up and nothing about what waits on the owner. The daily triage is a prompt in T3's database that still reads the retired loop and reports by ntfy. Nothing runs `/correct`. The Chief's prompt still looks for Sentry alerts in Gmail, though they post to Slack. The docs of Pitchridge and machines do not mention the Chief, so an agent that trusts them makes a wrong change.
 
 ## Solution
 
@@ -63,6 +63,7 @@ US-31. As an agent in Pitchridge, I want the issue tracker doc to hold the Bug r
 US-32. As an agent in Pitchridge, I want one line that says where Sentry alerts go, so that I do not add a second path.
 US-33. As an agent in this repo, I want the workflow doc to say that machines is on the gate and the runner, so that I do not merge there by hand.
 US-34. As the Chief, I want my prompt to hold the machines row and no word of the loop, so that I route a machines ticket and read a stuck comment as the runner writes it.
+US-39. As the Chief, I want my prompt to treat a Sentry alert as a root message in the repo's channel, with no hourly check and no Gmail, so that I read alerts where they post.
 
 ### Behind the scenes
 
@@ -80,8 +81,8 @@ US-38. As a maintainer, I want the Jira component descriptions to name the runne
 
 ### Stuck to Slack
 
-- The runner's one notification destination becomes a Slack incoming webhook. `runner.toml` gets a key that names the env var of the webhook, one per repo. The default name follows the component, so agent-workflow and machines can share one value that points at `#agent-workflow`.
-- The secret lives in the Bitwarden project the runner already reads, under that env var name. The unit files do not change: `bws run` passes every secret of the project.
+- The runner's one notification destination becomes a Slack incoming webhook. `runner.toml` gets a key that names the env var of the webhook, one per repo. The default is `SLACK_WEBHOOK_KC_WORKFLOW` for agent-workflow and machines, so they share one value that points at `#agent-workflow`, and `SLACK_WEBHOOK_<COMPONENT>` for any other component, so pitchridge reads `SLACK_WEBHOOK_PITCHRIDGE`.
+- The secrets already live in the Bitwarden project the runner reads, under those names. The unit files do not change: `bws run` passes every secret of the project.
 - The post is one Slack message: the key, the stuck reason, the Jira link, and the thread link, in that order. The thread link is the one the config already gives.
 - The order of the stuck steps changes from comment, flag, notify to comment, notify, flag. A tick whose post fails stops before the flag, so the next tick sees the ticket not Flagged, with its `Stuck:` comment already written, and repeats only the post and the flag. The `Stuck:` comment is written once because the planner reads the latest `Stuck:` comment before it writes one.
 - The ntfy code, its config key, its secret name, and its fake leave the runner.
@@ -91,6 +92,7 @@ US-38. As a maintainer, I want the Jira component descriptions to name the runne
 
 - `to-bug` step 4 becomes: create, set the component, move to To Do, comment `Proposed by intake` with the report's link. No Flagged.
 - The Chief's prompt gains three lines: DM the owner the key and the summary right after a create; on `stop <KEY>` in the DM, move the ticket to Awaiting Approval and reply with what it had reached; a Bug for a repeated stuck fingerprint is created Flagged.
+- The Chief's prompt loses the hourly Sentry check, the Gmail filters, and Gmail in its connectors. A Sentry alert is a root message in the repo's channel, and channel triage takes it. The Chief then posts no root message, in any case.
 - The runner's rule for Awaiting Approval, in the planner, gains two steps for a ticket with an open pull request: turn auto-merge off, and make the pull request a draft. Both are reads of GitHub first, so a tick repeats nothing. A thread's running turn gets no message.
 - A ticket back in To Do whose pull request is a draft that the runner made gets it marked ready and auto-merge on. The runner knows its own draft by a pull request comment it wrote when it made the draft, `Runner hold: Awaiting Approval`, so a draft the agent or the owner made stays a draft, as ADR-0004 gives.
 - The limit rule does not change: a stopped ticket with a running turn holds its place until the turn ends.
@@ -104,14 +106,17 @@ US-38. As a maintainer, I want the Jira component descriptions to name the runne
 
 ### The daily tasks
 
-- `tasks/daily-triage.md` is the prompt. It names its steps in order and ends with the Slack DM post through a webhook env var. `tasks/daily-correct.md` runs `/correct` in the repo it is scheduled for.
+- `tasks/daily-triage.md` is the prompt. It names its steps in order and ends with the Slack DM post through `SLACK_WEBHOOK_DM`. `tasks/daily-correct.md` runs `/correct` in the repo it is scheduled for.
 - A script in the runner's command, `runner tasks`, registers or updates the T3 scheduled tasks from the files, one triage task at 06:00 America/Toronto in agent-workflow and one correct task per repo at 06:30. It is run by hand once, and on each change to a task file.
+- The `t3` CLI has no scheduling command, so `runner tasks` runs `t3 thread start <project> --wait` for each project, with a message that holds the file's text and tells the thread to call `schedule_task`. The thread lists the project's scheduled tasks first and updates a task with the same title, so a second run makes no second task. This route was tested on 2026-11-04.
+- The triage task keeps the title `Daily triage`, so the first run replaces the task in T3's database.
 - The triage deletes the loop's state folders the first time it finds them, and reports that it did.
 
 ### Docs
 
 - Pitchridge's issue tracker doc gets a Bug row in the Documents table, the Bug body with the Reproduce section, the start rule, and a Flagged case for a stuck-fingerprint Bug only. One line in its workflow doc: Sentry alert rules post to `#pitchridge`, and the Chief turns an alert into a Bug.
 - The machines README changes the three lines US-30 names. Nothing else moves.
+- Pitchridge's runner doc changes its secrets row, from the ntfy topic to the Slack webhook.
 - The Jira component descriptions of `agent-workflow`, `machines`, and `pitchridge` name the runner.
 
 ## Testing Decisions
@@ -153,11 +158,12 @@ The fakes gain a Slack webhook that records each post and can refuse one. The nt
 | A repo with no file renders "no runner", and a file older than ten minutes renders its age               | US-22, US-23                      |
 | The triage file names its steps and no loop path, and the task script registers it from the file         | US-24, US-25, US-27               |
 | The triage file ends with the Slack DM post and names no ntfy                                            | US-26                             |
-| The task script registers one correct task per runner repo                                               | US-28                             |
+| The task script starts one correct thread per runner repo, against a fake `t3`                           | US-28                             |
 | The correct skill text holds the one pull request rule                                                   | US-29                             |
 | The machines README holds the three lines, and the served folder's test lists no `probe.html`            | US-30, US-37                      |
 | Pitchridge `make check-docs` passes with the Bug row, the start rule, and the Sentry line                | US-31, US-32                      |
 | The workflow doc names machines on the gate and the runner                                               | US-33                             |
+| The Chief's prompt holds no hourly check and names no Gmail                                              | US-39                             |
 | ADR-0009 holds the amendment, and no ADR or runner comment says "proposed Bug"                           | US-35, US-36                      |
 | The three Jira components describe the runner                                                            | US-38                             |
 
@@ -167,13 +173,11 @@ The fakes gain a Slack webhook that records each post and can refuse one. The nt
 - A Slack post from the gate or from Pitchridge's own code. Technical. GitHub's and Sentry's Slack apps already post. None planned.
 - Grokbot voice. User-visible. Untested, stays in the map's reference. None planned.
 - The runner on recibo, media-lab, portfolio, and galleria. Technical. Not on Jira. None planned.
-- The full acceptance suite on the T14. Technical. PITCH-212.
 - The gate on the repos the map said need repair. Technical. machines needs none, and the others have no Jira. None planned.
-- Pasting the Chief's prompt into Grokbot, the Slack webhooks into Bitwarden, and `runner install` in Pitchridge. Technical. The owner's checklist in Further Notes.
+- Pasting the Chief's prompt into Grokbot, the Slack DM webhook into Bitwarden, and running `runner tasks`. Technical. The owner's checklist in Further Notes.
 - The content of the rewritten map. User-visible. The owner's thread writes it as one pull request to machines once this Epic's tickets are Done.
 
 ## Further Notes
 
-- PITCH-209 is In Progress with pull request 244 open. Its head still requires `gate / review` in the shared gate spec, says a new ticket starts as Awaiting Approval with no Bug exception, and names `code-review` as step 6. A message to its thread lists them; no ticket here.
-- The owner's checklist after the tickets merge: put three webhooks in Bitwarden, `#pitchridge`, `#agent-workflow`, and the DM; paste `bots/chief.md` into Grokbot; run `runner install` in Pitchridge after 244 merges, with PITCH-212 moved to Awaiting Approval first unless it should build at once; set a component on PITCH-98 and PITCH-170 or close them `wont-do`; check the GitHub Slack app posts nightly failures in `#pitchridge`; run `runner tasks` once.
-- As of 2026-11-04: the runner is live on agent-workflow and machines, AW-48 shipped the static map at `/map`, AW has no open ticket, and two Sentry rules post to `#pitchridge`.
+- The owner's checklist: put `SLACK_WEBHOOK_DM` in Bitwarden before running `runner tasks`. After AW-53 merges, paste `bots/chief.md` into Grokbot and remove its Gmail connector. Check that the GitHub Slack app posts nightly failures in `#pitchridge`. After AW-54 merges, run `runner tasks` once.
+- As of 2026-11-04: the runner is live on agent-workflow, machines, and pitchridge, AW-48 shipped the static map at `/map`, and two Sentry rules post to `#pitchridge`.
