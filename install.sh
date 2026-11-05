@@ -85,6 +85,6 @@ if command -v npm >/dev/null 2>&1; then
 else
   echo "agent-workflow: skipped the runner command, npm is missing" >&2
 fi
-# The loop is gone, so its link would point at nothing. A link to elsewhere belongs to someone else.
-if [ "$(readlink "$HOME/.local/bin/loop" 2>/dev/null)" = "$repo/loop/bin/loop" ]; then rm "$HOME/.local/bin/loop"; fi
+# The old command is gone, so its link would point at nothing. A link to elsewhere belongs to someone else.
+if [ "$(readlink "$HOME/.local/bin/loop" 2>/dev/null)" = "$repo/loop/bin/loop" ]; then rm "$HOME/.local/bin/loop"; fi # retired-name-ok until 2027-02-05, approved KC: removes the link of the retired command
 

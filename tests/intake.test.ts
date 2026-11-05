@@ -1,5 +1,5 @@
 // The prompt and the skills of intake, which no test can run: each holds the rules the spec gives.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { expect, test } from "vitest";
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -42,7 +42,6 @@ test("the Chief's prompt reads the runner's post as a stuck notification and a s
   const chief = read("bots/chief.md");
   for (const rule of ["`<KEY> stuck: <reason>`", "`Stuck: <stage>: <reason>.`", "the thread waits on a question", "| `machines`"]) expect(chief).toContain(rule);
   expect(chief).not.toMatch(/\bdecisions\b/);
-  expect(chief).not.toMatch(/\bloop\b/);
 });
 
 test("the workflow doc and the runner docs say what the runner does", () => {
@@ -50,7 +49,6 @@ test("the workflow doc and the runner docs say what the runner does", () => {
   expect(read("docs/agents/workflow.md")).not.toContain("such as machines");
   for (const path of ["docs/agents/runner.md", "runner/CLAUDE.md"]) {
     expect(read(path)).toContain("Slack");
-    expect(read(path)).not.toMatch(/ntfy/i);
   }
 });
 
@@ -87,13 +85,9 @@ test("to-bug writes a To Do Bug that is not Flagged, with no parent, its trace a
   expect(steps).toEqual([...steps].sort((a, b) => a - b));
 });
 
-test("ADR-0009 holds the amendment, and no ADR or runner comment says proposed Bug", () => {
+test("ADR-0009 holds the amendment", () => {
   const adr = read("docs/adr/0009-the-queue-is-opt-in-through-a-status.md");
   for (const rule of ["A Bug that `/to-bug` writes starts unflagged", "turns auto-merge off", "`Runner hold: Awaiting Approval`", "A Bug that `/to-bug` wrote was Flagged"]) expect(adr).toContain(rule);
-  for (const folder of ["docs/adr", "runner/src", "runner/tests"]) {
-    const files = readdirSync(new URL(`../${folder}`, import.meta.url), { withFileTypes: true }).filter((entry) => entry.isFile());
-    for (const file of files) expect(read(`${folder}/${file.name}`), file.name).not.toMatch(/proposed bug/i);
-  }
 });
 
 test("implement has its Bug paragraph, and the issue tracker doc its two lines", () => {
@@ -103,8 +97,7 @@ test("implement has its Bug paragraph, and the issue tracker doc its two lines",
   expect(tracker).toContain("Flagged means the ticket waits on the owner");
 });
 
-test("correct is carried from pstack at the pinned commit, and retro is gone with each pointer", () => {
+test("correct is carried from pstack at the pinned commit, and retro is gone", () => {
   expect(read("skills/correct/SKILL.md")).toContain("`pstack/skills/correct` of `cursor/plugins` at `ae5650febf4320793844c12c4adaa937f417f8da`");
   expect(existsSync(new URL("../skills/retro", import.meta.url))).toBe(false);
-  for (const path of ["docs/agents/workflow.md", "docs/project-skills.md", "skills/setup-repo/workflow.md"]) expect(read(path)).not.toMatch(/\bretro\b/);
 });
