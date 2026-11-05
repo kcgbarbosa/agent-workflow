@@ -14,6 +14,8 @@ export type Issue = {
   /** The tickets that block this one, each with its status. */
   blockedBy: Record<string, string>;
   comments: { text: string; created: string }[];
+  /** The changelog, oldest first, as Jira writes it. */
+  history: { created: string; items: { field: string; to: string | null; toString: string | null }[] }[];
   parent: string | null;
   /** The description as Jira holds it, a document. */
   description: unknown;
@@ -82,6 +84,7 @@ export class FakeJira {
       flagged: false,
       blockedBy: {},
       comments: [],
+      history: [],
       parent: null,
       description: null,
       ...values,
@@ -96,6 +99,8 @@ export class FakeJira {
     if (method === "POST" && pathname === "/rest/api/3/search/jql") return this.search(body);
     const commented = /^\/rest\/api\/3\/issue\/([^/]+)\/comment$/.exec(pathname);
     if (commented) return this.comment(method, commented[1], url, body);
+    const changelog = /^\/rest\/api\/3\/issue\/([^/]+)\/changelog$/.exec(pathname);
+    if (changelog && method === "GET") return this.changelog(changelog[1], url);
     const edited = /^\/rest\/api\/3\/issue\/([^/]+)$/.exec(pathname);
     if (edited && method === "PUT") return this.edit(edited[1], body);
     if (edited && method === "GET" && this.issues.has(edited[1])) return [200, this.fields(this.issues.get(edited[1])!)];
@@ -130,6 +135,14 @@ export class FakeJira {
     return [200, { comments, total: issue.comments.length }];
   }
 
+  /** A page of one, so a runner that reads one page misses the latest change. */
+  private changelog(key: string, url: string): [number, unknown] {
+    const issue = this.issues.get(key);
+    if (!issue) return [404, { errorMessages: [`no issue ${key}`] }];
+    const start = Number(new URL(url, "http://jira").searchParams.get("startAt") ?? 0);
+    return [200, { values: issue.history.slice(start, start + 1), total: issue.history.length }];
+  }
+
   private edit(key: string, body: any): [number, unknown] {
     const issue = this.issues.get(key);
     if (issue && body.fields?.description) {
@@ -139,6 +152,7 @@ export class FakeJira {
     }
     if (!issue || !body.fields?.[FLAGGED]) return [400, { errorMessages: [`bad edit of ${key}`] }];
     issue.flagged = true;
+    issue.history.push({ created: jiraTime(Date.now()), items: [{ field: "Flagged", to: "[10019]", toString: "Impediment" }] });
     this.writes.push(`flag ${key}`);
     return [204, null];
   }

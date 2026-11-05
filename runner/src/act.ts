@@ -16,7 +16,7 @@ async function headOfMain(config: Config, cwd: string): Promise<string> {
 }
 
 /** Returns whether every step went through. It throws, before any write, when it cannot find the head of main. */
-export async function act(steps: Step[], config: Config, jira: Jira, topic: string, cwd: string): Promise<boolean> {
+export async function act(steps: Step[], config: Config, jira: Jira, webhook: string, cwd: string): Promise<boolean> {
   const base = steps.some((step) => step.kind === "start") ? await headOfMain(config, cwd) : "";
   const failed = new Set<string>();
   for (const step of steps) {
@@ -39,7 +39,7 @@ export async function act(steps: Step[], config: Config, jira: Jira, topic: stri
       } else if (step.kind === "archive") {
         console.log(`${step.key} archive: ${await archive(step.key, step.summary, step.pins, jira, cwd)}`);
       } else if (step.kind === "notify") {
-        await post(config.ntfyUrl, topic, step.text);
+        await post(webhook, step.text);
       }
       console.log(lineOf(step));
     } catch (error) {

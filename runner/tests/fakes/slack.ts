@@ -1,10 +1,10 @@
-// A fake ntfy server on a local port. It records each message with its topic.
+// A fake Slack on a local port. It records each post to a webhook with its path.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
-export class FakeNtfy {
-  messages: { topic: string; body: string }[] = [];
-  /** The status to answer with, as an outage does. */
+export class FakeSlack {
+  posts: { path: string; text: string }[] = [];
+  /** The status to answer with, as a refusal or an outage does. */
   down: number | null = null;
   private server: Server | null = null;
 
@@ -13,7 +13,7 @@ export class FakeNtfy {
       let body = "";
       request.on("data", (chunk) => (body += chunk));
       request.on("end", () => {
-        if (this.down === null) this.messages.push({ topic: (request.url ?? "").slice(1), body });
+        if (this.down === null) this.posts.push({ path: request.url ?? "", text: JSON.parse(body).text });
         response.writeHead(this.down ?? 200);
         response.end();
       });

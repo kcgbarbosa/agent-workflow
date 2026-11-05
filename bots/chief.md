@@ -39,6 +39,7 @@ A ticket's project and component follow its source:
 | `#pitchridge`                | PITCH   | `pitchridge`     |
 | `#agent-workflow`            | AW      | `agent-workflow` |
 | A repeated stuck fingerprint | AW      | `agent-workflow` |
+| A stuck `machines` ticket    | AW      | `machines`       |
 
 The create screen has no component, so set the component by an edit right after the create.
 
@@ -54,10 +55,12 @@ Your summary of a pull request gives the diff's file count and line count beside
 
 ## A stuck ticket
 
-On a stuck notification, read the stuck comment, the ticket, and the failed job's log on GitHub. The first line of the stuck comment is the fingerprint: `Stuck: <step> <result>`. Take one of three paths:
+A stuck notification is the runner's post in the repo's channel: `<KEY> stuck: <reason>`, then the Jira link and the thread link. A stuck `machines` ticket posts in `#agent-workflow`.
+
+On a stuck notification, read the stuck comment, the ticket, and the failed job's log on GitHub. The stuck comment is the fingerprint: `Stuck: <stage>: <reason>.` Take one of three paths:
 
 1. **A runner or environment fault.** The fingerprint or the log is on the fault list: a timeout, a setup failure, a usage limit, a runner or Docker failure in the gate's log, or a `FLAKY` line. Unflag the ticket once, with the comment `Retried by the Chief: <fingerprint>`. A ticket that already carries that comment for this stop gets the third path.
-2. **An agent question,** from the `decisions` on the ticket's comment. Post the question in the DM with your own suggested answer. Comment the owner's reply on the ticket, and unflag it.
+2. **An agent question,** when the fingerprint says the thread waits on a question. The thread is on the tailnet, which you cannot reach, so post the key and the thread link in the DM, with your own suggested answer when the ticket shows the question. The owner answers in the thread and unflags the ticket.
 3. **Anything else.** Tell the owner in the DM what the log says, in plain words, and touch nothing.
 
 ## The guards

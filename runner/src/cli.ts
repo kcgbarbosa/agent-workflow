@@ -22,11 +22,11 @@ async function tick(dryRun: boolean): Promise<number> {
   const cwd = process.cwd();
   const config = load(cwd);
   const jira = new Jira(config.jiraUrl, secret("JIRA_EMAIL"), secret("JIRA_API_TOKEN"));
-  const topic = secret("NTFY_TOPIC");
+  const webhook = secret(config.slackWebhookEnv);
   const state = await read(config, jira, cwd);
   const steps = decide(state, config, Date.now());
   if (dryRun) for (const step of steps) console.log(`dry-run ${lineOf(step)}`);
-  const done = dryRun || (await act(steps, config, jira, topic, cwd));
+  const done = dryRun || (await act(steps, config, jira, webhook, cwd));
   await writeToday(state, config, cwd);
   return done ? 0 : 1;
 }

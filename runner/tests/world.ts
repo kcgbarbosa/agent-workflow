@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { FakeJira, jiraTime } from "./fakes/jira.ts";
-import { FakeNtfy } from "./fakes/ntfy.ts";
+import { FakeSlack } from "./fakes/slack.ts";
 
 const HERE = import.meta.dirname;
 const RUNNER = join(HERE, "..", "bin", "runner");
@@ -24,10 +24,12 @@ export type PullRequest = {
 };
 
 const MINUTE = 60_000;
+/** The path of the webhook of `#agent-workflow`. */
+export const WEBHOOK = "/services/kc-workflow";
 
 export class World {
   jira = new FakeJira();
-  ntfy = new FakeNtfy();
+  slack = new FakeSlack();
   root = mkdtempSync(join(tmpdir(), "runner-"));
   repo = join(this.root, "repo");
   origin = join(this.root, "origin.git");
@@ -36,7 +38,7 @@ export class World {
 
   async start(config = ""): Promise<void> {
     await this.jira.start();
-    await this.ntfy.start();
+    await this.slack.start();
     execFileSync("mkdir", ["-p", this.fakes]);
     writeFileSync(join(this.fakes, "t3.json"), JSON.stringify({ project: this.repo, threads: [], failStart: [] }));
     writeFileSync(join(this.fakes, "github.json"), "[]");
@@ -52,7 +54,7 @@ export class World {
       GIT_COMMITTER_EMAIL: "t@example.com",
       JIRA_EMAIL: "owner@example.com",
       JIRA_API_TOKEN: "token",
-      NTFY_TOPIC: "the-topic",
+      SLACK_WEBHOOK_KC_WORKFLOW: `${this.slack.url}${WEBHOOK}`,
     };
     this.git(this.root, "init", "--quiet", "--bare", "--initial-branch=main", this.origin);
     this.git(this.root, "init", "--quiet", "--initial-branch=main", this.repo);
@@ -64,7 +66,7 @@ export class World {
 
   async stop(): Promise<void> {
     await this.jira.stop();
-    await this.ntfy.stop();
+    await this.slack.stop();
     rmSync(this.root, { recursive: true, force: true });
   }
 
@@ -105,8 +107,8 @@ export class World {
   }
 
   /** Writes `runner.toml`, with the keys every repo must set before these. */
-  config(extra = ""): void {
-    writeFileSync(join(this.repo, "runner.toml"), `component = "agent-workflow"\njira_url = "${this.jira.url}"\nntfy_url = "${this.ntfy.url}"\n${extra}\n`);
+  config(extra = "", component = "agent-workflow"): void {
+    writeFileSync(join(this.repo, "runner.toml"), `component = "${component}"\njira_url = "${this.jira.url}"\n${extra}\n`);
   }
 
   thread(thread: Thread): void {
@@ -162,6 +164,13 @@ export class World {
     this.savePullRequests(pullRequests);
   }
 
+  /** A flag on the ticket, set `setMinutesAgo` ago and cleared `clearedMinutesAgo` ago, as the owner's unflag does. */
+  ticketUnflagged(key: string, setMinutesAgo: number, clearedMinutesAgo = 0): void {
+    const history = this.jira.issues.get(key)?.history;
+    history?.push({ created: jiraTime(Date.now() - setMinutesAgo * MINUTE), items: [{ field: "Flagged", to: "[10019]", toString: "Impediment" }] });
+    history?.push({ created: jiraTime(Date.now() - clearedMinutesAgo * MINUTE), items: [{ field: "Flagged", to: null, toString: null }] });
+  }
+
   /** A comment on the ticket, written that long ago. */
   ticketComment(key: string, text: string, minutesAgo = 0): void {
     this.jira.issues.get(key)?.comments.push({ text, created: jiraTime(Date.now() - minutesAgo * MINUTE) });
@@ -182,6 +191,10 @@ export class World {
 
   unset(name: string): void {
     delete this.env[name];
+  }
+
+  setEnv(name: string, value: string): void {
+    this.env[name] = value;
   }
 
   /** Runs `runner` in the repo with these arguments, to its end. */

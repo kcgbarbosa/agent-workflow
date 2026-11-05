@@ -16,7 +16,7 @@ Each skill holds its own steps. Where a skill publishes something, `docs/agents/
 | 7   | Acceptance    | None                                           | The deployed result checked against each ticket's "What the user sees"                                            | Jira                                     |
 
 The owner makes every decision in a grill, approves a PRD before `/to-prd` writes it, and approves the tickets before they are published. Nobody merges by hand: the gate decides, and auto-merge merges. A draft pull request waits until the owner marks it ready. `[fuzz] enabled` in `gate.toml` turns the fuzz job on or off.
-A repo off the gate, such as machines, has no auto-merge, and the owner merges.
+machines is on the gate and the runner too, so nobody merges there by hand. A repo off the gate has no auto-merge, and the owner merges.
 
 Steps 1 to 3 share one context window. When it fills up, `/handoff` writes a summary and a new window continues from it.
 A small change skips steps 2 to 4 and goes from the grill to `implement`.
