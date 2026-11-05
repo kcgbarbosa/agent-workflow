@@ -1,7 +1,6 @@
 ---
 name: to-bug
-description: Write a Jira Bug from a report, such as a Sentry issue, a Slack message, or a red nightly run, with a Reproduce section and the correct behaviour as "What the user sees" lines, Flagged until the owner unflags it.
-disable-model-invocation: true
+description: Write a Jira Bug from a report, such as a Sentry issue, a Slack message, or a red nightly run, with a Reproduce section and the correct behaviour as "What the user sees" lines, Flagged until the owner unflags it. Use for /to-bug.
 ---
 
 # To Bug

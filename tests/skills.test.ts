@@ -34,3 +34,36 @@ test("each skill has a name and a description", () => {
   }
   expect(failures).toEqual([]);
 });
+
+const userOnly = (name: string) => frontmatter(readFileSync(join(REPO, "skills", name, "SKILL.md"), "utf8"))?.get("disable-model-invocation") === "true";
+
+// The texts that tell an agent to run a skill. Each `.md` in `tasks/` is a scheduled task, once that folder exists.
+function textsToAgents(): string[] {
+  const inFolder = (folder: string, extension: string) =>
+    existsSync(join(REPO, folder))
+      ? readdirSync(join(REPO, folder))
+          .filter((name) => name.endsWith(extension))
+          .map((name) => readFileSync(join(REPO, folder, name), "utf8"))
+      : [];
+  return [...inFolder("runner/src", ".ts"), readFileSync(join(REPO, "bots/chief.md"), "utf8"), ...inFolder("tasks", ".md")];
+}
+
+// `/implement`, and the Chief's "through `to-bug`". A path such as `src/implement`, and the Chief's "no `to-tickets`", name nothing.
+const SKILL_NAMED = /(?<![\w./-])\/([a-z][a-z-]*)|through `([a-z][a-z-]*)`/g;
+
+test("no skill an agent is told to run is user-only", () => {
+  const skills = new Set(readdirSync(join(REPO, "skills")).filter((name) => existsSync(join(REPO, "skills", name, "SKILL.md"))));
+  const named = new Set(
+    textsToAgents()
+      .flatMap((text) => [...text.matchAll(SKILL_NAMED)].map((match) => match[1] ?? match[2]))
+      .filter((name) => skills.has(name)),
+  );
+  for (const name of ["implement", "pr", "to-bug"]) expect(named).toContain(name);
+  // No text names `correct` until the daily correct's task file exists.
+  expect([...named, "correct"].filter(userOnly)).toEqual([]);
+});
+
+test("the skills no agent starts on its own stay user-only", () => {
+  const skills = ["grill-with-docs", "grill-me", "to-spec", "to-prd", "to-tickets", "handoff", "teach", "setup-repo", "setup-runner", "interrogate"];
+  expect(skills.filter((name) => !userOnly(name))).toEqual([]);
+});
