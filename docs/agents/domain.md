@@ -27,7 +27,7 @@ When the Epic merges, a pull request deletes the spec. `docs/agents/issue-tracke
 ## Keep documents accurate
 
 A statement is wrong only when an agent that trusts it would make a wrong change. A general statement, or one that leaves something out, is not wrong. Do not edit it.
-A pull request greps the documents for the names it touches, and fixes each statement it made false.
+A pull request greps the documents for the names it touches, and fixes each statement it made false. One that retires a name adds it to `RETIRED` in `tests/retired-names.test.ts`, so the name fails in every tracked file from then on.
 
 ## ADRs
 

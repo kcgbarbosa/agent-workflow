@@ -40,7 +40,7 @@ Each tick ends by writing `~/.local/state/runner/<component>/today.json`, or und
 
 ### Secrets
 
-The Jira email and API token, and the Slack webhook of `#agent-workflow`, `SLACK_WEBHOOK_KC_WORKFLOW`. `slack_webhook_env` in `runner.toml` changes the name of the last. The daily triage reads `SLACK_WEBHOOK_DM`, the webhook of the owner's DM. Each lives in the `loop` project of Bitwarden Secrets Manager under its env var name, a name that predates the runner. The timer reads them through `~/.config/bws/token.env`. The agent's Claude account is T3's.
+The Jira email and API token, and the Slack webhook of `#agent-workflow`, `SLACK_WEBHOOK_KC_WORKFLOW`. `slack_webhook_env` in `runner.toml` changes the name of the last. The daily triage reads `SLACK_WEBHOOK_DM`, the webhook of the owner's DM. Each lives in the `loop` project of Bitwarden Secrets Manager under its env var name, a name that predates the runner. <!-- retired-name-ok until 2027-02-05, approved KC: the Bitwarden project keeps the name --> The timer reads them through `~/.config/bws/token.env`. The agent's Claude account is T3's.
 
 ### Gate
 

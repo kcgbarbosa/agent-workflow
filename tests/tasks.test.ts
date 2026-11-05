@@ -24,8 +24,7 @@ test("the triage reads nothing of the loop and nothing of the old workflow doc, 
   expect(TRIAGE).toContain("Name each folder it deleted");
 });
 
-test("the triage ends with the post in the owner's Slack DM, and names no ntfy", () => {
-  expect(TRIAGE).not.toMatch(/ntfy/i);
+test("the triage ends with the post in the owner's Slack DM", () => {
   expect(TRIAGE.indexOf("SLACK_WEBHOOK_DM")).toBeGreaterThan(TRIAGE.indexOf("**Slack.**"));
   expect(TRIAGE.indexOf("**Slack.**")).toBeGreaterThan(TRIAGE.indexOf("**Loop state.**"));
 });

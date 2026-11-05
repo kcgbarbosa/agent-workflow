@@ -12,7 +12,6 @@ const GRACE = 60_000;
 const { values } = parseArgs({
   options: {
     host: { type: "string", default: "127.0.0.1" },
-    // The Loop watch page has 8790, and the tailnet serves it on 8443, so the switchboard keeps clear of both.
     port: { type: "string", default: "8796" },
     cwd: { type: "string", default: join(homedir(), "dev", "agent-workflow") },
     state: { type: "string", default: join(homedir(), ".local", "state", "switchboard", "session") },

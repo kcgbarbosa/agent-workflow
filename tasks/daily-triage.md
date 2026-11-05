@@ -1,6 +1,6 @@
 # Daily triage
 
-Daily triage for KC. Report only: never merge, push, comment, edit, transition, label, start, or stop anything, on GitHub, in Jira, or in T3 Code. The two exceptions are the delete of the Loop state step and the post of the Slack step.
+Daily triage for KC. Report only: never merge, push, comment, edit, transition, label, start, or stop anything, on GitHub, in Jira, or in T3 Code. The two exceptions are the delete of the Loop state step and the post of the Slack step. <!-- retired-name-ok until 2027-02-05, approved KC: names the step that removes the old state -->
 
 Do the steps in this order, then write one short list in this thread. KC has ADHD: lead with what needs KC, one line per item, each with its link. No em dashes. If a source cannot be read, say UNKNOWN and why, and go on.
 
@@ -10,7 +10,7 @@ Do the steps in this order, then write one short list in this thread. KC has ADH
 4. **Pull requests.** The open pull requests across KC's repos: `gh search prs --owner kcgbarbosa --state open --json repository,number,title,url,isDraft,updatedAt`, then `gh pr view` and `gh pr checks` for each. List each one that waits on KC: a red check, a draft, a review asking for changes, a merge conflict, or green with auto-merge off.
 5. **In Review.** The tickets In Review for more than a day, from Jira on kcgbarbosa.atlassian.net: `project in (AW, PITCH) AND status = "In Review" AND NOT status changed TO "In Review" AFTER -1d`. One line for each.
 6. **Threads.** The T3 threads that wait on KC. Get the projects with `t3_project_list`, and for each run `t3 --log-level error thread list --json --project <workspaceRoot>`. `list` shows a thread that waits as `running`, so for each `running` thread run `t3 --log-level error thread show --json --messages 0 <threadId>`. The thread waits on KC when its `pendingRequestCount` is above 0. One line for each, with its link, with the host of the link replaced by `https://t14.tail4fca58.ts.net:7443`.
-7. **Loop state.** The loop is retired, and its state folders go the first time this finds them. Do not read them. `find ~/.local/state -maxdepth 1 -type d -name '*-loop' -print -exec rm -rf {} +`. Name each folder it deleted in the list. It deletes only folders, so an archive beside them stays. When it prints nothing, say nothing of it.
+7. **Loop state.** The loop is retired, and its state folders go the first time this finds them. Do not read them. `find ~/.local/state -maxdepth 1 -type d -name '*-loop' -print -exec rm -rf {} +`. Name each folder it deleted in the list. It deletes only folders, so an archive beside them stays. When it prints nothing, say nothing of it. <!-- retired-name-ok until 2027-02-05, approved KC: removes the old state folders -->
 
 End the list with one line: what's running fine, counted. If nothing needs KC, say "Nothing needs you."
 

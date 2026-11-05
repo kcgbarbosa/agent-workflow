@@ -7,6 +7,15 @@ KC's global instructions are `config/CLAUDE.md`, which `install.sh` links to `~/
 - `docs/adr/` holds the runner's decisions, and `runner/tests/` what it does. `runner/CLAUDE.md` gives the rules for a change to it.
 - `config/settings.json` is linked as `~/.claude/settings.json`. Never put a token in it, and check `git diff config/` before a commit.
 
+## Rules and what enforces them
+
+| Rule                                         | Enforced by                                      |
+| -------------------------------------------- | ------------------------------------------------ |
+| A retired name stays in no tracked file      | `tests/retired-names.test.ts`, `make check-docs` |
+| No tracked file has an em dash               | `tests/em-dashes.test.ts`, `make check-docs`     |
+| A skill an agent is told to run is invocable | `tests/skills.test.ts`, `make check-docs`        |
+| No token in a tracked file                   | `gitleaks` in `lefthook.yml`, `make check-docs`  |
+
 ## Agent skills
 
 ### Domain docs
