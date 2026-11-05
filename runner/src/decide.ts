@@ -28,16 +28,16 @@ export type Step = { key: string; reason: string } & (
 /** What a ticket does at this tick. `turn` starts an agent turn, so it needs a place against the limit, and comes after `steps`. A fix or a retry is a `message`, which takes its place before any new start. */
 type Plan = { steps: Step[]; turn?: (place: string) => Step[]; message?: boolean };
 
-const AWAITING_APPROVAL = "Awaiting Approval";
+export const AWAITING_APPROVAL = "Awaiting Approval";
 const READY = "To Do";
 const IN_PROGRESS = "In Progress";
 const IN_REVIEW = "In Review";
 const DONE = "Done";
-const STUCK = "Stuck:";
+export const STUCK = "Stuck:";
 const CONTINUE = "Runner sent continue:";
 // A pull request comment of an attempt, which names the head SHA it was sent for (ADR-0003).
 const ATTEMPT = /^Runner fix attempt \d+ of \d+ at (\S+):/;
-const RED_BUCKETS = new Set(["fail", "cancel"]);
+export const RED_BUCKETS = new Set(["fail", "cancel"]);
 const MINUTE_MS = 60_000;
 
 export function branchOf(ticket: Ticket): string {

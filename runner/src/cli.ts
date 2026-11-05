@@ -1,4 +1,5 @@
-// The `runner` command. A tick reads the state, decides the steps, and acts on them. `--dry-run` stops before it acts.
+// The `runner` command. A tick reads the state, decides the steps, acts on them, and writes the Today file. `--dry-run`
+// skips the act.
 // `install` and `uninstall` turn the timer of the current repo on and off.
 import { act } from "./act.ts";
 import { load } from "./config.ts";
@@ -6,6 +7,7 @@ import { decide, lineOf } from "./decide.ts";
 import { install, uninstall } from "./install.ts";
 import { Jira } from "./jira.ts";
 import { read } from "./read.ts";
+import { writeToday } from "./today.ts";
 
 const USAGE = "usage: runner tick [--dry-run] | install | uninstall";
 
@@ -21,12 +23,12 @@ async function tick(dryRun: boolean): Promise<number> {
   const config = load(cwd);
   const jira = new Jira(config.jiraUrl, secret("JIRA_EMAIL"), secret("JIRA_API_TOKEN"));
   const topic = secret("NTFY_TOPIC");
-  const steps = decide(await read(config, jira, cwd), config, Date.now());
-  if (dryRun) {
-    for (const step of steps) console.log(`dry-run ${lineOf(step)}`);
-    return 0;
-  }
-  return (await act(steps, config, jira, topic, cwd)) ? 0 : 1;
+  const state = await read(config, jira, cwd);
+  const steps = decide(state, config, Date.now());
+  if (dryRun) for (const step of steps) console.log(`dry-run ${lineOf(step)}`);
+  const done = dryRun || (await act(steps, config, jira, topic, cwd));
+  await writeToday(state, config, cwd);
+  return done ? 0 : 1;
 }
 
 async function main(args: string[]): Promise<number> {
