@@ -30,6 +30,11 @@ const DONE_EPICS = "issuetype = Epic AND statusCategory = Done ORDER BY key ASC"
 const OPEN_TICKETS_NAMING = /^issuetype != Epic AND statusCategory != Done AND description ~ "\\"(.+)\\"" ORDER BY key ASC$/;
 const CHILDREN = /^parent = ([A-Z]+-\d+) ORDER BY key ASC$/;
 const NAMING = /^issuetype = Epic AND description ~ "\\"(.+)\\"" ORDER BY key ASC$/;
+const WRITES: [string, RegExp][] = [
+  ["POST", /\/comment$/],
+  ["POST", /\/transitions$/],
+  ["PUT", /^\/rest\/api\/3\/issue\/[^/]+$/],
+];
 
 /** A time as Jira writes it, with no colon in its offset. */
 export function jiraTime(ms: number): string {
@@ -52,6 +57,8 @@ export class FakeJira {
   writes: string[] = [];
   /** The status to answer every request with, as an outage or an expired token does. */
   down: number | null = null;
+  /** Whether this write fails, as a blip between two writes of a tick does. */
+  failsWrite: () => boolean = () => false;
   private server: Server | null = null;
 
   async start(): Promise<void> {
@@ -97,6 +104,7 @@ export class FakeJira {
     if (this.down !== null) return [this.down, { errorMessages: ["down"] }];
     const { pathname } = new URL(url, "http://jira");
     const body = raw ? JSON.parse(raw) : null;
+    if (WRITES.some(([verb, path]) => verb === method && path.test(pathname)) && this.failsWrite()) return [503, { errorMessages: ["a blip"] }];
     if (pathname === "/rest/api/3/field") return [200, [{ id: FLAGGED, name: "Flagged" }]];
     if (method === "POST" && pathname === "/rest/api/3/search/jql") return this.search(body);
     const commented = /^\/rest\/api\/3\/issue\/([^/]+)\/comment$/.exec(pathname);

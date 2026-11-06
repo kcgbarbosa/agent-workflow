@@ -9,5 +9,6 @@
 - Each repo's settings are its `runner.toml`, read from the current folder. A new key gets a default, so every repo's existing file still loads.
 - It reads the Jira email and token and the repo's Slack webhook from its env. By hand, in the repo: `set -a; . ~/.config/bws/token.env; set +a; bws run -- 'runner tick --dry-run'`.
 - A skill the runner names in a message must be model-invocable, with no `disable-model-invocation` in its frontmatter, or the thread is refused. `tests/skills.test.ts` checks it.
+- A tick can fail at any write, and the next tick reads what happened. `tests/failed-write.test.ts` fails each write of each of its scenarios, so a new kind of step or a new order of writes gets a scenario there.
 - The scenario tests run `bin/runner` as a subprocess against the fakes in `tests/fakes/`. `tests/world.ts` builds a scenario's world.
 - Run `npm run check` here.

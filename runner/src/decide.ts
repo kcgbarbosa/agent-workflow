@@ -1,7 +1,7 @@
 // The second step of a tick: a pure function from the state, the config and the time to the steps, one per action
 // and skip. The tickets come in queue order, by priority, then key. The first match in `planOf` decides a ticket, in
 // the order of the spec's table.
-import { pinsOf, type Pin, specLinks } from "./archive.ts";
+import { pinned, pinsOf, type Pin, specLinks } from "./archive.ts";
 import type { Config } from "./config.ts";
 import type { PullRequest } from "./github.ts";
 import type { Ticket, TicketComment } from "./jira.ts";
@@ -190,9 +190,10 @@ function planOf(item: TicketState, config: Config, now: number): Plan {
     return {
       steps: status,
       message: true,
+      // The message first, so a failed send is not counted as sent. A failed comment counts one attempt less.
       turn: () => [
-        { kind: "pr-comment", key, url: open.url, reason, text: `Runner fix ${attempt}: ${problems}.` },
         { kind: "send", key, threadId: thread.threadId, reason, message },
+        { kind: "pr-comment", key, url: open.url, reason, text: `Runner fix ${attempt}: ${problems}.` },
       ],
     };
   }
@@ -206,9 +207,10 @@ function planOf(item: TicketState, config: Config, now: number): Plan {
     return {
       steps: status,
       message: true,
+      // The message first, as for a fix, so a failed send does not read as a thread that stopped again.
       turn: () => [
-        { kind: "comment", key, reason, text: `${CONTINUE} ${reason}.` },
         { kind: "send", key, threadId: thread.threadId, reason, message },
+        { kind: "comment", key, reason, text: `${CONTINUE} ${reason}.` },
       ],
     };
   }
@@ -244,6 +246,8 @@ function epicSteps(epics: EpicState[]): Step[] {
     }
     const done: Step[] = epic.done ? [] : [{ kind: "status", key, status: DONE, reason: "its last child is Done" }];
     if (!specLinks(epic.text).length) return [{ kind: "skip", key, reason: "its description has no Spec line that links a spec" }, ...done];
+    // An archive pinned these lines last, and its pull request deletes the spec, so a failed Done has only the Done left.
+    if (pinned(epic, linking)) return [{ kind: "skip", key, reason: "its spec is archived" }, ...done];
     const waiting = linking.filter((other) => !other.done && !(closing.has(other.key) && key < other.key)).map((other) => other.key);
     if (waiting.length) {
       const verbs = waiting.length === 1 ? "links it and is" : "link it and are";

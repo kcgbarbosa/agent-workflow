@@ -1,5 +1,6 @@
 // The third step of a tick: it performs the steps and logs each. A step that fails drops the rest of its ticket's
-// steps and holds up no other ticket. The next tick reads what happened, so nothing is done twice.
+// steps and holds up no other ticket. The next tick reads what happened, so nothing is done twice. `tests/failed-write.test.ts`
+// fails each write of each scenario to prove it.
 import { archive } from "./archive.ts";
 import type { Config } from "./config.ts";
 import { lineOf, type Step } from "./decide.ts";
