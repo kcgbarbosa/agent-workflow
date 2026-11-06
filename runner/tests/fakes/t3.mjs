@@ -3,11 +3,18 @@
 // `activeRunId` and `pendingRequestCount`, and it shows a thread waiting on a question as `running`.
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { failsWrite } from "./fail-write.ts";
 
 const args = process.argv.slice(2);
 const dir = process.env.FAKE_DIR;
 const file = join(dir, "t3.json");
 const state = JSON.parse(readFileSync(file, "utf8"));
+// A failed write reached no thread, so it is not logged.
+const write = args.at(args[0] === "--log-level" ? 3 : 1);
+if ((write === "start" || write === "send") && failsWrite(dir)) {
+  console.error("t3: a blip");
+  process.exit(1);
+}
 appendFileSync(join(dir, "t3.jsonl"), JSON.stringify(args) + "\n");
 
 if (existsSync(join(dir, "t3.down"))) {

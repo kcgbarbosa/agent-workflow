@@ -6,6 +6,8 @@ export class FakeSlack {
   posts: { path: string; text: string }[] = [];
   /** The status to answer with, as a refusal or an outage does. */
   down: number | null = null;
+  /** Whether this post fails, as a blip between two writes of a tick does. */
+  failsWrite: () => boolean = () => false;
   private server: Server | null = null;
 
   async start(): Promise<void> {
@@ -13,8 +15,9 @@ export class FakeSlack {
       let body = "";
       request.on("data", (chunk) => (body += chunk));
       request.on("end", () => {
-        if (this.down === null) this.posts.push({ path: request.url ?? "", text: JSON.parse(body).text });
-        response.writeHead(this.down ?? 200);
+        const status = this.down ?? (this.failsWrite() ? 503 : 200);
+        if (status === 200) this.posts.push({ path: request.url ?? "", text: JSON.parse(body).text });
+        response.writeHead(status);
         response.end();
       });
     });

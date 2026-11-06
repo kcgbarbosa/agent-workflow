@@ -3,6 +3,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { failsWrite } from "./fakes/fail-write.ts";
 import { FakeJira, jiraTime } from "./fakes/jira.ts";
 import { FakeSlack } from "./fakes/slack.ts";
 
@@ -39,6 +40,7 @@ export class World {
   private env: NodeJS.ProcessEnv = {};
 
   async start(config = ""): Promise<void> {
+    this.jira.failsWrite = this.slack.failsWrite = () => failsWrite(this.fakes);
     await this.jira.start();
     await this.slack.start();
     execFileSync("mkdir", ["-p", this.fakes]);
@@ -200,6 +202,16 @@ export class World {
 
   private savePullRequests(pullRequests: unknown[]): void {
     writeFileSync(join(this.fakes, "github.json"), JSON.stringify(pullRequests));
+  }
+
+  /** Makes the write of this number fail once, across Jira, Slack, `gh` and `t3`. It counts from the first write after this call. */
+  failWrite(number: number): void {
+    writeFileSync(join(this.fakes, "fail-write.json"), JSON.stringify({ writes: 0, number }));
+  }
+
+  /** How many writes have reached the fakes since `failWrite`. */
+  writesSeen(): number {
+    return JSON.parse(readFileSync(join(this.fakes, "fail-write.json"), "utf8")).writes;
   }
 
   /** Makes `t3` or `gh` fail each call. */

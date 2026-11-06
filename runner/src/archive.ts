@@ -80,6 +80,11 @@ export function pinsOf(epic: Ticket, linking: Ticket[]): Pin[] {
   return [epic, ...linking].flatMap(({ key, text }) => specLinks(text).filter((link) => own.some((each) => sameFile(link, each))).map((link) => ({ key, link })));
 }
 
+/** Whether every line that links this Epic's files links them by a commit, which an archive does last. */
+export function pinned(epic: Ticket, linking: Ticket[]): boolean {
+  return pinsOf(epic, linking).every(({ link }) => SHA.test(link.ref));
+}
+
 /** Opens the pull request, and pins the links. Returns what it did, to log. */
 export async function archive(key: string, summary: string, pins: Pin[], jira: Jira, cwd: string): Promise<string> {
   const folder = mkdtempSync(join(tmpdir(), "runner-archive-"));

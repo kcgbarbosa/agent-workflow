@@ -4,6 +4,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { failsWrite } from "./fail-write.ts";
 
 const args = process.argv.slice(2);
 const dir = process.env.FAKE_DIR;
@@ -30,6 +31,10 @@ function save() {
   writeFileSync(file, JSON.stringify(pullRequests));
 }
 
+if (args[0] === "pr" && ["create", "comment", "merge", "ready"].includes(args[1]) && failsWrite(dir)) {
+  console.error("gh: HTTP 503: a blip");
+  process.exit(1);
+}
 if (args[0] === "repo" && args[1] === "clone") {
   // Each repo on the fake GitHub is a bare repo under $FAKE_DIR/repos, by its name.
   const origin = join(dir, "repos", `${args[2].split("/").at(-1)}.git`);
