@@ -46,7 +46,7 @@ test("the Chief's prompt reads the runner's post as a stuck notification and a s
 
 test("the workflow doc and the runner docs say what the runner does", () => {
   expect(read("docs/agents/workflow.md")).toContain("machines is on the gate and the runner");
-  expect(read("docs/agents/workflow.md")).not.toContain("such as machines");
+  expect(read("skills/setup-repo/workflow.md")).not.toContain("such as machines");
   for (const path of ["docs/agents/runner.md", "runner/CLAUDE.md"]) {
     expect(read(path)).toContain("Slack");
   }
@@ -106,7 +106,7 @@ test("the Chief's prompt writes an idea that the runner cannot start", () => {
   const chief = read("bots/chief.md");
   for (const rule of ["with the label `idea`", "the owner's words as its body, and no component", "Never move a ticket with the label `idea` to To Do", "it needs a grill", "| An idea from the owner"]) expect(chief).toContain(rule);
   expect(read("runner/src/read.ts")).toContain("component = ${JSON.stringify(config.component)}");
-  for (const path of ["docs/agents/issue-tracker.md", "skills/setup-repo/issue-tracker.md"]) expect(read(path)).toContain("`idea` marks a ticket");
+  expect(read("skills/setup-repo/issue-tracker.md")).toContain("`idea` marks a ticket");
 });
 
 test("the Chief's checks name what they test, and the worst a check does is one test ticket", () => {
@@ -125,10 +125,9 @@ test("to-bug takes a fuzz finding only on the owner's yes, with its label", () =
 });
 
 test("the workflow docs do not say every repo needs a green fuzz job", () => {
-  for (const path of ["docs/agents/workflow.md", "skills/setup-repo/workflow.md"]) {
-    expect(read(path)).not.toContain("`gate / check` and `gate / fuzz`. All green");
-    expect(read(path)).toContain("a fuzz job that is off passes without running");
-  }
+  const workflow = read("skills/setup-repo/workflow.md");
+  expect(workflow).not.toContain("`gate / check` and `gate / fuzz`. All green");
+  expect(workflow).toContain("a fuzz job that is off passes without running");
 });
 
 test("to-bug writes a To Do Bug that is not Flagged, with no parent, its trace as text, and the intake comment", () => {
@@ -150,7 +149,7 @@ test("ADR-0009 holds the amendment", () => {
 
 test("implement has its Bug paragraph, and the issue tracker doc its two lines", () => {
   expect(read("skills/implement/SKILL.md")).toContain("For a Bug, reproduce it first");
-  const tracker = read("docs/agents/issue-tracker.md");
+  const tracker = read("skills/setup-repo/issue-tracker.md");
   expect(tracker).toContain("a Bug with no parent");
   expect(tracker).toContain("Flagged means the ticket waits on the owner");
 });

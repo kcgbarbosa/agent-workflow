@@ -1,79 +1,17 @@
 # Issue tracker: Jira
 
-Tickets live in Jira, project `AW`. They are not files in this repo.
+[`skills/setup-repo/issue-tracker.md`](../../skills/setup-repo/issue-tracker.md) is this repo's issue tracker doc, with the values below. Read it there, and change a shared rule there.
 
-## Documents
+| Placeholder     | This repo           |
+| --------------- | ------------------- |
+| `<KEY>`         | `AW`                |
+| `<spec folder>` | `docs/specs`        |
+| `<Extra field>` | Sprint              |
+| `<Values>`      | The board's sprints |
 
-| Document | Where it lives                                     | Written by               |
-| -------- | -------------------------------------------------- | ------------------------ |
-| Epic     | A Jira Epic, one for each feature                  | `/to-spec`               |
-| Spec     | `docs/specs/<feature>.md` in this repo             | `/to-spec`               |
-| Ticket   | A Jira Task under an Epic, or a Bug with no parent | `/to-tickets`, `/to-bug` |
+The key format is `AW-<n>`, and the branch format is `<type>/AW-<n>-<slug>`.
 
-`/to-spec` creates the Epic when the spec names none. The Epic's description is one line, `Spec: <link>`, which links the spec on the default branch.
+Only this repo:
 
-The spec is the source of truth for the build, the tests and the tickets. A ticket names the spec by its repo path, as text with no link, and cites story IDs. It does not copy the spec. Only the Epic links the spec.
-
-When the Epic merges, a pull request deletes the spec, and the Spec line of the Epic changes to link the spec at the head of the default branch at that point, a commit git keeps. With the runner, it does both once every Epic whose Spec line links it is Done, also for an Epic that was Done before the runner ran. A spec that a tracked file or an open ticket names by its file name stays, and the Epic closes. The runner logs what uses it, and archives the spec on the tick after the last use goes. Without the runner, the owner does both by hand. The Spec line is the one line of the Epic that changes after it is written, and no ticket changes.
-
-## What Jira holds
-
-Jira holds only work an agent does. A step only the owner can do, such as a meeting or a signature, gets no ticket.
-The project has no resolution field, so Done alone reads as complete work. A ticket closed without its work moves to Done with the label `wont-do` and a comment that gives the reason.
-
-## The board
-
-Issues carry these fields.
-
-| Field     | Values                                                 | Who sets it                |
-| --------- | ------------------------------------------------------ | -------------------------- |
-| Status    | Awaiting Approval, To Do, In Progress, In Review, Done | The owner, then the runner |
-| Priority  | Highest, High, Medium, Low                             | The owner                  |
-| Sprint    | The board's sprints                                    | The owner                  |
-| Component | The repo the ticket changes                            | `/to-tickets`              |
-
-A new issue starts as Awaiting Approval. The owner moves a ticket to To Do to approve its build, and the runner sets every later status. A ticket moved back to Awaiting Approval stops. A Bug that `/to-bug` writes needs no approval: the skill moves it to To Do.
-A ticket is a Task under an Epic or a Bug with no parent, which `/to-bug` writes from a report.
-Flagged means the ticket waits on the owner, whether it is stuck, a Bug for a repeated stuck fingerprint, or dangerous.
-
-The owner sets priority and the other hand-set fields. A skill that creates an issue leaves them at the Jira default or empty.
-
-## The ticket body
-
-`/to-tickets` writes each ticket as a Task. Its parent is the Epic.
-
-- **Goal.** One sentence from the user's side, with half a sentence on why.
-- **Stories.** The spec's story group and the story IDs this ticket delivers.
-- **What the user sees.** Plain checks, one line each. Acceptance uses these.
-- **Technical checks.** Schema, routes, events, tests. For the agent.
-- **Spec.** The spec's repo path as text, and the sections used.
-- **ADRs.** The files this work has to obey.
-- **Not in this ticket.** What a reader might assume is included and is not.
-
-A blocking edge is Jira's native "Blocks" link. It is never text in the body.
-A ticket does not copy the spec. It names the spec section that holds the values and the lists.
-
-## Keys in git
-
-The key format is `AW-<n>`. In a commit message or a pull request title, the key is the scope: `feat(AW-5): add login`. The key keeps its own case.
-The branch format is `<type>/AW-<n>-<slug>`.
-Every branch, commit and pull request for a ticket carries its key. Jira does not act on `Closes AW-14`.
-A pull request here names no key of another project, such as `PITCH`, because a merge would move that ticket to Done. `.github/scripts/check-pr-keys.sh` fails one that does, for each project in `.github/ticket-projects`.
-
-## Labels
-
-Tickets carry no readiness labels. Apply none. A label that says where a ticket came from is the skill's to apply, such as `fuzz` in `/to-bug`.
-
-`idea` marks a ticket the Chief wrote from the owner's words, with no component, so the runner cannot see it. A grill takes it out. For a small change, rewrite the ticket with the full body and a component, and take the label off. For a feature, `/to-spec` and `/to-tickets` write the tickets, and the idea moves to Done with the label `wont-do` and a comment that links them.
-
-- Ideas: `labels = idea AND statusCategory != Done`
-- Ready to approve: `status = "Awaiting Approval" AND issuetype != Epic AND (labels != idea OR labels is EMPTY)`
-
-## When a skill says "publish to the issue tracker"
-
-Create a Jira issue with the fields and the body above. `/to-spec` creates the Epic, and `/to-tickets` creates the Tasks under it.
-
-## When a skill says "fetch the relevant ticket"
-
-Read the Jira issue by its key. The user passes the key.
-Pass `view: "evidence"` to a JQL search when you need descriptions or links. The default view leaves them out.
+- It has no PRD, so skip the doc's section on one.
+- A pull request here names no key of another project, such as `PITCH`, because a merge would move that ticket to Done. `.github/scripts/check-pr-keys.sh` fails one that does, for each project in `.github/ticket-projects`.

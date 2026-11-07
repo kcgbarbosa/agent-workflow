@@ -17,6 +17,7 @@ KC's global instructions are `config/CLAUDE.md`, which `install.sh` links to `~/
 | No token in a tracked file                   | `gitleaks` in `lefthook.yml`, `make check-docs`     |
 | A failed runner write repeats nothing        | `runner/tests/failed-write.test.ts`, `make runner`  |
 | No pull request credits an agent             | `attribution` step of `gate / check`, in `gate.yml` |
+| A shared rule of `docs/agents/` lives once   | `tests/doc-copies.test.ts`, `make check-docs`       |
 
 ## Agent skills
 
