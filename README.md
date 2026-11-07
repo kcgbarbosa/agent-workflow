@@ -35,6 +35,7 @@ Clone to `~/dev/agent-workflow`, run `./install.sh`. On a machine that `chezmoi`
 - Add or remove a skill or a tier: add or remove its folder or file, run `./install.sh` again.
 - Linux needs `notify-send` (package `libnotify-bin`) for notifications. Without it, the hook does nothing.
 - `config/settings.json` is public, and `~/.claude/settings.json` is a link to it. Never put a token in it. Claude Code can write to it through the link, for example when you choose "always allow", so check `git diff config/` before you commit.
+- Every Claude Code account on a computer shares one set of project memories. `install.sh` links `<homePath>/projects` of each T3 Code account to `~/.claude/projects`, so transcripts are shared too. `autoMemoryDirectory` is one flat folder for every repo, and one config dir holds one login, so neither fits. A linked account below full access loads memories, but its write through the link is refused.
 - Project repos use `AGENTS.md`. Never create `CLAUDE.md` or `CLAUDE.local.md` in one, because either hides `AGENTS.md`.
 - Change the runner: edit `runner/`. `runner/CLAUDE.md` gives the rules, and `docs/agents/runner.md` how a merged change reaches the host.
 - After a rename or move of a linked file, run `./install.sh` again on every computer.

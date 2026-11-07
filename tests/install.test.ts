@@ -214,3 +214,87 @@ test("a second run after a backup changes nothing", () => {
   expect(snapshot(home)).toEqual(before);
   expect(second.stderr).not.toContain("moved");
 });
+
+/** A home where T3 Code runs a second Claude account with its own config dir. */
+function setupAccount() {
+  const context = setup();
+  const account = join(context.home, ".claude-second");
+  mkdirSync(join(context.home, ".t3", "userdata"), { recursive: true });
+  const instances = { default: { driver: "claudeAgent", config: {} }, second: { driver: "claudeAgent", config: { homePath: "~/.claude-second" } }, other: { driver: "codex", config: { homePath: "~/.codex-second" } } };
+  writeFileSync(join(context.home, ".t3", "userdata", "settings.json"), JSON.stringify({ providerInstances: instances }));
+  const write = (path: string, body: string) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, body);
+  };
+  return { ...context, account, write, shared: join(context.claude, "projects"), own: join(account, "projects") };
+}
+
+test("a memory saved under either account's config dir reads under the other", () => {
+  const { home, shared, own, run } = setupAccount();
+  run();
+  mkdirSync(join(own, "repo", "memory"), { recursive: true });
+  writeFileSync(join(own, "repo", "memory", "from-second.md"), "second");
+  expect(readFileSync(join(shared, "repo", "memory", "from-second.md"), "utf8")).toBe("second");
+  writeFileSync(join(shared, "repo", "memory", "from-first.md"), "first");
+  expect(readFileSync(join(own, "repo", "memory", "from-first.md"), "utf8")).toBe("first");
+  expect(lstatSync(join(home, ".codex-second"), { throwIfNoEntry: false })).toBeUndefined();
+});
+
+test("merges the memories of both config dirs with no loss", () => {
+  const { shared, own, write, run } = setupAccount();
+  write(join(shared, "repo", "memory", "first.md"), "first");
+  write(join(own, "repo", "memory", "second.md"), "second");
+  write(join(shared, "repo", "memory", "same.md"), "same");
+  write(join(own, "repo", "memory", "same.md"), "same");
+  write(join(own, "other-repo", "memory", "only.md"), "only");
+
+  const { stderr } = run();
+
+  expect(isLink(own)).toBe(true);
+  expect(stderr).not.toContain("projects");
+  for (const [path, body] of [["repo/memory/first.md", "first"], ["repo/memory/second.md", "second"], ["repo/memory/same.md", "same"], ["other-repo/memory/only.md", "only"]]) {
+    expect(readFileSync(join(shared, path), "utf8"), path).toBe(body);
+    expect(readFileSync(join(own, path), "utf8"), path).toBe(body);
+  }
+});
+
+test("a file that differs between the config dirs stays in both, named, with no link", () => {
+  const { shared, own, write, run, home } = setupAccount();
+  write(join(shared, "repo", "memory", "MEMORY.md"), "first index");
+  write(join(own, "repo", "memory", "MEMORY.md"), "second index");
+  write(join(own, "repo", "memory", "second.md"), "second");
+
+  const { stderr } = run();
+
+  expect(isLink(own)).toBe(false);
+  expect(stderr).toContain(`skipped the link of ${own}`);
+  expect(stderr).toContain(join(own, "repo", "memory", "MEMORY.md"));
+  expect(readFileSync(join(shared, "repo", "memory", "MEMORY.md"), "utf8")).toBe("first index");
+  expect(readFileSync(join(own, "repo", "memory", "MEMORY.md"), "utf8")).toBe("second index");
+  expect(readFileSync(join(shared, "repo", "memory", "second.md"), "utf8")).toBe("second");
+
+  const before = snapshot(home);
+  expect(run().stderr).toBe(stderr);
+  expect(snapshot(home)).toEqual(before);
+});
+
+test("leaves a projects link to somewhere else", () => {
+  const { dir, own, account, run } = setupAccount();
+  mkdirSync(account);
+  symlinkSync(join(dir, "elsewhere"), own);
+
+  const { stderr } = run();
+
+  expect(readlinkSync(own)).toBe(join(dir, "elsewhere"));
+  expect(stderr).toContain(`skipped ${own}`);
+});
+
+test("a second run with a second account changes nothing", () => {
+  const { home, own, write, run } = setupAccount();
+  write(join(own, "repo", "memory", "second.md"), "second");
+  const first = run();
+  const before = snapshot(home);
+  const second = run();
+  expect(snapshot(home)).toEqual(before);
+  expect(second.stderr).toBe(first.stderr);
+});
