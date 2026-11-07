@@ -74,10 +74,45 @@ jobs:
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # A squash merge carries the title, the body, and the branch's trailers onto the default branch, so none may credit an agent.
+      # It is a step of this job because `gate / check` is already required in every repo and runs on a docs-only pull request too.
+      # The title and the body come from GitHub, since a re-run keeps the event's old copy and an edit starts no run.
+      # Everything the pull request wrote goes in through env, and each line found prints after a prefix, so none runs as shell code or a workflow command.
+      - name: attribution
+        run: |
+          pattern='^[[:space:]]*co-authored-by:.*(claude|anthropic)|generated (with|by) \[?claude code|claude\.ai/code/session'
+          found=0
+          check() {
+            local hits hit
+            if hits=$(tr -d '\r' | grep -aiE "$pattern"); then
+              while IFS= read -r hit; do
+                printf '%s: %s\n' "$1" "$hit"
+              done <<<"$hits"
+              found=1
+            fi
+          }
+          text=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.title, (.body // "")')
+          check "Title or body" <<<"$text"
+          # Only the pull request's own commits. Older commits on the default branch already carry trailers.
+          commits=$(git rev-list "$BASE_SHA..$HEAD_SHA")
+          for sha in $commits; do
+            check "Commit $(git log -1 --format='%h %s' "$sha")" <<<"$(git log -1 --format=%B "$sha")"
+          done
+          if [ "$found" = 1 ]; then
+            echo "Agent attribution found. Reword the commits, edit the title or the body, then re-run this job."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       # The repo's pinned toolchain, so the runner uses the same versions as the T14.
       - if: hashFiles('mise.toml', '.mise.toml', '.tool-versions', '.config/mise.toml') != ''
         uses: jdx/mise-action@v5
