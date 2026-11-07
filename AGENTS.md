@@ -9,13 +9,14 @@ KC's global instructions are `config/CLAUDE.md`, which `install.sh` links to `~/
 
 ## Rules and what enforces them
 
-| Rule                                         | Enforced by                                        |
-| -------------------------------------------- | -------------------------------------------------- |
-| A retired name stays in no tracked file      | `tests/retired-names.test.ts`, `make check-docs`   |
-| No tracked file has an em dash               | `tests/em-dashes.test.ts`, `make check-docs`       |
-| A skill an agent is told to run is invocable | `tests/skills.test.ts`, `make check-docs`          |
-| No token in a tracked file                   | `gitleaks` in `lefthook.yml`, `make check-docs`    |
-| A failed runner write repeats nothing        | `runner/tests/failed-write.test.ts`, `make runner` |
+| Rule                                         | Enforced by                                         |
+| -------------------------------------------- | --------------------------------------------------- |
+| A retired name stays in no tracked file      | `tests/retired-names.test.ts`, `make check-docs`    |
+| No tracked file has an em dash               | `tests/em-dashes.test.ts`, `make check-docs`        |
+| A skill an agent is told to run is invocable | `tests/skills.test.ts`, `make check-docs`           |
+| No token in a tracked file                   | `gitleaks` in `lefthook.yml`, `make check-docs`     |
+| A failed runner write repeats nothing        | `runner/tests/failed-write.test.ts`, `make runner`  |
+| No pull request credits an agent             | `attribution` step of `gate / check`, in `gate.yml` |
 
 ## Agent skills
 
