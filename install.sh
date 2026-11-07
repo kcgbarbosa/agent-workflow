@@ -68,6 +68,40 @@ else
   ln -sfn "$repo/config/CLAUDE.md" "$dest/CLAUDE.md"
 fi
 
+# Auto memory lives under <config dir>/projects, so a T3 Code account with its own config dir (homePath) gets a second memory for each repo.
+# Its projects folder merges into ~/.claude/projects and becomes a link. A file that differs stays in its place, and the link waits until it is gone.
+t3_settings="$HOME/.t3/userdata/settings.json"
+if [ -f "$t3_settings" ] && command -v jq >/dev/null 2>&1; then
+  shared="$dest/projects"
+  while IFS= read -r home_path; do
+    own="${home_path/#\~/$HOME}/projects"
+    [ "$own" != "$shared" ] || continue
+    mkdir -p "$shared" "$(dirname "$own")"
+    if [ -L "$own" ]; then
+      [ "$(readlink "$own")" = "$shared" ] || echo "agent-workflow: skipped $own, it is a link to somewhere else" >&2
+      continue
+    fi
+    if [ -d "$own" ]; then
+      while IFS= read -r -d '' file; do
+        file="${file#"$own"/}"
+        if [ ! -e "$shared/$file" ] && [ ! -L "$shared/$file" ]; then
+          mkdir -p "$(dirname "$shared/$file")"
+          mv "$own/$file" "$shared/$file"
+        elif cmp -s "$own/$file" "$shared/$file"; then
+          rm "$own/$file"
+        fi
+      done < <(find "$own" ! -type d -print0)
+      find "$own" -depth -type d -empty -delete
+    fi
+    if [ -e "$own" ]; then
+      echo "agent-workflow: skipped the link of $own, these files differ from $shared, so merge them by hand and run this again:" >&2
+      find "$own" ! -type d | sort >&2
+    else
+      ln -s "$shared" "$own"
+    fi
+  done < <(jq -r '.providerInstances // {} | .[] | select(.driver == "claudeAgent") | .config.homePath // empty' "$t3_settings")
+fi
+
 # User-scope MCP servers live in ~/.claude.json, which no repo can track. Each one signs in with OAuth on first use.
 if command -v claude >/dev/null 2>&1; then
   claude mcp get workos >/dev/null 2>&1 || claude mcp add --scope user --transport http workos https://mcp.workos.com/mcp
