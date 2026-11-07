@@ -18,6 +18,12 @@ These are common instructions for KC's agents across all scenarios.
   A restated fact drifts from its home.
 - Recommend the root-cause fix before any workaround, and name the workaround as one.
 - Before writing a custom script, check for an established tool or a built-in feature that does the job, and offer it first with its cost.
+- Before calling a step human-only, name the API, CLI, connector or agent tool that could do it, or say why none fits.
+  Before asking for a secret, check `gh secret list`, `gh variable list` and the Bitwarden key names.
+- Present guardrails as a table: risk, the one guard in charge, where it lives.
+  No overlapping layers. Name an existing mechanism first.
+- When a decision changes, grep the spec, stories, test table and tickets for the old wording, and fix every line in the same turn.
+- KC lives in Toronto, Ontario. Legal research uses Ontario and Canadian federal law first, and cites US law only when a US party makes it relevant.
 
 ## Verification
 
